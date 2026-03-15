@@ -82,13 +82,6 @@ class BatchRegistrationRequest(BaseModel):
     interval_max: int = 30  # 最大间隔秒数
 
 
-class BatchRegistrationResponse(BaseModel):
-    """批量注册响应"""
-    batch_id: str
-    count: int
-    tasks: List[RegistrationTaskResponse]
-
-
 class RegistrationTaskResponse(BaseModel):
     """注册任务响应"""
     id: int
@@ -105,6 +98,13 @@ class RegistrationTaskResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class BatchRegistrationResponse(BaseModel):
+    """批量注册响应"""
+    batch_id: str
+    count: int
+    tasks: List[RegistrationTaskResponse]
 
 
 class TaskListResponse(BaseModel):
