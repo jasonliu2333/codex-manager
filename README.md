@@ -131,6 +131,20 @@ python webui.py --host 0.0.0.0 --port 8080 --access-password mypassword
 
 项目支持通过 Docker 进行容器化部署。Docker 镜像已托管至 GitHub Container Registry (GHCR)。
 
+#### 从 GHCR 拉取镜像
+
+默认镜像地址：
+
+```bash
+docker pull ghcr.io/jasonliu2333/codex-manager:latest
+```
+
+如果你要固定版本，也可以拉取 tag：
+
+```bash
+docker pull ghcr.io/jasonliu2333/codex-manager:v1.0.0
+```
+
 #### 使用 docker-compose (推荐)
 
 在项目根目录下，直接使用 `docker-compose` 启动：
@@ -151,8 +165,9 @@ docker run -d \
   -e WEBUI_PORT=1455 \
   -e WEBUI_ACCESS_PASSWORD=your_secure_password \
   -v $(pwd)/data:/app/data \
+  -v $(pwd)/logs:/app/logs \
   --name codex-register \
-  ghcr.io/yunxilyf/codex-register:latest
+  ghcr.io/jasonliu2333/codex-manager:latest
 ```
 
 环境变量说明：
