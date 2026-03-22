@@ -797,6 +797,9 @@ class RegistrationEngine:
             allow_redirects=True,
             timeout=30,
         )
+        did = self.session.cookies.get("oai-did")
+        if did:
+            self.device_id = did
         referer = str(response.url) if str(response.url).startswith("https://auth.openai.com") else "https://auth.openai.com/log-in"
         self._log(f"OAuth authorize 最终页面: {str(response.url)[:100]}...")
 
@@ -895,6 +898,16 @@ class RegistrationEngine:
             return None
 
         return self._handle_oauth_callback(callback_url)
+
+    def recover_oauth_tokens(self, email: str, password: str) -> Optional[Dict[str, Any]]:
+        """对已注册账号执行正常登录补录 OAuth token。"""
+        self.email = email
+        self.password = password
+
+        if not self._init_session():
+            return None
+
+        return self._perform_post_registration_oauth()
 
     def _select_workspace(self, workspace_id: str) -> Optional[str]:
         """选择 Workspace"""

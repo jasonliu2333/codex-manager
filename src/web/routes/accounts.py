@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from ...config.constants import AccountStatus
 from ...config.settings import get_settings
+from ...core.register import RegistrationEngine
 from ...core.openai.token_refresh import refresh_account_token as do_refresh
 from ...core.openai.token_refresh import validate_account_token as do_validate
 from ...core.upload.cpa_upload import generate_token_json, batch_upload_to_cpa, upload_to_cpa
@@ -22,8 +23,9 @@ from ...core.upload.sub2api_upload import batch_upload_to_sub2api, upload_to_sub
 
 from ...core.dynamic_proxy import get_proxy_url_for_task
 from ...database import crud
-from ...database.models import Account
+from ...database.models import Account, EmailService
 from ...database.session import get_db
+from ...services import EmailServiceFactory, EmailServiceType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -587,6 +589,11 @@ class TokenValidateRequest(BaseModel):
     proxy: Optional[str] = None
 
 
+class OAuthRecoveryRequest(BaseModel):
+    """OAuth 补录请求"""
+    proxy: Optional[str] = None
+
+
 class BatchValidateRequest(BaseModel):
     """批量验证请求"""
     ids: List[int] = []
@@ -645,6 +652,78 @@ async def refresh_account_token(account_id: int, request: Optional[TokenRefreshR
         return {
             "success": False,
             "error": result.error_message
+        }
+
+
+@router.post("/{account_id}/recover-oauth")
+async def recover_account_oauth(account_id: int, request: Optional[OAuthRecoveryRequest] = Body(default=None)):
+    """对已注册账号执行正常登录补录 OAuth token（第一阶段仅支持 Outlook / IMAP Mail）。"""
+    proxy = _get_proxy(request.proxy if request else None)
+
+    with get_db() as db:
+        account = crud.get_account_by_id(db, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="账号不存在")
+
+        allowed_services = {EmailServiceType.OUTLOOK.value, EmailServiceType.IMAP_MAIL.value}
+        if account.email_service not in allowed_services:
+            raise HTTPException(status_code=400, detail="当前仅支持 Outlook / IMAP Mail 账号补录 OAuth")
+
+        if not account.password:
+            raise HTTPException(status_code=400, detail="账号缺少 OpenAI 登录密码，无法补录")
+
+        source_services = db.query(EmailService).filter(EmailService.service_type == account.email_service).all()
+        matched_service = None
+        for service in source_services:
+            config = service.config or {}
+            if str(config.get("email") or "").strip().lower() == account.email.lower():
+                matched_service = service
+                break
+
+        if not matched_service:
+            raise HTTPException(status_code=400, detail="未找到对应邮箱配置，无法补录")
+
+        service_config = dict(matched_service.config or {})
+        if proxy and "proxy_url" not in service_config:
+            service_config["proxy_url"] = proxy
+
+        email_service = EmailServiceFactory.create(EmailServiceType(account.email_service), service_config)
+        engine = RegistrationEngine(
+            email_service=email_service,
+            proxy_url=proxy,
+            callback_logger=lambda msg: logger.info(f"[recover-oauth][{account.email}] {msg}")
+        )
+        engine.email_info = {"email": account.email, "service_id": account.email}
+
+        token_info = engine.recover_oauth_tokens(account.email, account.password)
+        if not token_info:
+            return {"success": False, "error": "补录失败：未获取到 OAuth token"}
+
+        update_data = {
+            "account_id": token_info.get("account_id") or account.account_id,
+            "access_token": token_info.get("access_token") or account.access_token,
+            "refresh_token": token_info.get("refresh_token") or account.refresh_token,
+            "id_token": token_info.get("id_token") or account.id_token,
+            "session_token": engine.session_token or account.session_token,
+            "last_refresh": datetime.utcnow(),
+        }
+        workspace_id = engine._get_workspace_id()
+        if workspace_id:
+            update_data["workspace_id"] = workspace_id
+
+        expires_str = str(token_info.get("expired") or "").strip()
+        if expires_str:
+            try:
+                update_data["expires_at"] = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
+            except Exception:
+                pass
+
+        crud.update_account(db, account_id, **update_data)
+
+        return {
+            "success": True,
+            "message": "补录成功",
+            "has_tokens": bool(update_data.get("access_token") and update_data.get("refresh_token")),
         }
 
 

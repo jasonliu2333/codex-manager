@@ -14,6 +14,10 @@ let currentFilters = { status: '', email_service: '', search: '' };  // 当前�
 const refreshingAccountIds = new Set();
 let isBatchValidating = false;
 
+function supportsOAuthRecovery(emailService) {
+    return emailService === 'outlook' || emailService === 'imap_mail';
+}
+
 // DOM 元素
 const elements = {
     table: document.getElementById('accounts-table'),
@@ -329,6 +333,9 @@ function renderAccounts(accounts) {
                         <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleMoreMenu(this)">更多</button>
                         <div class="dropdown-menu" style="min-width:100px;">
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);refreshToken(${account.id})">刷新</a>
+                            ${supportsOAuthRecovery(account.email_service)
+                                ? `<a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);recoverOAuth(${account.id})">补录OAuth</a>`
+                                : ''}
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);uploadAccount(${account.id})">上传</a>
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);markSubscription(${account.id})">标记</a>
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);checkInboxCode(${account.id})">收件箱</a>
@@ -513,6 +520,26 @@ async function refreshToken(id) {
     }
 }
 
+// Outlook / IMAP Mail 账号补录 OAuth
+async function recoverOAuth(id) {
+    const confirmed = await confirm('将使用全新登录会话再次发送验证码邮件并补录 ak/rk，是否继续？');
+    if (!confirmed) return;
+
+    try {
+        toast.info('正在补录 OAuth，请稍候...');
+        const result = await api.post(`/accounts/${id}/recover-oauth`, {}, { timeoutMs: 180000 });
+
+        if (result.success) {
+            toast.success(result.message || '补录成功');
+            loadAccounts();
+        } else {
+            toast.error(result.error || '补录失败');
+        }
+    } catch (error) {
+        toast.error('补录失败: ' + error.message);
+    }
+}
+
 // 批量刷新Token
 async function handleBatchRefresh() {
     const count = getEffectiveCount();
@@ -654,6 +681,11 @@ async function viewAccount(id) {
                 <button class="btn btn-primary" onclick="refreshToken(${id}); elements.detailModal.classList.remove('active');">
                     🔄 刷新Token
                 </button>
+                ${supportsOAuthRecovery(account.email_service)
+                    ? `<button class="btn btn-warning" onclick="recoverOAuth(${id}); elements.detailModal.classList.remove('active');">
+                        🔐 补录OAuth
+                    </button>`
+                    : ''}
             </div>
         `;
 
