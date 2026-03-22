@@ -1,12 +1,14 @@
 """
 账号管理 API 路由
 """
+import asyncio
 import io
 import json
 import logging
+import uuid
 import zipfile
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body
 from fastapi.responses import StreamingResponse
@@ -14,21 +16,24 @@ from pydantic import BaseModel
 
 from ...config.constants import AccountStatus
 from ...config.settings import get_settings
-from ...core.register import RegistrationEngine
+from ...core.dynamic_proxy import fetch_dynamic_proxy
 from ...core.openai.token_refresh import refresh_account_token as do_refresh
 from ...core.openai.token_refresh import validate_account_token as do_validate
+from ...core.register import RegistrationEngine
 from ...core.upload.cpa_upload import generate_token_json, batch_upload_to_cpa, upload_to_cpa
 from ...core.upload.team_manager_upload import upload_to_team_manager, batch_upload_to_team_manager
 from ...core.upload.sub2api_upload import batch_upload_to_sub2api, upload_to_sub2api
 
 from ...core.dynamic_proxy import get_proxy_url_for_task
 from ...database import crud
-from ...database.models import Account, EmailService
+from ...database.models import Account, EmailService as EmailServiceModel, RegistrationTask
 from ...database.session import get_db
 from ...services import EmailServiceFactory, EmailServiceType
+from ..task_manager import task_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+recovery_batches: Dict[str, dict] = {}
 
 
 def _get_proxy(request_proxy: Optional[str] = None) -> Optional[str]:
@@ -574,6 +579,21 @@ class TokenRefreshRequest(BaseModel):
     proxy: Optional[str] = None
 
 
+class OAuthRecoveryRequest(BaseModel):
+    """补录 OAuth 请求"""
+    proxy: Optional[str] = None
+
+
+class BatchOAuthRecoveryRequest(BaseModel):
+    """批量补录 OAuth 请求"""
+    ids: List[int] = []
+    proxy: Optional[str] = None
+    select_all: bool = False
+    status_filter: Optional[str] = None
+    email_service_filter: Optional[str] = None
+    search_filter: Optional[str] = None
+
+
 class BatchRefreshRequest(BaseModel):
     """批量刷新请求"""
     ids: List[int] = []
@@ -589,11 +609,6 @@ class TokenValidateRequest(BaseModel):
     proxy: Optional[str] = None
 
 
-class OAuthRecoveryRequest(BaseModel):
-    """OAuth 补录请求"""
-    proxy: Optional[str] = None
-
-
 class BatchValidateRequest(BaseModel):
     """批量验证请求"""
     ids: List[int] = []
@@ -602,6 +617,236 @@ class BatchValidateRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+
+
+def _get_recovery_proxy(request_proxy: Optional[str] = None, log_callback=None) -> Optional[str]:
+    """补录 OAuth 的代理选择：手动代理 > 动态代理 > 代理池/静态配置。"""
+    if request_proxy:
+        if log_callback:
+            log_callback(f"[系统] 使用请求指定代理: {request_proxy}")
+        return request_proxy
+
+    settings = get_settings()
+    if settings.proxy_dynamic_enabled and settings.proxy_dynamic_api_url:
+        if log_callback:
+            log_callback("[系统] 检测到已启用动态代理，开始获取动态 IP...")
+
+        api_key = settings.proxy_dynamic_api_key.get_secret_value() if settings.proxy_dynamic_api_key else ""
+        proxy_url = fetch_dynamic_proxy(
+            api_url=settings.proxy_dynamic_api_url,
+            api_key=api_key,
+            api_key_header=settings.proxy_dynamic_api_key_header,
+            result_field=settings.proxy_dynamic_result_field,
+        )
+        if proxy_url:
+            if log_callback:
+                log_callback(f"[系统] 动态代理可用，将使用: {proxy_url}")
+            return proxy_url
+
+        if log_callback:
+            log_callback("[系统] 动态代理不可用，回退到代理池/静态代理")
+
+    fallback_proxy = _get_proxy(None)
+    if fallback_proxy and log_callback:
+        log_callback(f"[系统] 使用回退代理: {fallback_proxy}")
+    elif log_callback:
+        log_callback("[系统] 当前未配置可用代理，将直连补录")
+    return fallback_proxy
+
+
+def _find_mailbox_service_for_account(db, account: Account) -> Optional[EmailServiceModel]:
+    """根据账号邮箱匹配可用于补录的邮箱服务配置。"""
+    if account.email_service not in {"outlook", "imap_mail"}:
+        return None
+
+    services = crud.get_email_services(
+        db,
+        service_type=account.email_service,
+        enabled=True,
+        skip=0,
+        limit=200,
+    )
+
+    email_lower = (account.email or "").strip().lower()
+    for service in services:
+        config = service.config or {}
+        if account.email_service == "outlook":
+            accounts = config.get("accounts") or []
+            for item in accounts:
+                if str((item or {}).get("email") or "").strip().lower() == email_lower:
+                    return service
+            if str(config.get("email") or "").strip().lower() == email_lower:
+                return service
+        elif account.email_service == "imap_mail":
+            if str(config.get("email") or "").strip().lower() == email_lower:
+                return service
+
+    return None
+
+
+def _run_sync_recover_oauth_task(
+    task_uuid: str,
+    account_id: int,
+    proxy: Optional[str],
+    log_prefix: str = "",
+    batch_id: str = "",
+):
+    """在线程池里执行 OAuth 补录。"""
+    callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
+    full_prefix = f"{log_prefix} " if log_prefix else ""
+
+    with get_db() as db:
+        crud.update_registration_task(db, task_uuid, status="running", started_at=datetime.utcnow())
+
+    task_manager.update_status(task_uuid, "running")
+    callback(f"{full_prefix}[系统] 补录任务开始")
+
+    try:
+        with get_db() as db:
+            account = crud.get_account_by_id(db, account_id)
+            if not account:
+                raise ValueError("账号不存在")
+            if account.email_service not in {"outlook", "imap_mail"}:
+                raise ValueError("当前仅支持 Outlook / IMAP_MAIL 补录")
+            if not account.password:
+                raise ValueError("账号缺少登录密码，无法补录")
+
+            email_service_model = _find_mailbox_service_for_account(db, account)
+            if not email_service_model:
+                raise ValueError("未找到匹配的邮箱配置，无法收取登录验证码")
+
+            actual_proxy = _get_recovery_proxy(proxy, log_callback=callback)
+            email_service = EmailServiceFactory.create(
+                EmailServiceType(email_service_model.service_type),
+                email_service_model.config,
+                email_service_model.name,
+            )
+
+            engine = RegistrationEngine(
+                email_service=email_service,
+                proxy_url=actual_proxy,
+                callback_logger=callback,
+                task_uuid=task_uuid,
+            )
+            callback(f"{full_prefix}[系统] 将使用全新登录会话，不复用注册阶段 session/cookie/device_id")
+            token_info = engine.recover_oauth_tokens(account.email, account.password)
+            if not token_info:
+                raise RuntimeError("补录失败：未获取到 OAuth Token")
+
+            update_data = {
+                "access_token": token_info.get("access_token"),
+                "refresh_token": token_info.get("refresh_token"),
+                "id_token": token_info.get("id_token"),
+                "session_token": token_info.get("session_token"),
+                "account_id": token_info.get("account_id") or account.account_id,
+                "workspace_id": token_info.get("workspace_id") or account.workspace_id,
+                "last_refresh": datetime.utcnow(),
+                "status": AccountStatus.ACTIVE.value,
+                "proxy_used": actual_proxy,
+            }
+            expires_at = token_info.get("expires_at")
+            if expires_at:
+                update_data["expires_at"] = expires_at
+
+            crud.update_account(db, account.id, **update_data)
+            result_payload = {
+                "success": True,
+                "account_id": account.id,
+                "email": account.email,
+                "workspace_id": update_data.get("workspace_id"),
+                "has_access_token": bool(update_data.get("access_token")),
+            }
+            crud.update_registration_task(
+                db,
+                task_uuid,
+                status="completed",
+                completed_at=datetime.utcnow(),
+                result=result_payload,
+            )
+
+        callback(f"{full_prefix}[成功] OAuth 补录完成")
+        task_manager.update_status(task_uuid, "completed", result={"account_id": account_id})
+    except Exception as e:
+        error_message = str(e)
+        logger.warning(f"补录任务失败: {task_uuid}, 原因: {error_message}")
+        with get_db() as db:
+            crud.update_registration_task(
+                db,
+                task_uuid,
+                status="failed",
+                completed_at=datetime.utcnow(),
+                error_message=error_message,
+            )
+        callback(f"{full_prefix}[失败] {error_message}")
+        task_manager.update_status(task_uuid, "failed", error=error_message)
+
+
+async def run_recover_oauth_task(task_uuid: str, account_id: int, proxy: Optional[str]):
+    """异步包装补录任务。"""
+    loop = task_manager.get_loop()
+    if loop is None:
+        loop = asyncio.get_event_loop()
+        task_manager.set_loop(loop)
+
+    task_manager.update_status(task_uuid, "pending")
+    task_manager.add_log(task_uuid, f"[系统] 补录任务 {task_uuid[:8]} 已加入队列")
+    await loop.run_in_executor(
+        task_manager.executor,
+        _run_sync_recover_oauth_task,
+        task_uuid,
+        account_id,
+        proxy,
+        "",
+        "",
+    )
+
+
+async def run_batch_recover_oauth(batch_id: str, task_account_pairs: List[dict], proxy: Optional[str]):
+    """顺序执行批量补录，并向批量 WS 推送日志。"""
+    task_manager.init_batch(batch_id, len(task_account_pairs))
+    recovery_batches[batch_id] = {
+        "status": "running",
+        "total": len(task_account_pairs),
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "finished": False,
+        "tasks": task_account_pairs,
+    }
+    task_manager.add_batch_log(batch_id, f"[系统] 批量补录开始，共 {len(task_account_pairs)} 个账号")
+
+    for index, item in enumerate(task_account_pairs, start=1):
+        prefix = f"[任务{index}]"
+        task_manager.add_batch_log(batch_id, f"{prefix} 启动补录: {item['email']}")
+        await run_recover_oauth_task(item["task_uuid"], item["account_id"], proxy)
+
+        with get_db() as db:
+            task = crud.get_registration_task_by_uuid(db, item["task_uuid"])
+            ok = bool(task and task.status == "completed")
+
+        recovery_batches[batch_id]["completed"] += 1
+        if ok:
+            recovery_batches[batch_id]["success"] += 1
+            task_manager.add_batch_log(batch_id, f"{prefix} 补录成功: {item['email']}")
+        else:
+            recovery_batches[batch_id]["failed"] += 1
+            task_manager.add_batch_log(batch_id, f"{prefix} 补录失败: {item['email']}")
+
+        task_manager.update_batch_status(
+            batch_id,
+            completed=recovery_batches[batch_id]["completed"],
+            success=recovery_batches[batch_id]["success"],
+            failed=recovery_batches[batch_id]["failed"],
+            current_index=index,
+        )
+
+    recovery_batches[batch_id]["status"] = "completed"
+    recovery_batches[batch_id]["finished"] = True
+    task_manager.update_batch_status(batch_id, status="completed", finished=True)
+    task_manager.add_batch_log(
+        batch_id,
+        f"[系统] 批量补录结束，成功 {recovery_batches[batch_id]['success']}，失败 {recovery_batches[batch_id]['failed']}",
+    )
 
 
 @router.post("/batch-refresh")
@@ -655,76 +900,83 @@ async def refresh_account_token(account_id: int, request: Optional[TokenRefreshR
         }
 
 
+@router.post("/batch-recover-oauth")
+async def batch_recover_oauth(request: BatchOAuthRecoveryRequest, background_tasks: BackgroundTasks):
+    """批量补录 OAuth。"""
+    with get_db() as db:
+        ids = resolve_account_ids(
+            db, request.ids, request.select_all,
+            request.status_filter, request.email_service_filter, request.search_filter
+        )
+        accounts = db.query(Account).filter(Account.id.in_(ids)).all()
+
+        task_account_pairs = []
+        for account in accounts:
+            task_uuid = str(uuid.uuid4())
+            crud.create_registration_task(db, task_uuid, proxy=request.proxy)
+            task_account_pairs.append({
+                "task_uuid": task_uuid,
+                "account_id": account.id,
+                "email": account.email,
+            })
+
+    batch_id = str(uuid.uuid4())
+    background_tasks.add_task(run_batch_recover_oauth, batch_id, task_account_pairs, request.proxy)
+    return {
+        "success": True,
+        "batch_id": batch_id,
+        "count": len(task_account_pairs),
+        "tasks": task_account_pairs,
+    }
+
+
 @router.post("/{account_id}/recover-oauth")
-async def recover_account_oauth(account_id: int, request: Optional[OAuthRecoveryRequest] = Body(default=None)):
-    """对已注册账号执行正常登录补录 OAuth token（第一阶段仅支持 Outlook / IMAP Mail）。"""
-    proxy = _get_proxy(request.proxy if request else None)
+async def recover_account_oauth(
+    account_id: int,
+    background_tasks: BackgroundTasks,
+    request: Optional[OAuthRecoveryRequest] = Body(default=None),
+):
+    """对单个账号执行 OAuth 补录。"""
+    task_uuid = str(uuid.uuid4())
+    proxy = request.proxy if request else None
 
     with get_db() as db:
         account = crud.get_account_by_id(db, account_id)
         if not account:
             raise HTTPException(status_code=404, detail="账号不存在")
+        crud.create_registration_task(db, task_uuid, proxy=proxy)
 
-        allowed_services = {EmailServiceType.OUTLOOK.value, EmailServiceType.IMAP_MAIL.value}
-        if account.email_service not in allowed_services:
-            raise HTTPException(status_code=400, detail="当前仅支持 Outlook / IMAP Mail 账号补录 OAuth")
+    background_tasks.add_task(run_recover_oauth_task, task_uuid, account_id, proxy)
+    return {
+        "success": True,
+        "task_uuid": task_uuid,
+        "status": "pending",
+    }
 
-        if not account.password:
-            raise HTTPException(status_code=400, detail="账号缺少 OpenAI 登录密码，无法补录")
 
-        source_services = db.query(EmailService).filter(EmailService.service_type == account.email_service).all()
-        matched_service = None
-        for service in source_services:
-            config = service.config or {}
-            if str(config.get("email") or "").strip().lower() == account.email.lower():
-                matched_service = service
-                break
-
-        if not matched_service:
-            raise HTTPException(status_code=400, detail="未找到对应邮箱配置，无法补录")
-
-        service_config = dict(matched_service.config or {})
-        if proxy and "proxy_url" not in service_config:
-            service_config["proxy_url"] = proxy
-
-        email_service = EmailServiceFactory.create(EmailServiceType(account.email_service), service_config)
-        engine = RegistrationEngine(
-            email_service=email_service,
-            proxy_url=proxy,
-            callback_logger=lambda msg: logger.info(f"[recover-oauth][{account.email}] {msg}")
-        )
-        engine.email_info = {"email": account.email, "service_id": account.email}
-
-        token_info = engine.recover_oauth_tokens(account.email, account.password)
-        if not token_info:
-            return {"success": False, "error": "补录失败：未获取到 OAuth token"}
-
-        update_data = {
-            "account_id": token_info.get("account_id") or account.account_id,
-            "access_token": token_info.get("access_token") or account.access_token,
-            "refresh_token": token_info.get("refresh_token") or account.refresh_token,
-            "id_token": token_info.get("id_token") or account.id_token,
-            "session_token": engine.session_token or account.session_token,
-            "last_refresh": datetime.utcnow(),
-        }
-        workspace_id = engine._get_workspace_id()
-        if workspace_id:
-            update_data["workspace_id"] = workspace_id
-
-        expires_str = str(token_info.get("expired") or "").strip()
-        if expires_str:
-            try:
-                update_data["expires_at"] = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
-            except Exception:
-                pass
-
-        crud.update_account(db, account_id, **update_data)
-
+@router.get("/recover-oauth/task/{task_uuid}")
+async def get_recover_oauth_task(task_uuid: str):
+    """获取单个补录任务状态。"""
+    with get_db() as db:
+        task = crud.get_registration_task_by_uuid(db, task_uuid)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
         return {
-            "success": True,
-            "message": "补录成功",
-            "has_tokens": bool(update_data.get("access_token") and update_data.get("refresh_token")),
+            "task_uuid": task.task_uuid,
+            "status": task.status,
+            "error_message": task.error_message,
+            "result": task.result,
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
         }
+
+
+@router.get("/recover-oauth/batch/{batch_id}")
+async def get_recover_oauth_batch(batch_id: str):
+    """获取批量补录任务状态。"""
+    batch = recovery_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    return batch
 
 
 @router.post("/batch-validate")

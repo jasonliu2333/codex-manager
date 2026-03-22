@@ -13,10 +13,8 @@ let selectAllPages = false;  // 是否选中了全部页
 let currentFilters = { status: '', email_service: '', search: '' };  // 当前筛选条件
 const refreshingAccountIds = new Set();
 let isBatchValidating = false;
-
-function supportsOAuthRecovery(emailService) {
-    return emailService === 'outlook' || emailService === 'imap_mail';
-}
+let recoverySocket = null;
+let recoveryStatusTimer = null;
 
 // DOM 元素
 const elements = {
@@ -33,6 +31,7 @@ const elements = {
     batchValidateBtn: document.getElementById('batch-validate-btn'),
     batchUploadBtn: document.getElementById('batch-upload-btn'),
     batchCheckSubBtn: document.getElementById('batch-check-sub-btn'),
+    batchRecoverBtn: document.getElementById('batch-recover-btn'),
     batchDeleteBtn: document.getElementById('batch-delete-btn'),
     exportBtn: document.getElementById('export-btn'),
     exportMenu: document.getElementById('export-menu'),
@@ -42,8 +41,16 @@ const elements = {
     pageInfo: document.getElementById('page-info'),
     detailModal: document.getElementById('detail-modal'),
     modalBody: document.getElementById('modal-body'),
-    closeModal: document.getElementById('close-modal')
+    closeModal: document.getElementById('close-modal'),
+    recoveryLogModal: document.getElementById('recovery-log-modal'),
+    recoveryLogOutput: document.getElementById('recovery-log-output'),
+    recoveryLogStatus: document.getElementById('recovery-log-status'),
+    closeRecoveryLogModal: document.getElementById('close-recovery-log-modal')
 };
+
+function supportsOAuthRecovery(emailService) {
+    return emailService === 'outlook' || emailService === 'imap_mail';
+}
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -101,6 +108,9 @@ function initEventListeners() {
 
     // 批量检测订阅
     elements.batchCheckSubBtn.addEventListener('click', handleBatchCheckSubscription);
+
+    // 批量补录 OAuth
+    elements.batchRecoverBtn.addEventListener('click', handleBatchRecoverOAuth);
 
     // 上传下拉菜单
     const uploadMenu = document.getElementById('upload-menu');
@@ -171,6 +181,13 @@ function initEventListeners() {
     elements.detailModal.addEventListener('click', (e) => {
         if (e.target === elements.detailModal) {
             elements.detailModal.classList.remove('active');
+        }
+    });
+
+    elements.closeRecoveryLogModal.addEventListener('click', closeRecoveryLogModal);
+    elements.recoveryLogModal.addEventListener('click', (e) => {
+        if (e.target === elements.recoveryLogModal) {
+            closeRecoveryLogModal();
         }
     });
 
@@ -486,6 +503,7 @@ function updateBatchButtons() {
     elements.batchValidateBtn.disabled = count === 0;
     elements.batchUploadBtn.disabled = count === 0;
     elements.batchCheckSubBtn.disabled = count === 0;
+    elements.batchRecoverBtn.disabled = count === 0;
     elements.exportBtn.disabled = count === 0;
 
     elements.batchDeleteBtn.textContent = count > 0 ? `🗑️ 删除 (${count})` : '🗑️ 批量删除';
@@ -493,6 +511,7 @@ function updateBatchButtons() {
     elements.batchValidateBtn.textContent = count > 0 ? `✅ 验证 (${count})` : '✅ 验证Token';
     elements.batchUploadBtn.textContent = count > 0 ? `☁️ 上传 (${count})` : '☁️ 上传';
     elements.batchCheckSubBtn.textContent = count > 0 ? `🔍 检测 (${count})` : '🔍 检测订阅';
+    elements.batchRecoverBtn.textContent = count > 0 ? `🔐 补录 (${count})` : '🔐 补录OAuth';
 }
 
 // 刷新单个账号Token
@@ -520,22 +539,111 @@ async function refreshToken(id) {
     }
 }
 
-// Outlook / IMAP Mail 账号补录 OAuth
+function appendRecoveryLog(message) {
+    if (!elements.recoveryLogOutput) return;
+    elements.recoveryLogOutput.textContent += `${message}\n`;
+    elements.recoveryLogOutput.scrollTop = elements.recoveryLogOutput.scrollHeight;
+}
+
+function cleanupRecoveryWatchers() {
+    if (recoverySocket) {
+        recoverySocket.close();
+        recoverySocket = null;
+    }
+    if (recoveryStatusTimer) {
+        clearInterval(recoveryStatusTimer);
+        recoveryStatusTimer = null;
+    }
+}
+
+function openRecoveryLogModal(title = 'OAuth 补录日志') {
+    cleanupRecoveryWatchers();
+    elements.recoveryLogOutput.textContent = '';
+    elements.recoveryLogStatus.textContent = title;
+    elements.recoveryLogModal.classList.add('active');
+}
+
+function closeRecoveryLogModal() {
+    cleanupRecoveryWatchers();
+    elements.recoveryLogModal.classList.remove('active');
+}
+
+function connectRecoverySocket(path) {
+    const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    recoverySocket = new WebSocket(`${scheme}://${window.location.host}${path}`);
+    recoverySocket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'log' && data.message) {
+            appendRecoveryLog(data.message);
+        }
+    };
+    recoverySocket.onerror = () => {
+        appendRecoveryLog('[系统] 日志连接异常，已切换为状态轮询');
+    };
+}
+
+function watchRecoveryTask(taskUuid) {
+    connectRecoverySocket(`/api/ws/task/${taskUuid}`);
+    recoveryStatusTimer = setInterval(async () => {
+        try {
+            const task = await api.get(`/accounts/recover-oauth/task/${taskUuid}`);
+            elements.recoveryLogStatus.textContent = `任务状态: ${task.status}`;
+            if (task.status === 'completed') {
+                appendRecoveryLog('[系统] 补录任务完成');
+                cleanupRecoveryWatchers();
+                loadAccounts();
+                updateBatchButtons();
+                toast.success('OAuth 补录完成');
+            } else if (task.status === 'failed' || task.status === 'cancelled') {
+                appendRecoveryLog(`[系统] 补录任务结束: ${task.error_message || task.status}`);
+                cleanupRecoveryWatchers();
+                loadAccounts();
+                updateBatchButtons();
+                toast.error(task.error_message || 'OAuth 补录失败');
+            }
+        } catch (error) {
+            appendRecoveryLog(`[系统] 状态查询失败: ${error.message}`);
+            cleanupRecoveryWatchers();
+            updateBatchButtons();
+        }
+    }, 2000);
+}
+
+function watchRecoveryBatch(batchId) {
+    connectRecoverySocket(`/api/ws/batch/${batchId}`);
+    recoveryStatusTimer = setInterval(async () => {
+        try {
+            const batch = await api.get(`/accounts/recover-oauth/batch/${batchId}`);
+            elements.recoveryLogStatus.textContent = `批量状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            if (batch.finished) {
+                appendRecoveryLog('[系统] 批量补录任务已结束');
+                cleanupRecoveryWatchers();
+                loadAccounts();
+                updateBatchButtons();
+                toast.success(`批量补录完成，成功 ${batch.success}，失败 ${batch.failed}`);
+            }
+        } catch (error) {
+            appendRecoveryLog(`[系统] 批量状态查询失败: ${error.message}`);
+            cleanupRecoveryWatchers();
+            updateBatchButtons();
+        }
+    }, 2000);
+}
+
 async function recoverOAuth(id) {
     const confirmed = await confirm('将使用全新登录会话再次发送验证码邮件并补录 ak/rk，是否继续？');
     if (!confirmed) return;
 
-    try {
-        toast.info('正在补录 OAuth，请稍候...');
-        const result = await api.post(`/accounts/${id}/recover-oauth`, {}, { timeoutMs: 180000 });
+    openRecoveryLogModal(`账号 ${id} OAuth 补录`);
+    appendRecoveryLog('[系统] 正在创建补录任务...');
 
-        if (result.success) {
-            toast.success(result.message || '补录成功');
-            loadAccounts();
-        } else {
-            toast.error(result.error || '补录失败');
-        }
+    try {
+        const result = await api.post(`/accounts/${id}/recover-oauth`, {}, { timeoutMs: 120000 });
+        appendRecoveryLog(`[系统] 补录任务已创建: ${result.task_uuid}`);
+        watchRecoveryTask(result.task_uuid);
     } catch (error) {
+        appendRecoveryLog(`[失败] 创建补录任务失败: ${error.message}`);
+        elements.recoveryLogStatus.textContent = '任务创建失败';
         toast.error('补录失败: ' + error.message);
     }
 }
@@ -558,6 +666,31 @@ async function handleBatchRefresh() {
     } catch (error) {
         toast.error('批量刷新失败: ' + error.message);
     } finally {
+        updateBatchButtons();
+    }
+}
+
+async function handleBatchRecoverOAuth() {
+    const count = getEffectiveCount();
+    if (count === 0) return;
+
+    const confirmed = await confirm(`确定要为选中的 ${count} 个账号批量补录 OAuth 吗？`);
+    if (!confirmed) return;
+
+    openRecoveryLogModal(`批量补录 OAuth (${count})`);
+    appendRecoveryLog('[系统] 正在创建批量补录任务...');
+
+    elements.batchRecoverBtn.disabled = true;
+    elements.batchRecoverBtn.textContent = '补录中...';
+
+    try {
+        const result = await api.post('/accounts/batch-recover-oauth', buildBatchPayload(), { timeoutMs: 120000 });
+        appendRecoveryLog(`[系统] 批量补录任务已创建: ${result.batch_id}`);
+        watchRecoveryBatch(result.batch_id);
+    } catch (error) {
+        appendRecoveryLog(`[失败] 创建批量补录任务失败: ${error.message}`);
+        elements.recoveryLogStatus.textContent = '批量任务创建失败';
+        toast.error('批量补录失败: ' + error.message);
         updateBatchButtons();
     }
 }

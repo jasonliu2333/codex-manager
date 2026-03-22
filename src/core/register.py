@@ -797,9 +797,6 @@ class RegistrationEngine:
             allow_redirects=True,
             timeout=30,
         )
-        did = self.session.cookies.get("oai-did")
-        if did:
-            self.device_id = did
         referer = str(response.url) if str(response.url).startswith("https://auth.openai.com") else "https://auth.openai.com/log-in"
         self._log(f"OAuth authorize 最终页面: {str(response.url)[:100]}...")
 
@@ -900,13 +897,41 @@ class RegistrationEngine:
         return self._handle_oauth_callback(callback_url)
 
     def recover_oauth_tokens(self, email: str, password: str) -> Optional[Dict[str, Any]]:
-        """对已注册账号执行正常登录补录 OAuth token。"""
+        """
+        使用全新会话重新走一轮验证码登录 + OAuth 授权。
+
+        该流程不复用注册阶段的 session/cookie/device_id，适合补录 ak/rk。
+        """
+        self.logs = []
         self.email = email
         self.password = password
+        self.session_token = None
+        self.oauth_start = None
+        self.device_id = None
+        self._create_account_response_data = None
+        self._post_signup_continue_url = None
+
+        self._log("=" * 60)
+        self._log("开始 OAuth 补录流程")
+        self._log("=" * 60)
+        self._log("1. 初始化全新登录会话...")
+
+        self.http_client.close()
+        self.http_client = OpenAIHTTPClient(proxy_url=self.proxy_url)
+        self.oauth_manager = OAuthManager(
+            client_id=get_settings().openai_client_id,
+            auth_url=get_settings().openai_auth_url,
+            token_url=get_settings().openai_token_url,
+            redirect_uri=get_settings().openai_redirect_uri,
+            scope=get_settings().openai_scope,
+            proxy_url=self.proxy_url,
+        )
 
         if not self._init_session():
+            self._log("初始化全新登录会话失败", "error")
             return None
 
+        self._log("2. 使用新会话执行 OAuth 登录...")
         return self._perform_post_registration_oauth()
 
     def _select_workspace(self, workspace_id: str) -> Optional[str]:

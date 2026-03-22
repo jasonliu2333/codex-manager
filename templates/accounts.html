@@ -128,6 +128,9 @@
                         <button class="btn btn-info" id="batch-check-sub-btn" disabled title="批量检测订阅状态">
                             🔍 检测订阅
                         </button>
+                        <button class="btn btn-warning" id="batch-recover-btn" disabled title="批量补录OAuth">
+                            🔐 补录OAuth
+                        </button>
                         <div class="dropdown">
                             <button class="btn btn-success" id="batch-upload-btn" disabled>
                                 ☁️ 上传
@@ -273,6 +276,19 @@
             <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end;">
                 <button class="btn btn-secondary" id="sub2api-use-auto-btn">自动选择</button>
                 <button class="btn btn-secondary" id="cancel-sub2api-modal-btn">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="recovery-log-modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">
+                <h3>🔐 OAuth 补录日志</h3>
+                <button class="modal-close" id="close-recovery-log-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="recovery-log-status" style="margin-bottom: 12px; color: var(--text-muted); font-size: 0.9rem;">等待开始...</div>
+                <pre id="recovery-log-output" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; min-height: 320px; max-height: 60vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.82rem; line-height: 1.55;"></pre>
             </div>
         </div>
     </div>
