@@ -150,6 +150,7 @@ class IMAPNewProvider(OutlookProvider):
         self,
         count: int = 20,
         only_unseen: bool = True,
+        mailbox: str = "INBOX",
     ) -> List[EmailMessage]:
         """
         获取最近的邮件
@@ -166,8 +167,8 @@ class IMAPNewProvider(OutlookProvider):
                 return []
 
         try:
-            # 选择收件箱
-            self._conn.select("INBOX", readonly=True)
+            # 选择邮箱文件夹
+            self._conn.select(mailbox or "INBOX", readonly=True)
 
             # 搜索邮件
             flag = "UNSEEN" if only_unseen else "ALL"

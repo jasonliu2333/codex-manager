@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 class ImapMailService(BaseEmailService):
     """标准 IMAP 邮箱服务（仅接收验证码，强制直连）"""
 
+    MAILBOX_CANDIDATES = [
+        "INBOX",
+        "Junk",
+        "Junk E-mail",
+        "Spam",
+        "Bulk Mail",
+    ]
+
     def __init__(self, config: Dict[str, Any] = None, name: str = None):
         super().__init__(EmailServiceType.IMAP_MAIL, name)
 
@@ -105,6 +113,14 @@ class ImapMailService(BaseEmailService):
             return match.group(1)
         return None
 
+    def _select_mailbox(self, mail: imaplib.IMAP4, mailbox: str) -> bool:
+        """尝试选择邮箱文件夹。"""
+        try:
+            status, _ = mail.select(mailbox)
+            return status == "OK"
+        except Exception:
+            return False
+
     def create_email(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
         """IMAP 模式不创建新邮箱，直接返回配置中的固定地址"""
         self.update_status(True)
@@ -129,45 +145,44 @@ class ImapMailService(BaseEmailService):
 
         try:
             mail = self._connect()
-            mail.select("INBOX")
 
             while time.time() - start_time < timeout:
                 try:
-                    # 搜索所有未读邮件
-                    status, data = mail.search(None, "UNSEEN")
-                    if status != "OK" or not data or not data[0]:
-                        time.sleep(3)
-                        continue
-
-                    msg_ids = data[0].split()
-                    for msg_id in reversed(msg_ids):  # 最新的优先
-                        id_str = msg_id.decode()
-                        if id_str in seen_ids:
-                            continue
-                        seen_ids.add(id_str)
-
-                        # 获取邮件
-                        status, msg_data = mail.fetch(msg_id, "(RFC822)")
-                        if status != "OK" or not msg_data:
+                    for mailbox in self.MAILBOX_CANDIDATES:
+                        if not self._select_mailbox(mail, mailbox):
                             continue
 
-                        raw = msg_data[0][1]
-                        msg = email.message_from_bytes(raw)
+                        status, data = mail.search(None, "UNSEEN")
+                        if status != "OK" or not data or not data[0]:
+                            status, data = mail.search(None, "ALL")
+                            if status != "OK" or not data or not data[0]:
+                                continue
 
-                        # 检查发件人
-                        from_addr = self._decode_str(msg.get("From", ""))
-                        if not self._is_openai_sender(from_addr):
-                            continue
+                        msg_ids = data[0].split()
+                        for msg_id in reversed(msg_ids):
+                            id_str = f"{mailbox}:{msg_id.decode()}"
+                            if id_str in seen_ids:
+                                continue
+                            seen_ids.add(id_str)
 
-                        # 提取验证码
-                        body = self._get_text_body(msg)
-                        code = self._extract_otp(body)
-                        if code:
-                            # 标记已读
-                            mail.store(msg_id, "+FLAGS", "\\Seen")
-                            self.update_status(True)
-                            logger.info(f"IMAP 获取验证码成功: {code}")
-                            return code
+                            status, msg_data = mail.fetch(msg_id, "(RFC822)")
+                            if status != "OK" or not msg_data:
+                                continue
+
+                            raw = msg_data[0][1]
+                            msg = email.message_from_bytes(raw)
+
+                            from_addr = self._decode_str(msg.get("From", ""))
+                            if not self._is_openai_sender(from_addr):
+                                continue
+
+                            body = self._get_text_body(msg)
+                            code = self._extract_otp(body)
+                            if code:
+                                mail.store(msg_id, "+FLAGS", "\\Seen")
+                                self.update_status(True)
+                                logger.info(f"IMAP 在 {mailbox} 获取验证码成功: {code}")
+                                return code
 
                 except imaplib.IMAP4.error as e:
                     logger.debug(f"IMAP 搜索邮件失败: {e}")

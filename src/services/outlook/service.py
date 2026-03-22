@@ -23,6 +23,14 @@ from .providers.graph_api import GraphAPIProvider
 
 logger = logging.getLogger(__name__)
 
+MAILBOX_CANDIDATES = [
+    "INBOX",
+    "Junk",
+    "Junk E-mail",
+    "Spam",
+    "Bulk Mail",
+]
+
 
 # 默认提供者优先级
 # IMAP_OLD 最兼容（只需 login.live.com token），IMAP_NEW 次之，Graph API 最后
@@ -236,15 +244,29 @@ class OutlookService(BaseEmailService):
 
                 with self._imap_semaphore:
                     with provider:
-                        emails = provider.get_recent_emails(count, only_unseen)
+                        collected = []
+                        seen_ids = set()
+                        for mailbox in MAILBOX_CANDIDATES:
+                            emails = provider.get_recent_emails(count, only_unseen, mailbox=mailbox)
+                            for email_msg in emails:
+                                msg_id = getattr(email_msg, "id", None)
+                                dedupe_key = msg_id or f"{getattr(email_msg, 'received_timestamp', 0)}:{getattr(email_msg, 'subject', '')}"
+                                if dedupe_key in seen_ids:
+                                    continue
+                                seen_ids.add(dedupe_key)
+                                collected.append(email_msg)
 
-                        if emails:
-                            # 成功获取邮件
+                            if emails:
+                                logger.debug(
+                                    f"[{account.email}] {provider_type.value} 在 {mailbox} 获取到 {len(emails)} 封邮件"
+                                )
+
+                        if collected:
                             self.health_checker.record_success(provider_type)
                             logger.debug(
-                                f"[{account.email}] {provider_type.value} 获取到 {len(emails)} 封邮件"
+                                f"[{account.email}] {provider_type.value} 合计获取到 {len(collected)} 封邮件"
                             )
-                            return emails
+                            return collected
 
             except Exception as e:
                 error_msg = str(e)

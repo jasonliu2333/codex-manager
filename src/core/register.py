@@ -800,6 +800,19 @@ class RegistrationEngine:
         referer = str(response.url) if str(response.url).startswith("https://auth.openai.com") else "https://auth.openai.com/log-in"
         self._log(f"OAuth authorize 最终页面: {str(response.url)[:100]}...")
 
+        self.device_id = (
+            self.session.cookies.get("oai-did")
+            or self.session.cookies.get("oai-did", domain=".openai.com")
+            or self.session.cookies.get("oai-did", domain="auth.openai.com")
+            or self.device_id
+        )
+        if not self.device_id:
+            self.device_id = self._get_device_id()
+        if self.device_id:
+            self._log(f"注册后 OAuth Device ID: {self.device_id}")
+        else:
+            self._log("注册后 OAuth 未获取到 Device ID，将继续尝试登录", "warning")
+
         signup_headers = self._oauth_json_headers(referer)
         if self.device_id:
             sentinel = self._check_sentinel(self.device_id, flow="authorize_continue")
@@ -809,7 +822,7 @@ class RegistrationEngine:
         auth_continue_resp = self.session.post(
             OPENAI_API_ENDPOINTS["signup"],
             headers=signup_headers,
-            data=json.dumps({"username": {"value": self.email, "kind": "email"}}),
+            data=json.dumps({"username": {"value": self.email, "kind": "email"}, "screen_hint": "login"}),
             allow_redirects=False,
             timeout=30,
         )
@@ -840,6 +853,8 @@ class RegistrationEngine:
         )
         self._log(f"注册后 password/verify 状态: {verify_resp.status_code}")
         if verify_resp.status_code != 200:
+            if verify_resp.status_code == 401 and "invalid_username_or_password" in (verify_resp.text or ""):
+                self._log("注册后 password/verify 返回 401：当前账号保存的 ChatGPT 密码可能不正确", "error")
             self._log(f"注册后 password/verify 失败: {verify_resp.text[:200]}", "warning")
             return None
 

@@ -781,7 +781,13 @@ def _run_sync_recover_oauth_task(
         task_manager.update_status(task_uuid, "failed", error=error_message)
 
 
-async def run_recover_oauth_task(task_uuid: str, account_id: int, proxy: Optional[str]):
+async def run_recover_oauth_task(
+    task_uuid: str,
+    account_id: int,
+    proxy: Optional[str],
+    log_prefix: str = "",
+    batch_id: str = "",
+):
     """异步包装补录任务。"""
     loop = task_manager.get_loop()
     if loop is None:
@@ -789,15 +795,18 @@ async def run_recover_oauth_task(task_uuid: str, account_id: int, proxy: Optiona
         task_manager.set_loop(loop)
 
     task_manager.update_status(task_uuid, "pending")
-    task_manager.add_log(task_uuid, f"[系统] 补录任务 {task_uuid[:8]} 已加入队列")
+    queue_msg = f"{log_prefix} [系统] 补录任务 {task_uuid[:8]} 已加入队列" if log_prefix else f"[系统] 补录任务 {task_uuid[:8]} 已加入队列"
+    task_manager.add_log(task_uuid, queue_msg)
+    if batch_id:
+        task_manager.add_batch_log(batch_id, queue_msg)
     await loop.run_in_executor(
         task_manager.executor,
         _run_sync_recover_oauth_task,
         task_uuid,
         account_id,
         proxy,
-        "",
-        "",
+        log_prefix,
+        batch_id,
     )
 
 
@@ -818,7 +827,13 @@ async def run_batch_recover_oauth(batch_id: str, task_account_pairs: List[dict],
     for index, item in enumerate(task_account_pairs, start=1):
         prefix = f"[任务{index}]"
         task_manager.add_batch_log(batch_id, f"{prefix} 启动补录: {item['email']}")
-        await run_recover_oauth_task(item["task_uuid"], item["account_id"], proxy)
+        await run_recover_oauth_task(
+            item["task_uuid"],
+            item["account_id"],
+            proxy,
+            log_prefix=prefix,
+            batch_id=batch_id,
+        )
 
         with get_db() as db:
             task = crud.get_registration_task_by_uuid(db, item["task_uuid"])
@@ -830,7 +845,8 @@ async def run_batch_recover_oauth(batch_id: str, task_account_pairs: List[dict],
             task_manager.add_batch_log(batch_id, f"{prefix} 补录成功: {item['email']}")
         else:
             recovery_batches[batch_id]["failed"] += 1
-            task_manager.add_batch_log(batch_id, f"{prefix} 补录失败: {item['email']}")
+            error_detail = (task.error_message if task else "") or "未知错误"
+            task_manager.add_batch_log(batch_id, f"{prefix} 补录失败: {item['email']} | 原因: {error_detail}")
 
         task_manager.update_batch_status(
             batch_id,

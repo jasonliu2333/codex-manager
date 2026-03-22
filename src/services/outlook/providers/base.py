@@ -98,6 +98,7 @@ class OutlookProvider(abc.ABC):
         self,
         count: int = 20,
         only_unseen: bool = True,
+        mailbox: Optional[str] = None,
     ) -> List[EmailMessage]:
         """
         获取最近的邮件
@@ -105,6 +106,7 @@ class OutlookProvider(abc.ABC):
         Args:
             count: 获取数量
             only_unseen: 是否只获取未读
+            mailbox: 邮箱文件夹名称，None 表示默认收件箱
 
         Returns:
             邮件列表

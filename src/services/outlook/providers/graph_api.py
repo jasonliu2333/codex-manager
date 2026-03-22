@@ -90,6 +90,7 @@ class GraphAPIProvider(OutlookProvider):
         self,
         count: int = 20,
         only_unseen: bool = True,
+        mailbox: str = "INBOX",
     ) -> List[EmailMessage]:
         """
         获取最近的邮件
@@ -112,8 +113,18 @@ class GraphAPIProvider(OutlookProvider):
                 self.record_failure("无法获取 Access Token")
                 return []
 
+            folder = (mailbox or "INBOX").strip().lower()
+            folder_map = {
+                "inbox": "inbox",
+                "junk": "junkemail",
+                "junk e-mail": "junkemail",
+                "spam": "junkemail",
+                "bulk mail": "junkemail",
+            }
+            graph_folder = folder_map.get(folder, "inbox")
+
             # 构建 API 请求
-            url = f"{self.GRAPH_API_BASE}{self.MESSAGES_ENDPOINT}"
+            url = f"{self.GRAPH_API_BASE}/me/mailFolders/{graph_folder}/messages"
 
             params = {
                 "$top": count,
