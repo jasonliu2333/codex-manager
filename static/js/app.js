@@ -40,6 +40,7 @@ let activeBatchId = null;    // 当前活跃的批量任务 ID（用于页面重
 const elements = {
     form: document.getElementById('registration-form'),
     emailService: document.getElementById('email-service'),
+    showRegisteredOutlook: document.getElementById('show-registered-outlook'),
     regMode: document.getElementById('reg-mode'),
     regModeGroup: document.getElementById('reg-mode-group'),
     batchCountGroup: document.getElementById('batch-count-group'),
@@ -187,6 +188,15 @@ function getSelectedServiceIds(container) {
 
 // 事件监听
 function initEventListeners() {
+    if (elements.showRegisteredOutlook) {
+        elements.showRegisteredOutlook.addEventListener('change', () => {
+            const currentValue = elements.emailService.value;
+            updateEmailServiceOptions();
+            if ([...elements.emailService.options].some(option => option.value === currentValue)) {
+                elements.emailService.value = currentValue;
+            }
+        });
+    }
     // 注册表单提交
     elements.form.addEventListener('submit', handleStartRegistration);
 
@@ -259,26 +269,60 @@ function updateEmailServiceOptions() {
 
     // Outlook
     if (availableServices.outlook.available) {
-        const optgroup = document.createElement('optgroup');
-        optgroup.label = `📧 Outlook (${availableServices.outlook.count} 个账户)`;
+        const showRegistered = !!elements.showRegisteredOutlook?.checked;
+        const unregisteredServices = availableServices.outlook.services.filter(service => !service.is_registered);
+        const registeredServices = availableServices.outlook.services.filter(service => service.is_registered);
 
-        availableServices.outlook.services.forEach(service => {
+        if (unregisteredServices.length > 0) {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = `📧 Outlook 未注册 (${unregisteredServices.length} 个账户)`;
+
+            unregisteredServices.forEach(service => {
+                const option = document.createElement('option');
+                option.value = `outlook:${service.id}`;
+                option.textContent = service.name + (service.has_oauth ? ' (OAuth)' : '');
+                option.dataset.type = 'outlook';
+                option.dataset.serviceId = service.id;
+                optgroup.appendChild(option);
+            });
+
+            select.appendChild(optgroup);
+        }
+
+        if (showRegistered && registeredServices.length > 0) {
+            const registeredGroup = document.createElement('optgroup');
+            registeredGroup.label = `📧 Outlook 已注册 (${registeredServices.length} 个账户)`;
+
+            registeredServices.forEach(service => {
+                const option = document.createElement('option');
+                option.value = `outlook:${service.id}`;
+                option.textContent = `已注册 | ${service.name}` + (service.has_oauth ? ' (OAuth)' : '');
+                option.dataset.type = 'outlook';
+                option.dataset.serviceId = service.id;
+                registeredGroup.appendChild(option);
+            });
+
+            select.appendChild(registeredGroup);
+        }
+
+        if (!unregisteredServices.length && !showRegistered) {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = '📧 Outlook (无未注册账户)';
+
             const option = document.createElement('option');
-            option.value = `outlook:${service.id}`;
-            option.textContent = service.name + (service.has_oauth ? ' (OAuth)' : '');
-            option.dataset.type = 'outlook';
-            option.dataset.serviceId = service.id;
+            option.value = '';
+            option.textContent = '当前没有未注册 Outlook 账户';
+            option.disabled = true;
             optgroup.appendChild(option);
-        });
-
-        select.appendChild(optgroup);
+            select.appendChild(optgroup);
+        }
 
         // Outlook 批量注册选项
         const batchOption = document.createElement('option');
         batchOption.value = 'outlook_batch:all';
         batchOption.textContent = `📋 Outlook 批量注册 (${availableServices.outlook.count} 个账户)`;
         batchOption.dataset.type = 'outlook_batch';
-        optgroup.appendChild(batchOption);
+        select.appendChild(batchOption);
     } else {
         const optgroup = document.createElement('optgroup');
         optgroup.label = '📧 Outlook (未配置)';

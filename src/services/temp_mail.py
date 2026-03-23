@@ -8,6 +8,7 @@ import re
 import time
 import json
 import logging
+from datetime import datetime, timezone
 from email import message_from_string
 from email.header import decode_header, make_header
 from email.message import Message
@@ -159,6 +160,38 @@ class TempMailService(BaseEmailService):
             "raw": raw,
         }
 
+    def _extract_mail_timestamp(self, mail: Dict[str, Any]) -> Optional[float]:
+        """提取邮件时间戳，兼容秒/毫秒时间戳与 ISO 日期字符串。"""
+        for key in ("createdAt", "created_at", "date", "timestamp", "receivedAt", "received_at"):
+            raw_value = mail.get(key)
+            if raw_value in (None, ""):
+                continue
+
+            if isinstance(raw_value, (int, float)):
+                value = float(raw_value)
+                return value / 1000 if value > 10**12 else value
+
+            value = str(raw_value).strip()
+            if not value:
+                continue
+
+            try:
+                numeric = float(value)
+                return numeric / 1000 if numeric > 10**12 else numeric
+            except ValueError:
+                pass
+
+            try:
+                normalized = value.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(normalized)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+            except ValueError:
+                continue
+
+        return None
+
     def _admin_headers(self) -> Dict[str, str]:
         """构造 admin 请求头"""
         return {
@@ -288,7 +321,7 @@ class TempMailService(BaseEmailService):
             email_id: 未使用，保留接口兼容
             timeout: 超时时间（秒）
             pattern: 验证码正则
-            otp_sent_at: OTP 发送时间戳（暂未使用）
+            otp_sent_at: OTP 发送时间戳，用于过滤旧邮件
 
         Returns:
             验证码字符串，超时返回 None
@@ -330,6 +363,10 @@ class TempMailService(BaseEmailService):
                         continue
 
                     seen_mail_ids.add(mail_id)
+
+                    mail_timestamp = self._extract_mail_timestamp(mail)
+                    if otp_sent_at and mail_timestamp and mail_timestamp + 1 < otp_sent_at:
+                        continue
 
                     parsed = self._extract_mail_fields(mail)
                     sender = parsed["sender"].lower()

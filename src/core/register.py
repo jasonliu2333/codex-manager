@@ -18,6 +18,7 @@ from curl_cffi import requests as cffi_requests
 
 from .openai.oauth import OAuthManager, OAuthStart
 from .http_client import OpenAIHTTPClient, HTTPClientError
+from .dynamic_proxy import get_proxy_url_for_task
 from ..services import EmailServiceFactory, BaseEmailService, EmailServiceType
 from ..database import crud
 from ..database.session import get_db
@@ -137,6 +138,43 @@ class RegistrationEngine:
         self.device_id: Optional[str] = None
         self._create_account_response_data: Optional[Dict[str, Any]] = None
         self._post_signup_continue_url: Optional[str] = None
+
+    def _rebuild_clients_for_proxy(self, proxy_url: Optional[str]) -> None:
+        """切换代理后重建 HTTP 客户端、Session 和 OAuth 管理器。"""
+        self.proxy_url = proxy_url
+        self.http_client.close()
+        self.http_client = OpenAIHTTPClient(proxy_url=proxy_url)
+        self.session = self.http_client.session
+
+        settings = get_settings()
+        self.oauth_manager = OAuthManager(
+            client_id=settings.openai_client_id,
+            auth_url=settings.openai_auth_url,
+            token_url=settings.openai_token_url,
+            redirect_uri=settings.openai_redirect_uri,
+            scope=settings.openai_scope,
+            proxy_url=proxy_url,
+        )
+
+    def _rotate_proxy_for_rate_limit(self) -> bool:
+        """429 时尝试切换代理，优先动态代理。"""
+        try:
+            new_proxy_url = get_proxy_url_for_task()
+        except Exception as e:
+            self._log(f"429 后尝试切换代理失败: {e}", "warning")
+            return False
+
+        if not new_proxy_url:
+            self._log("429 后未获取到可用的新代理，将继续使用当前网络环境", "warning")
+            return False
+
+        if new_proxy_url == self.proxy_url:
+            self._log(f"429 后代理未变化，继续使用: {new_proxy_url}", "warning")
+            return False
+
+        self._log(f"429 后切换代理成功: {new_proxy_url}")
+        self._rebuild_clients_for_proxy(new_proxy_url)
+        return True
 
     def _log(self, message: str, level: str = "info"):
         """记录日志"""
@@ -367,13 +405,37 @@ class RegistrationEngine:
             if sen_token:
                 headers["openai-sentinel-token"] = self._build_sentinel_header(did, sen_token)
 
-            response = self.session.post(
-                OPENAI_API_ENDPOINTS["signup"],
-                headers=headers,
-                data=signup_body,
-            )
+            max_attempts = 3
+            response = None
+            for attempt in range(1, max_attempts + 1):
+                response = self.session.post(
+                    OPENAI_API_ENDPOINTS["signup"],
+                    headers=headers,
+                    data=signup_body,
+                )
 
-            self._log(f"提交注册表单状态: {response.status_code}")
+                self._log(
+                    f"提交注册表单状态: {response.status_code}"
+                    + (f" (第 {attempt}/{max_attempts} 次)" if max_attempts > 1 else "")
+                )
+
+                if response.status_code != 429:
+                    break
+
+                if attempt >= max_attempts:
+                    self._log("提交注册表单触发限流，已达到最大重试次数", "warning")
+                    break
+
+                self._rotate_proxy_for_rate_limit()
+                retry_delay = min(15 * attempt, 45)
+                self._log(
+                    f"提交注册表单触发限流(429)，将在 {retry_delay} 秒后重试...",
+                    "warning"
+                )
+                time.sleep(retry_delay)
+
+            if response is None:
+                return SignupFormResult(success=False, error_message="未获得注册表单响应")
 
             if response.status_code != 200:
                 return SignupFormResult(

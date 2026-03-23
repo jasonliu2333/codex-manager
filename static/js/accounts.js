@@ -48,10 +48,6 @@ const elements = {
     closeRecoveryLogModal: document.getElementById('close-recovery-log-modal')
 };
 
-function supportsOAuthRecovery(emailService) {
-    return ['outlook', 'imap_mail', 'tempmail', 'temp_mail', 'freemail', 'moe_mail'].includes(emailService);
-}
-
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     loadStats();
@@ -208,12 +204,43 @@ async function loadStats() {
         elements.activeAccounts.textContent = format.number(data.by_status?.active || 0);
         elements.expiredAccounts.textContent = format.number(data.by_status?.expired || 0);
         elements.failedAccounts.textContent = format.number(data.by_status?.failed || 0);
+        renderServiceFilterOptions(data.by_email_service || {});
 
         // 添加动画效果
         animateValue(elements.totalAccounts, data.total || 0);
     } catch (error) {
         console.error('加载统计信息失败:', error);
     }
+}
+
+function renderServiceFilterOptions(byEmailService) {
+    if (!elements.filterService) return;
+
+    const currentValue = elements.filterService.value || currentFilters.email_service || '';
+    const serviceKeys = Object.keys(byEmailService || {});
+    const preferredServiceOrder = getServiceTypeOrder();
+    const sortedKeys = [...serviceKeys].sort((a, b) => {
+        const ai = preferredServiceOrder.indexOf(a);
+        const bi = preferredServiceOrder.indexOf(b);
+        if (ai === -1 && bi === -1) return a.localeCompare(b, 'zh-CN');
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+    });
+
+    const options = ['<option value="">全部邮箱服务</option>'];
+    for (const key of sortedKeys) {
+        const selected = key === currentValue ? ' selected' : '';
+        const label = getServiceTypeText(key);
+        const count = byEmailService[key] || 0;
+        options.push(`<option value="${escapeHtml(key)}"${selected}>${escapeHtml(label)} (${count})</option>`);
+    }
+
+    if (currentValue && !sortedKeys.includes(currentValue)) {
+        options.push(`<option value="${escapeHtml(currentValue)}" selected>${escapeHtml(getServiceTypeText(currentValue))}</option>`);
+    }
+
+    elements.filterService.innerHTML = options.join('');
 }
 
 // 数字动画
@@ -350,7 +377,7 @@ function renderAccounts(accounts) {
                         <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleMoreMenu(this)">更多</button>
                         <div class="dropdown-menu" style="min-width:100px;">
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);refreshToken(${account.id})">刷新</a>
-                            ${supportsOAuthRecovery(account.email_service)
+                            ${supportsOAuthRecoveryService(account.email_service)
                                 ? `<a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);recoverOAuth(${account.id})">补录OAuth</a>`
                                 : ''}
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);uploadAccount(${account.id})">上传</a>
@@ -814,7 +841,7 @@ async function viewAccount(id) {
                 <button class="btn btn-primary" onclick="refreshToken(${id}); elements.detailModal.classList.remove('active');">
                     🔄 刷新Token
                 </button>
-                ${supportsOAuthRecovery(account.email_service)
+                ${supportsOAuthRecoveryService(account.email_service)
                     ? `<button class="btn btn-warning" onclick="recoverOAuth(${id}); elements.detailModal.classList.remove('active');">
                         🔐 补录OAuth
                     </button>`

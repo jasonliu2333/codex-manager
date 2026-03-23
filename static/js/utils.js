@@ -388,6 +388,33 @@ function getServiceTypeText(type) {
     return statusMap.service[type] || type;
 }
 
+const serviceTypeOrder = [
+    'tempmail',
+    'outlook',
+    'temp_mail',
+    'moe_mail',
+    'freemail',
+    'imap_mail',
+    'duck_mail'
+];
+
+function getServiceTypeOrder() {
+    return [...serviceTypeOrder];
+}
+
+const oauthRecoveryServiceTypes = [
+    'outlook',
+    'imap_mail',
+    'tempmail',
+    'temp_mail',
+    'freemail',
+    'moe_mail'
+];
+
+function supportsOAuthRecoveryService(type) {
+    return oauthRecoveryServiceTypes.includes(type);
+}
+
 const accountStatusIconMap = {
     active:  { icon: '🟢', title: '活跃' },
     expired: { icon: '🟡', title: '过期' },
