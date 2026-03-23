@@ -109,6 +109,13 @@
                             <option value="">全部邮箱服务</option>
                         </select>
 
+                        <select id="filter-token" class="form-select">
+                            <option value="">全部 Token</option>
+                            <option value="ok">Token 正常</option>
+                            <option value="missing">Token 缺失</option>
+                            <option value="expired">Token 过期</option>
+                        </select>
+
                         <input type="text" id="search-input" class="form-input" placeholder="🔍 搜索邮箱..." style="min-width: 200px;">
                     </div>
 
@@ -169,6 +176,7 @@
                                     <th style="width: 100px;">密码</th>
                                     <th style="width: 120px;">邮箱服务</th>
                                     <th style="width: 80px;">状态</th>
+                                    <th style="width: 90px;">Token</th>
                                     <th style="width: 80px;">CPA</th>
                                     <th style="width: 80px;">订阅</th>
                                     <th style="width: 140px;">最后刷新</th>

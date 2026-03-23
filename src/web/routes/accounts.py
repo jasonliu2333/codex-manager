@@ -64,6 +64,7 @@ class AccountResponse(BaseModel):
     registered_at: Optional[str] = None
     last_refresh: Optional[str] = None
     expires_at: Optional[str] = None
+    has_tokens: bool = False
     status: str
     proxy_used: Optional[str] = None
     cpa_uploaded: bool = False
@@ -143,6 +144,7 @@ def account_to_response(account: Account) -> AccountResponse:
         registered_at=account.registered_at.isoformat() if account.registered_at else None,
         last_refresh=account.last_refresh.isoformat() if account.last_refresh else None,
         expires_at=account.expires_at.isoformat() if account.expires_at else None,
+        has_tokens=bool(account.access_token and account.refresh_token),
         status=account.status,
         proxy_used=account.proxy_used,
         cpa_uploaded=account.cpa_uploaded or False,
@@ -161,6 +163,7 @@ async def list_accounts(
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     status: Optional[str] = Query(None, description="状态筛选"),
     email_service: Optional[str] = Query(None, description="邮箱服务筛选"),
+    token_status: Optional[str] = Query(None, description="Token 筛选"),
     search: Optional[str] = Query(None, description="搜索关键词"),
 ):
     """
@@ -179,6 +182,23 @@ async def list_accounts(
         # 邮箱服务筛选
         if email_service:
             query = query.filter(Account.email_service == email_service)
+
+        # Token 状态筛选
+        if token_status == "missing":
+            query = query.filter(
+                (Account.access_token.is_(None)) | (Account.access_token == "") |
+                (Account.refresh_token.is_(None)) | (Account.refresh_token == "")
+            )
+        elif token_status == "ok":
+            query = query.filter(
+                Account.access_token.is_not(None),
+                Account.access_token != "",
+                Account.refresh_token.is_not(None),
+                Account.refresh_token != "",
+                Account.status != "expired"
+            )
+        elif token_status == "expired":
+            query = query.filter(Account.status == "expired")
 
         # 搜索
         if search:

@@ -10,7 +10,7 @@ let totalAccounts = 0;
 let selectedAccounts = new Set();
 let isLoading = false;
 let selectAllPages = false;  // 是否选中了全部页
-let currentFilters = { status: '', email_service: '', search: '' };  // 当前筛选条件
+let currentFilters = { status: '', email_service: '', token_status: '', search: '' };  // 当前筛选条件
 const refreshingAccountIds = new Set();
 let isBatchValidating = false;
 let recoverySocket = null;
@@ -25,6 +25,7 @@ const elements = {
     failedAccounts: document.getElementById('failed-accounts'),
     filterStatus: document.getElementById('filter-status'),
     filterService: document.getElementById('filter-service'),
+    filterToken: document.getElementById('filter-token'),
     searchInput: document.getElementById('search-input'),
     refreshBtn: document.getElementById('refresh-btn'),
     batchRefreshBtn: document.getElementById('batch-refresh-btn'),
@@ -67,6 +68,12 @@ function initEventListeners() {
     });
 
     elements.filterService.addEventListener('change', () => {
+        currentPage = 1;
+        resetSelectAllPages();
+        loadAccounts();
+    });
+
+    elements.filterToken.addEventListener('change', () => {
         currentPage = 1;
         resetSelectAllPages();
         loadAccounts();
@@ -260,7 +267,7 @@ async function loadAccounts() {
     // 显示加载状态
     elements.table.innerHTML = `
         <tr>
-            <td colspan="9">
+            <td colspan="10">
                 <div class="empty-state">
                     <div class="skeleton skeleton-text" style="width: 60%;"></div>
                     <div class="skeleton skeleton-text" style="width: 80%;"></div>
@@ -273,6 +280,7 @@ async function loadAccounts() {
     // 记录当前筛选条件
     currentFilters.status = elements.filterStatus.value;
     currentFilters.email_service = elements.filterService.value;
+    currentFilters.token_status = elements.filterToken.value;
     currentFilters.search = elements.searchInput.value.trim();
 
     const params = new URLSearchParams({
@@ -288,6 +296,10 @@ async function loadAccounts() {
         params.append('email_service', currentFilters.email_service);
     }
 
+    if (currentFilters.token_status) {
+        params.append('token_status', currentFilters.token_status);
+    }
+
     if (currentFilters.search) {
         params.append('search', currentFilters.search);
     }
@@ -301,7 +313,7 @@ async function loadAccounts() {
         console.error('加载账号列表失败:', error);
         elements.table.innerHTML = `
             <tr>
-                <td colspan="9">
+                <td colspan="10">
                     <div class="empty-state">
                         <div class="empty-state-icon">❌</div>
                         <div class="empty-state-title">加载失败</div>
@@ -320,7 +332,7 @@ function renderAccounts(accounts) {
     if (accounts.length === 0) {
         elements.table.innerHTML = `
             <tr>
-                <td colspan="9">
+                <td colspan="10">
                     <div class="empty-state">
                         <div class="empty-state-icon">📭</div>
                         <div class="empty-state-title">暂无数据</div>
@@ -355,6 +367,11 @@ function renderAccounts(accounts) {
             </td>
             <td>${getServiceTypeText(account.email_service)}</td>
             <td>${getStatusIcon(account.status)}</td>
+            <td>
+                <div class="cpa-status">
+                    ${renderTokenStatusBadge(account)}
+                </div>
+            </td>
             <td>
                 <div class="cpa-status">
                     ${account.cpa_uploaded
@@ -433,6 +450,18 @@ function renderAccounts(accounts) {
     elements.selectAll.checked = allCbs.length > 0 && checkedCbs.length === allCbs.length;
     elements.selectAll.indeterminate = checkedCbs.length > 0 && checkedCbs.length < allCbs.length;
     renderSelectAllBanner();
+}
+
+function renderTokenStatusBadge(account) {
+    if (!account.has_tokens) {
+        return '<span class="badge pending" title="缺少 access_token 或 refresh_token">缺失</span>';
+    }
+
+    if (account.status === 'expired') {
+        return '<span class="badge pending" title="账号状态为过期，Token 可能需要刷新">过期</span>';
+    }
+
+    return '<span class="badge uploaded" title="已存在 access_token 和 refresh_token">正常</span>';
 }
 
 // 切换密码显示
