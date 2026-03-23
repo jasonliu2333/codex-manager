@@ -245,6 +245,11 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 logger.error(f"任务不存在: {task_uuid}")
                 return
 
+            # Outlook 批量注册等场景下，email_service_id 可能预先绑定在任务记录里
+            # 若函数参数未显式传入，则优先使用任务自身绑定的邮箱服务 ID。
+            if email_service_id is None and task.email_service_id:
+                email_service_id = task.email_service_id
+
             # 更新 TaskManager 状态
             task_manager.update_status(task_uuid, "running")
 
