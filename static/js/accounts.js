@@ -49,7 +49,7 @@ const elements = {
 };
 
 function supportsOAuthRecovery(emailService) {
-    return emailService === 'outlook' || emailService === 'imap_mail';
+    return ['outlook', 'imap_mail', 'tempmail', 'temp_mail', 'freemail', 'moe_mail'].includes(emailService);
 }
 
 // 初始化

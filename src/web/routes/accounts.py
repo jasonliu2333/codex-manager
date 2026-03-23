@@ -656,7 +656,8 @@ def _get_recovery_proxy(request_proxy: Optional[str] = None, log_callback=None) 
 
 def _find_mailbox_service_for_account(db, account: Account) -> Optional[EmailServiceModel]:
     """根据账号邮箱匹配可用于补录的邮箱服务配置。"""
-    if account.email_service not in {"outlook", "imap_mail"}:
+    supported_types = {"outlook", "imap_mail", "tempmail", "temp_mail", "freemail", "moe_mail"}
+    if account.email_service not in supported_types:
         return None
 
     services = crud.get_email_services(
@@ -666,8 +667,12 @@ def _find_mailbox_service_for_account(db, account: Account) -> Optional[EmailSer
         skip=0,
         limit=200,
     )
+    if not services:
+        return None
 
     email_lower = (account.email or "").strip().lower()
+    email_domain = email_lower.split("@", 1)[1] if "@" in email_lower else ""
+
     for service in services:
         config = service.config or {}
         if account.email_service == "outlook":
@@ -680,8 +685,17 @@ def _find_mailbox_service_for_account(db, account: Account) -> Optional[EmailSer
         elif account.email_service == "imap_mail":
             if str(config.get("email") or "").strip().lower() == email_lower:
                 return service
+        elif account.email_service == "temp_mail":
+            if str(config.get("domain") or "").strip().lower() == email_domain:
+                return service
+        elif account.email_service == "freemail":
+            if str(config.get("domain") or "").strip().lower() == email_domain:
+                return service
+        elif account.email_service == "moe_mail":
+            if str(config.get("default_domain") or config.get("domain") or "").strip().lower() == email_domain:
+                return service
 
-    return None
+    return services[0]
 
 
 def _run_sync_recover_oauth_task(
@@ -706,8 +720,9 @@ def _run_sync_recover_oauth_task(
             account = crud.get_account_by_id(db, account_id)
             if not account:
                 raise ValueError("账号不存在")
-            if account.email_service not in {"outlook", "imap_mail"}:
-                raise ValueError("当前仅支持 Outlook / IMAP_MAIL 补录")
+            supported_recovery_types = {"outlook", "imap_mail", "tempmail", "temp_mail", "freemail", "moe_mail"}
+            if account.email_service not in supported_recovery_types:
+                raise ValueError("当前仅支持 Outlook / IMAP / Tempmail / Temp-Mail / Freemail / MoeMail 补录")
             if not account.password:
                 raise ValueError("账号缺少登录密码，无法补录")
 
@@ -728,6 +743,9 @@ def _run_sync_recover_oauth_task(
                 callback_logger=callback,
                 task_uuid=task_uuid,
             )
+            if account.email_service_id:
+                engine.email_info = {"service_id": account.email_service_id, "email": account.email}
+                callback(f"{full_prefix}[系统] 已注入邮箱凭据标识: {account.email_service_id}")
             callback(f"{full_prefix}[系统] 将使用全新登录会话，不复用注册阶段 session/cookie/device_id")
             token_info = engine.recover_oauth_tokens(account.email, account.password)
             if not token_info:
