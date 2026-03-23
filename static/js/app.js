@@ -1148,7 +1148,9 @@ function renderOutlookAccountsList() {
         return;
     }
 
-    const html = outlookAccounts.map(account => `
+    const renderGroup = (title, accounts) => {
+        if (!accounts.length) return '';
+        const items = accounts.map(account => `
         <label class="outlook-account-item" style="display: flex; align-items: center; padding: var(--spacing-sm); border-bottom: 1px solid var(--border-light); cursor: pointer; ${account.is_registered ? 'opacity: 0.6;' : ''}" data-id="${account.id}" data-registered="${account.is_registered}">
             <input type="checkbox" class="outlook-account-checkbox" value="${account.id}" ${account.is_registered ? '' : 'checked'} style="margin-right: var(--spacing-sm);">
             <div style="flex: 1;">
@@ -1163,6 +1165,22 @@ function renderOutlookAccountsList() {
             </div>
         </label>
     `).join('');
+
+        return `
+            <div style="padding: var(--spacing-sm); font-weight: 600; background: var(--bg-secondary); border-bottom: 1px solid var(--border-light);">
+                ${title} (${accounts.length})
+            </div>
+            ${items}
+        `;
+    };
+
+    const unregisteredAccounts = outlookAccounts.filter(account => !account.is_registered);
+    const registeredAccounts = outlookAccounts.filter(account => account.is_registered);
+
+    const html = [
+        renderGroup('未注册 Outlook', unregisteredAccounts),
+        renderGroup('已注册 Outlook', registeredAccounts)
+    ].filter(Boolean).join('');
 
     elements.outlookAccountsContainer.innerHTML = html;
 }

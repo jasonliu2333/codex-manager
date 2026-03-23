@@ -1089,6 +1089,7 @@ async def get_available_email_services():
     - moe_mail: 已配置的自定义域名服务
     """
     from ...database.models import EmailService as EmailServiceModel
+    from ...database.models import Account
     from ...config.settings import get_settings
 
     settings = get_settings()
@@ -1144,11 +1145,16 @@ async def get_available_email_services():
 
         for service in outlook_services:
             config = service.config or {}
+            email = config.get("email") or service.name
+            existing_account = db.query(Account).filter(Account.email == email).first()
             result["outlook"]["services"].append({
                 "id": service.id,
                 "name": service.name,
                 "type": "outlook",
+                "email": email,
                 "has_oauth": bool(config.get("client_id") and config.get("refresh_token")),
+                "is_registered": existing_account is not None,
+                "registered_account_id": existing_account.id if existing_account else None,
                 "priority": service.priority
             })
 
