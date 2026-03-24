@@ -77,6 +77,7 @@ class RegistrationTaskCreate(BaseModel):
     sub2api_service_ids: List[int] = []  # 指定 Sub2API 服务 ID 列表
     auto_upload_tm: bool = False
     tm_service_ids: List[int] = []  # 指定 TM 服务 ID 列表
+    auto_recover_tokens: bool = False
 
 
 class BatchRegistrationRequest(BaseModel):
@@ -96,6 +97,7 @@ class BatchRegistrationRequest(BaseModel):
     sub2api_service_ids: List[int] = []
     auto_upload_tm: bool = False
     tm_service_ids: List[int] = []
+    auto_recover_tokens: bool = False
 
 
 class RegistrationTaskResponse(BaseModel):
@@ -164,6 +166,7 @@ class OutlookBatchRegistrationRequest(BaseModel):
     sub2api_service_ids: List[int] = []
     auto_upload_tm: bool = False
     tm_service_ids: List[int] = []
+    auto_recover_tokens: bool = False
 
 
 class OutlookBatchRegistrationResponse(BaseModel):
@@ -221,7 +224,7 @@ def _normalize_email_service_config(
     return normalized
 
 
-def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None):
+def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_recover_tokens: bool = False):
     """
     在线程池中执行的同步注册任务
 
@@ -413,6 +416,25 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 # 更新代理使用时间
                 update_proxy_usage(db, proxy_id)
 
+                recoverable_types = {"outlook", "imap_mail", "tempmail", "temp_mail", "freemail", "moe_mail"}
+                if auto_recover_tokens and not result.access_token and result.password and engine.email_service.service_type.value in recoverable_types:
+                    result.metadata = result.metadata or {}
+                    result.metadata["auto_recover_requested"] = True
+                    log_callback("[系统] 注册成功但缺少 Token，开始自动补录...")
+                    token_info = engine.recover_oauth_tokens(result.email, result.password)
+                    if token_info:
+                        result.account_id = token_info.get("account_id", "") or result.account_id
+                        result.workspace_id = token_info.get("workspace_id", "") or result.workspace_id
+                        result.access_token = token_info.get("access_token", "") or result.access_token
+                        result.refresh_token = token_info.get("refresh_token", "") or result.refresh_token
+                        result.id_token = token_info.get("id_token", "") or result.id_token
+                        result.session_token = token_info.get("session_token", "") or result.session_token
+                        result.metadata["auto_recovered"] = True
+                        log_callback("[成功] 自动补录 Token 成功")
+                    else:
+                        result.metadata["auto_recovered"] = False
+                        log_callback("[警告] 自动补录 Token 失败，账号将以无 Token 状态保存")
+
                 # 保存到数据库
                 engine.save_to_database(result)
 
@@ -546,7 +568,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 pass
 
 
-async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None):
+async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_recover_tokens: bool = False):
     """
     异步执行注册任务
 
@@ -579,6 +601,7 @@ async def run_registration_task(task_uuid: str, email_service_type: str, proxy: 
             sub2api_service_ids or [],
             auto_upload_tm,
             tm_service_ids or [],
+            auto_recover_tokens,
         )
     except Exception as e:
         logger.error(f"线程池执行异常: {task_uuid}, 错误: {e}")
@@ -631,6 +654,7 @@ async def run_batch_parallel(
     sub2api_service_ids: List[int] = None,
     auto_upload_tm: bool = False,
     tm_service_ids: List[int] = None,
+    auto_recover_tokens: bool = False,
 ):
     """
     并行模式：所有任务同时提交，Semaphore 控制最大并发数
@@ -650,6 +674,7 @@ async def run_batch_parallel(
                 auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids or [],
                 auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids or [],
                 auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids or [],
+                auto_recover_tokens=auto_recover_tokens,
             )
         with get_db() as db:
             t = crud.get_registration_task(db, uuid)
@@ -697,6 +722,7 @@ async def run_batch_pipeline(
     sub2api_service_ids: List[int] = None,
     auto_upload_tm: bool = False,
     tm_service_ids: List[int] = None,
+    auto_recover_tokens: bool = False,
 ):
     """
     流水线模式：每隔 interval 秒启动一个新任务，Semaphore 限制最大并发数
@@ -716,6 +742,7 @@ async def run_batch_pipeline(
                 auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids or [],
                 auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids or [],
                 auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids or [],
+                auto_recover_tokens=auto_recover_tokens,
             )
             with get_db() as db:
                 t = crud.get_registration_task(db, uuid)
@@ -787,6 +814,7 @@ async def run_batch_registration(
     sub2api_service_ids: List[int] = None,
     auto_upload_tm: bool = False,
     tm_service_ids: List[int] = None,
+    auto_recover_tokens: bool = False,
 ):
     """根据 mode 分发到并行或流水线执行"""
     if mode == "parallel":
@@ -796,6 +824,7 @@ async def run_batch_registration(
             auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids,
             auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids,
             auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids,
+            auto_recover_tokens=auto_recover_tokens,
         )
     else:
         await run_batch_pipeline(
@@ -805,6 +834,7 @@ async def run_batch_registration(
             auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids,
             auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids,
             auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids,
+            auto_recover_tokens=auto_recover_tokens,
         )
 
 
@@ -857,6 +887,7 @@ async def start_registration(
         request.sub2api_service_ids,
         request.auto_upload_tm,
         request.tm_service_ids,
+        request.auto_recover_tokens,
     )
 
     return task_to_response(task)
@@ -934,6 +965,7 @@ async def start_batch_registration(
         request.sub2api_service_ids,
         request.auto_upload_tm,
         request.tm_service_ids,
+        request.auto_recover_tokens,
     )
 
     return BatchRegistrationResponse(
@@ -1344,6 +1376,7 @@ async def run_outlook_batch_registration(
     sub2api_service_ids: List[int] = None,
     auto_upload_tm: bool = False,
     tm_service_ids: List[int] = None,
+    auto_recover_tokens: bool = False,
 ):
     """
     异步执行 Outlook 批量注册任务，复用通用并发逻辑
@@ -1387,6 +1420,7 @@ async def run_outlook_batch_registration(
         sub2api_service_ids=sub2api_service_ids,
         auto_upload_tm=auto_upload_tm,
         tm_service_ids=tm_service_ids,
+        auto_recover_tokens=auto_recover_tokens,
     )
 
 
@@ -1491,6 +1525,7 @@ async def start_outlook_batch_registration(
         request.sub2api_service_ids,
         request.auto_upload_tm,
         request.tm_service_ids,
+        request.auto_recover_tokens,
     )
 
     return OutlookBatchRegistrationResponse(
