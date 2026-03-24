@@ -78,6 +78,27 @@ class MeoMailEmailService(BaseEmailService):
         self._last_config_check: float = 0
         self._cached_config: Optional[Dict[str, Any]] = None
 
+    @staticmethod
+    def _extract_email_address(email_info: Dict[str, Any]) -> str:
+        """从邮箱信息中提取邮箱地址。"""
+        if not isinstance(email_info, dict):
+            return ""
+
+        email_value = email_info.get("email")
+        if isinstance(email_value, str):
+            return email_value.strip()
+        if isinstance(email_value, dict):
+            address = email_value.get("address")
+            if isinstance(address, str):
+                return address.strip()
+
+        for key in ("address", "mailbox", "emailAddress"):
+            value = email_info.get(key)
+            if isinstance(value, str):
+                return value.strip()
+
+        return ""
+
     def _get_headers(self) -> Dict[str, str]:
         """获取 API 请求头"""
         headers = {
@@ -254,6 +275,125 @@ class MeoMailEmailService(BaseEmailService):
             if isinstance(e, EmailServiceError):
                 raise
             raise EmailServiceError(f"创建邮箱失败: {e}")
+
+    def get_email_mailbox(self, email_id: str) -> Optional[Dict[str, Any]]:
+        """获取单个邮箱信息。"""
+        try:
+            response = self._make_request("GET", f"/api/emails/{email_id}")
+        except Exception as e:
+            logger.warning(f"获取邮箱失败: {email_id} - {e}")
+            self.update_status(False, e)
+            return None
+
+        mailbox = {
+            "id": email_id,
+            "service_id": email_id,
+            "email": "",
+            "raw_response": response,
+        }
+
+        for key in ("email", "address", "mailbox", "emailAddress"):
+            value = response.get(key)
+            if isinstance(value, str) and value.strip():
+                mailbox["email"] = value.strip()
+                break
+
+        self._emails_cache[email_id] = mailbox
+        self.update_status(True)
+        return mailbox
+
+    def find_email_by_address(self, email: str, max_pages: int = 50) -> Optional[Dict[str, Any]]:
+        """按邮箱地址查找现有邮箱。"""
+        target = (email or "").strip().lower()
+        if not target:
+            return None
+
+        cursor = None
+        seen_cursors = set()
+        pages = 0
+
+        while pages < max_pages:
+            params = {}
+            if cursor:
+                params["cursor"] = cursor
+
+            try:
+                response = self._make_request("GET", "/api/emails", params=params)
+            except Exception as e:
+                logger.warning(f"按地址查找邮箱失败: {email} - {e}")
+                self.update_status(False, e)
+                return None
+
+            emails = response.get("emails", [])
+            if not isinstance(emails, list):
+                emails = []
+
+            for email_info in emails:
+                if not isinstance(email_info, dict):
+                    continue
+                email_id = str(email_info.get("id") or "").strip()
+                if email_id:
+                    self._emails_cache[email_id] = email_info
+
+                current_email = self._extract_email_address(email_info).lower()
+                if current_email == target:
+                    return {
+                        "email": self._extract_email_address(email_info),
+                        "service_id": email_id,
+                        "id": email_id,
+                        "raw_response": email_info,
+                    }
+
+            pages += 1
+            next_cursor = (
+                response.get("nextCursor")
+                or response.get("next_cursor")
+                or response.get("cursor")
+                or response.get("next")
+            )
+            if not next_cursor or next_cursor in seen_cursors:
+                break
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+
+        return None
+
+    def ensure_mailbox(self, email: str, email_id: str = None) -> Dict[str, Any]:
+        """确保目标邮箱可用：存在则复用，不存在则创建。"""
+        target_email = (email or "").strip()
+        if "@" not in target_email:
+            raise EmailServiceError(f"邮箱地址无效: {email}")
+
+        if email_id:
+            mailbox = self.get_email_mailbox(email_id)
+            if mailbox:
+                mailbox_email = (mailbox.get("email") or "").strip().lower()
+                if not mailbox_email or mailbox_email == target_email.lower():
+                    mailbox["email"] = target_email
+                    mailbox["service_id"] = email_id
+                    mailbox["id"] = email_id
+                    return mailbox
+
+        existing = self.find_email_by_address(target_email)
+        if existing and existing.get("service_id"):
+            logger.info(f"复用已存在的自定义域名邮箱: {target_email} (ID: {existing['service_id']})")
+            self.update_status(True)
+            return existing
+
+        local_part, domain = target_email.split("@", 1)
+        try:
+            return self.create_email({"name": local_part, "domain": domain})
+        except EmailServiceError as e:
+            error_text = str(e)
+            if "409" not in error_text and "已被使用" not in error_text:
+                raise
+
+            existing = self.find_email_by_address(target_email)
+            if existing and existing.get("service_id"):
+                logger.info(f"创建邮箱返回冲突，改为复用已存在邮箱: {target_email} (ID: {existing['service_id']})")
+                self.update_status(True)
+                return existing
+            raise
 
     def get_verification_code(
         self,

@@ -742,11 +742,13 @@ def _prepare_recovery_email_info(
     if "@" not in email_value:
         raise ValueError("MoeMail 账号邮箱格式无效，无法重建临时邮箱")
 
-    local_part, domain = email_value.split("@", 1)
     if log_callback:
-        log_callback(f"[系统] MoeMail 邮箱为临时资源，正在通过 Admin API 重建: {email_value}")
+        log_callback(f"[系统] MoeMail 邮箱为临时资源，正在确保邮箱存在: {email_value}")
 
-    rebuilt_info = email_service.create_email({"name": local_part, "domain": domain})
+    if not hasattr(email_service, "ensure_mailbox"):
+        raise ValueError("当前 MoeMail 服务版本不支持自动恢复邮箱")
+
+    rebuilt_info = email_service.ensure_mailbox(email_value, account.email_service_id)
     rebuilt_email = str((rebuilt_info or {}).get("email") or "").strip()
     rebuilt_service_id = str((rebuilt_info or {}).get("service_id") or "").strip()
 

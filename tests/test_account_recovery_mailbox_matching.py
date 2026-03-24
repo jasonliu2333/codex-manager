@@ -93,12 +93,11 @@ def test_find_mailbox_service_for_account_returns_none_without_exact_match():
 
 class DummyMoeMailService:
     def __init__(self):
-        self.create_calls = []
+        self.ensure_calls = []
 
-    def create_email(self, config=None):
-        self.create_calls.append(config or {})
-        name = config.get("name")
-        domain = config.get("domain")
+    def ensure_mailbox(self, email: str, email_id: str = None):
+        self.ensure_calls.append({"email": email, "email_id": email_id})
+        name, domain = email.split("@", 1)
         return {
             "email": f"{name}@{domain}",
             "service_id": "rebuilt-mailbox-id",
@@ -124,7 +123,7 @@ def test_prepare_recovery_email_info_rebuilds_moe_mail_and_updates_service_id():
             "email": "recoverme@example.com",
             "service_id": "rebuilt-mailbox-id",
         }
-        assert service.create_calls == [{"name": "recoverme", "domain": "example.com"}]
+        assert service.ensure_calls == [{"email": "recoverme@example.com", "email_id": "stale-mailbox-id"}]
         assert account.email_service_id == "rebuilt-mailbox-id"
 
 
@@ -147,4 +146,4 @@ def test_prepare_recovery_email_info_keeps_non_moe_mail_service_id():
             "email": "keep@example.com",
             "service_id": "existing-service-id",
         }
-        assert service.create_calls == []
+        assert service.ensure_calls == []
