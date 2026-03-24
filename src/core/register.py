@@ -570,22 +570,37 @@ class RegistrationEngine:
         """获取验证码"""
         try:
             self._log(f"正在等待邮箱 {self.email} 的验证码...")
-
+            total_timeout = 120
+            chunk_timeout = 15
             email_id = self.email_info.get("service_id") if self.email_info else None
-            code = self.email_service.get_verification_code(
-                email=self.email,
-                email_id=email_id,
-                timeout=120,
-                pattern=OTP_CODE_PATTERN,
-                otp_sent_at=self._otp_sent_at,
-            )
+            started_at = time.time()
+            attempt = 0
 
-            if code:
-                self._log(f"成功获取验证码: {code}")
-                return code
-            else:
-                self._log("等待验证码超时", "error")
-                return None
+            while True:
+                elapsed = int(time.time() - started_at)
+                remaining = max(0, total_timeout - elapsed)
+                if remaining <= 0:
+                    self._log("等待验证码超时", "error")
+                    return None
+
+                attempt += 1
+                current_timeout = min(chunk_timeout, remaining)
+                self._log(
+                    f"验证码轮询第 {attempt} 次，最多等待 {current_timeout} 秒"
+                    f"（已等待 {elapsed} 秒，剩余 {remaining} 秒）"
+                )
+
+                code = self.email_service.get_verification_code(
+                    email=self.email,
+                    email_id=email_id,
+                    timeout=current_timeout,
+                    pattern=OTP_CODE_PATTERN,
+                    otp_sent_at=self._otp_sent_at,
+                )
+
+                if code:
+                    self._log(f"成功获取验证码: {code}")
+                    return code
 
         except Exception as e:
             self._log(f"获取验证码失败: {e}", "error")
