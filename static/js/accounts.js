@@ -36,6 +36,8 @@ const elements = {
     batchDeleteBtn: document.getElementById('batch-delete-btn'),
     exportBtn: document.getElementById('export-btn'),
     exportMenu: document.getElementById('export-menu'),
+    importBtn: document.getElementById('import-btn'),
+    importFileInput: document.getElementById('import-file-input'),
     selectAll: document.getElementById('select-all'),
     prevPage: document.getElementById('prev-page'),
     nextPage: document.getElementById('next-page'),
@@ -175,6 +177,13 @@ function initEventListeners() {
         exportAccounts(format);
         elements.exportMenu.classList.remove('active');
     });
+
+    if (elements.importBtn && elements.importFileInput) {
+        elements.importBtn.addEventListener('click', () => {
+            elements.importFileInput.click();
+        });
+        elements.importFileInput.addEventListener('change', handleImportAccounts);
+    }
 
     // 关闭模态框
     elements.closeModal.addEventListener('click', () => {
@@ -975,6 +984,52 @@ async function exportAccounts(format) {
     } catch (error) {
         console.error('导出失败:', error);
         toast.error('导出失败: ' + error.message);
+    }
+}
+
+async function handleImportAccounts(event) {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    const filename = file.name || '';
+    if (!/\.(json|csv)$/i.test(filename)) {
+        toast.warning('仅支持导入 JSON 或 CSV 文件');
+        input.value = '';
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    toast.info(`正在导入 ${filename}...`);
+
+    try {
+        const response = await fetch('/api/accounts/import', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(data.detail || `导入失败: HTTP ${response.status}`);
+        }
+
+        const successCount = (data.created_count || 0) + (data.updated_count || 0);
+        const failedCount = data.failed_count || 0;
+        const summary = `导入完成：新增 ${data.created_count || 0}，更新 ${data.updated_count || 0}，失败 ${failedCount}`;
+        if (failedCount > 0) {
+            console.warn('账号导入部分失败:', data.errors || []);
+            toast.warning(summary);
+        } else {
+            toast.success(summary);
+        }
+        loadStats();
+        loadAccounts();
+    } catch (error) {
+        console.error('导入失败:', error);
+        toast.error('导入失败: ' + error.message);
+    } finally {
+        input.value = '';
     }
 }
 

@@ -324,6 +324,16 @@ async function loadSettings() {
         document.getElementById('dynamic-proxy-api-url').value = data.proxy?.dynamic_api_url || '';
         document.getElementById('dynamic-proxy-api-key-header').value = data.proxy?.dynamic_api_key_header || 'X-API-Key';
         document.getElementById('dynamic-proxy-result-field').value = data.proxy?.dynamic_result_field || '';
+        const dynamicKeyInput = document.getElementById('dynamic-proxy-api-key');
+        const dynamicKeyStatus = document.getElementById('dynamic-proxy-api-key-status');
+        if (dynamicKeyInput) {
+            dynamicKeyInput.value = '';
+            dynamicKeyInput.dataset.hasKey = data.proxy?.has_dynamic_api_key ? '1' : '0';
+            dynamicKeyInput.placeholder = data.proxy?.has_dynamic_api_key ? '已配置，留空保持不变' : '留空保持不变';
+        }
+        if (dynamicKeyStatus) {
+            dynamicKeyStatus.textContent = data.proxy?.has_dynamic_api_key ? '已保存 API Key' : '未保存 API Key';
+        }
 
         // 注册配置
         document.getElementById('max-retries').value = data.registration?.max_retries || 3;
@@ -1020,7 +1030,17 @@ async function handleSaveDynamicProxy(e) {
     try {
         await api.post('/settings/proxy/dynamic', data);
         toast.success('动态代理设置已保存');
-        document.getElementById('dynamic-proxy-api-key').value = '';
+        const dynamicKeyInput = document.getElementById('dynamic-proxy-api-key');
+        const dynamicKeyStatus = document.getElementById('dynamic-proxy-api-key-status');
+        if (dynamicKeyInput) {
+            const hasKey = Boolean(data.api_key) || dynamicKeyInput.dataset.hasKey === '1';
+            dynamicKeyInput.value = '';
+            dynamicKeyInput.dataset.hasKey = hasKey ? '1' : '0';
+            dynamicKeyInput.placeholder = hasKey ? '已配置，留空保持不变' : '留空保持不变';
+            if (dynamicKeyStatus) {
+                dynamicKeyStatus.textContent = hasKey ? '已保存 API Key' : '未保存 API Key';
+            }
+        }
     } catch (error) {
         toast.error('保存失败: ' + error.message);
     }

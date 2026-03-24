@@ -2,15 +2,17 @@
 账号管理 API 路由
 """
 import asyncio
+import csv
 import io
 import json
 import logging
 import uuid
 import zipfile
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body, File, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -358,6 +360,194 @@ class BatchExportRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+
+
+def _parse_optional_datetime(value: Optional[str]) -> Optional[datetime]:
+    """解析可选时间字段。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        raise ValueError(f"无效的时间格式: {value}")
+
+
+def _normalize_import_header(header: str) -> str:
+    return str(header or "").strip().lower().replace("_", " ").replace("-", " ")
+
+
+ACCOUNT_IMPORT_FIELD_ALIASES = {
+    "email": {"email", "邮箱"},
+    "password": {"password", "密码"},
+    "client_id": {"client id", "client_id"},
+    "account_id": {"account id", "account_id"},
+    "workspace_id": {"workspace id", "workspace_id"},
+    "access_token": {"access token", "access_token"},
+    "refresh_token": {"refresh token", "refresh_token"},
+    "id_token": {"id token", "id_token"},
+    "session_token": {"session token", "session_token"},
+    "email_service": {"email service", "email_service"},
+    "email_service_id": {"email service id", "email_service_id"},
+    "proxy_used": {"proxy used", "proxy_used"},
+    "status": {"status", "状态"},
+    "registered_at": {"registered at", "registered_at"},
+    "last_refresh": {"last refresh", "last_refresh"},
+    "expires_at": {"expires at", "expires_at"},
+    "cookies": {"cookies", "cookie"},
+    "source": {"source", "来源"},
+    "subscription_type": {"subscription type", "subscription_type"},
+    "subscription_at": {"subscription at", "subscription_at"},
+}
+
+
+def _normalize_account_import_record(record: Dict[str, object]) -> Dict[str, object]:
+    """标准化导入账号记录。"""
+    normalized: Dict[str, object] = {}
+    for raw_key, raw_value in (record or {}).items():
+        header = _normalize_import_header(str(raw_key))
+        target_key = None
+        for candidate, aliases in ACCOUNT_IMPORT_FIELD_ALIASES.items():
+            if header in aliases:
+                target_key = candidate
+                break
+        if not target_key:
+            continue
+        normalized[target_key] = raw_value
+
+    email = str(normalized.get("email") or "").strip()
+    if not email:
+        raise ValueError("缺少邮箱字段")
+
+    parsed = {
+        "email": email,
+        "password": str(normalized.get("password") or "").strip() or None,
+        "client_id": str(normalized.get("client_id") or "").strip() or None,
+        "account_id": str(normalized.get("account_id") or "").strip() or None,
+        "workspace_id": str(normalized.get("workspace_id") or "").strip() or None,
+        "access_token": str(normalized.get("access_token") or "").strip() or None,
+        "refresh_token": str(normalized.get("refresh_token") or "").strip() or None,
+        "id_token": str(normalized.get("id_token") or "").strip() or None,
+        "session_token": str(normalized.get("session_token") or "").strip() or None,
+        "email_service": str(normalized.get("email_service") or "").strip() or None,
+        "email_service_id": str(normalized.get("email_service_id") or "").strip() or None,
+        "proxy_used": str(normalized.get("proxy_used") or "").strip() or None,
+        "status": str(normalized.get("status") or "").strip() or None,
+        "cookies": str(normalized.get("cookies") or "").strip() or None,
+        "source": str(normalized.get("source") or "").strip() or None,
+        "subscription_type": str(normalized.get("subscription_type") or "").strip() or None,
+        "registered_at": _parse_optional_datetime(normalized.get("registered_at")),
+        "last_refresh": _parse_optional_datetime(normalized.get("last_refresh")),
+        "expires_at": _parse_optional_datetime(normalized.get("expires_at")),
+        "subscription_at": _parse_optional_datetime(normalized.get("subscription_at")),
+    }
+    return parsed
+
+
+def _upsert_imported_accounts(db, records: List[Dict[str, object]]) -> Dict[str, object]:
+    """按邮箱导入账号，存在则更新，不存在则创建。"""
+    created = 0
+    updated = 0
+    errors: List[str] = []
+
+    create_keys = {
+        "password",
+        "client_id",
+        "session_token",
+        "email_service_id",
+        "account_id",
+        "workspace_id",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "proxy_used",
+        "expires_at",
+        "status",
+        "source",
+    }
+
+    for index, raw_record in enumerate(records, start=1):
+        try:
+            record = _normalize_account_import_record(raw_record)
+            email = record.pop("email")
+            existing = crud.get_account_by_email(db, email)
+
+            if existing:
+                if not record.get("email_service"):
+                    record["email_service"] = existing.email_service
+                crud.update_account(db, existing.id, **record)
+                updated += 1
+                continue
+
+            email_service = record.get("email_service")
+            if not email_service:
+                raise ValueError("新账号缺少 email_service 字段")
+
+            create_kwargs = {key: record.get(key) for key in create_keys}
+            create_kwargs["email_service"] = email_service
+            db_account = crud.create_account(db, email=email, **create_kwargs)
+
+            extra_updates = {
+                key: value
+                for key, value in record.items()
+                if key not in create_keys and key != "email_service"
+            }
+            if extra_updates:
+                crud.update_account(db, db_account.id, **extra_updates)
+            created += 1
+        except Exception as e:
+            errors.append(f"第 {index} 条记录导入失败: {e}")
+
+    return {
+        "success": len(errors) == 0,
+        "created_count": created,
+        "updated_count": updated,
+        "failed_count": len(errors),
+        "errors": errors,
+    }
+
+
+@router.post("/import")
+async def import_accounts(file: UploadFile = File(...)):
+    """导入账号，支持当前导出的 JSON / CSV 格式。"""
+    suffix = Path(file.filename or "").suffix.lower()
+    raw_content = await file.read()
+    if not raw_content:
+        raise HTTPException(status_code=400, detail="导入文件为空")
+
+    try:
+        if suffix == ".json":
+            payload = json.loads(raw_content.decode("utf-8-sig"))
+            if isinstance(payload, dict):
+                records = payload.get("accounts")
+                if records is None:
+                    raise ValueError("JSON 文件缺少 accounts 数组")
+            elif isinstance(payload, list):
+                records = payload
+            else:
+                raise ValueError("JSON 文件格式不正确")
+        elif suffix == ".csv":
+            text = raw_content.decode("utf-8-sig")
+            reader = csv.DictReader(io.StringIO(text))
+            records = list(reader)
+        else:
+            raise ValueError("仅支持导入 .json 或 .csv 文件")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"解析导入文件失败: {e}")
+
+    if not records:
+        raise HTTPException(status_code=400, detail="导入文件中没有可用记录")
+
+    with get_db() as db:
+        result = _upsert_imported_accounts(db, records)
+    return result
 
 
 @router.post("/export/json")
