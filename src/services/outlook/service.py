@@ -279,6 +279,8 @@ class OutlookService(BaseEmailService):
         logger.error(
             f"[{account.email}] 所有提供者都失败: {'; '.join(errors)}"
         )
+        if errors:
+            self.update_status(False, EmailServiceError(f"所有 Outlook 提供者获取邮件失败: {'; '.join(errors)}"))
         return []
 
     def create_email(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -411,6 +413,7 @@ class OutlookService(BaseEmailService):
 
         elapsed = int(time.time() - start_time)
         logger.warning(f"[{email}] 验证码超时 ({actual_timeout}s)，共轮询 {poll_count} 次")
+        self.update_status(False, EmailServiceError(f"验证码等待超时：{actual_timeout} 秒内未收到可用邮件"))
         return None
 
     def list_emails(self, **kwargs) -> List[Dict[str, Any]]:

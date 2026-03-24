@@ -575,6 +575,7 @@ class RegistrationEngine:
             email_id = self.email_info.get("service_id") if self.email_info else None
             started_at = time.time()
             attempt = 0
+            last_logged_remaining = None
 
             while True:
                 elapsed = int(time.time() - started_at)
@@ -585,10 +586,20 @@ class RegistrationEngine:
 
                 attempt += 1
                 current_timeout = min(chunk_timeout, remaining)
-                self._log(
-                    f"验证码轮询第 {attempt} 次，最多等待 {current_timeout} 秒"
-                    f"（已等待 {elapsed} 秒，剩余 {remaining} 秒）"
+                # 节流进度日志，避免在邮箱服务快速失败时刷出成千上万行。
+                should_log_progress = (
+                    attempt == 1
+                    or remaining != last_logged_remaining
+                    and (remaining <= 10 or remaining % 5 == 0)
                 )
+                if should_log_progress:
+                    self._log(
+                        f"验证码轮询第 {attempt} 次，最多等待 {current_timeout} 秒"
+                        f"（已等待 {elapsed} 秒，剩余 {remaining} 秒）"
+                    )
+                    last_logged_remaining = remaining
+
+                attempt_started_at = time.time()
 
                 code = self.email_service.get_verification_code(
                     email=self.email,
@@ -601,6 +612,37 @@ class RegistrationEngine:
                 if code:
                     self._log(f"成功获取验证码: {code}")
                     return code
+
+                last_error = (getattr(self.email_service, "last_error", None) or "").strip()
+                if last_error:
+                    error_lower = last_error.lower()
+                    auth_keywords = [
+                        "auth", "oauth", "token", "login", "authenticate",
+                        "unauthorized", "invalid_grant", "xoauth2",
+                        "认证", "凭据", "登录", "授权", "令牌",
+                    ]
+                    mapping_keywords = [
+                        "未找到邮箱对应的账户",
+                        "没有可用的",
+                        "未找到匹配的邮箱配置",
+                    ]
+
+                    if any(keyword in error_lower for keyword in auth_keywords):
+                        self._log(
+                            f"等待验证码失败：邮箱登录凭据或 OAuth Token 可能已失效（{last_error}）",
+                            "error",
+                        )
+                        return None
+
+                    if any(keyword in last_error for keyword in mapping_keywords):
+                        self._log(f"等待验证码失败：邮箱配置不匹配（{last_error}）", "error")
+                        return None
+
+                # 某些邮箱服务在配置异常/快速失败时会立即返回，这里做兜底节流，
+                # 避免外层 while 进入高频忙等。
+                attempt_elapsed = time.time() - attempt_started_at
+                if attempt_elapsed < 1 and remaining > 1:
+                    time.sleep(min(1 - attempt_elapsed, remaining - 1))
 
         except Exception as e:
             self._log(f"获取验证码失败: {e}", "error")
