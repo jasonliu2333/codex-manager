@@ -680,12 +680,18 @@ def _find_mailbox_service_for_account(db, account: Account) -> Optional[EmailSer
     if account.email_service not in supported_types:
         return None
 
-    services = crud.get_email_services(
-        db,
-        service_type=account.email_service,
-        enabled=True,
-        skip=0,
-        limit=200,
+    services = (
+        db.query(EmailServiceModel)
+        .filter(
+            EmailServiceModel.service_type == account.email_service,
+            EmailServiceModel.enabled == True,
+        )
+        .order_by(
+            EmailServiceModel.priority.asc(),
+            EmailServiceModel.last_used.desc(),
+            EmailServiceModel.id.asc(),
+        )
+        .all()
     )
     if not services:
         return None
@@ -715,7 +721,7 @@ def _find_mailbox_service_for_account(db, account: Account) -> Optional[EmailSer
             if str(config.get("default_domain") or config.get("domain") or "").strip().lower() == email_domain:
                 return service
 
-    return services[0]
+    return None
 
 
 def _run_sync_recover_oauth_task(
