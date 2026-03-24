@@ -2,7 +2,10 @@ from pathlib import Path
 
 from src.database.models import Account, Base, EmailService
 from src.database.session import DatabaseSessionManager
-from src.web.routes.accounts import _find_mailbox_service_for_account
+from src.web.routes.accounts import (
+    _find_mailbox_service_for_account,
+    _prepare_recovery_email_info,
+)
 
 
 def _build_test_db(name: str) -> DatabaseSessionManager:
@@ -86,3 +89,62 @@ def test_find_mailbox_service_for_account_returns_none_without_exact_match():
         matched = _find_mailbox_service_for_account(session, account)
 
         assert matched is None
+
+
+class DummyMoeMailService:
+    def __init__(self):
+        self.create_calls = []
+
+    def create_email(self, config=None):
+        self.create_calls.append(config or {})
+        name = config.get("name")
+        domain = config.get("domain")
+        return {
+            "email": f"{name}@{domain}",
+            "service_id": "rebuilt-mailbox-id",
+        }
+
+
+def test_prepare_recovery_email_info_rebuilds_moe_mail_and_updates_service_id():
+    manager = _build_test_db("mailbox_rebuild_moe.db")
+
+    with manager.session_scope() as session:
+        account = Account(
+            email="recoverme@example.com",
+            email_service="moe_mail",
+            email_service_id="stale-mailbox-id",
+        )
+        session.add(account)
+        session.flush()
+
+        service = DummyMoeMailService()
+        email_info = _prepare_recovery_email_info(session, account, service)
+
+        assert email_info == {
+            "email": "recoverme@example.com",
+            "service_id": "rebuilt-mailbox-id",
+        }
+        assert service.create_calls == [{"name": "recoverme", "domain": "example.com"}]
+        assert account.email_service_id == "rebuilt-mailbox-id"
+
+
+def test_prepare_recovery_email_info_keeps_non_moe_mail_service_id():
+    manager = _build_test_db("mailbox_rebuild_non_moe.db")
+
+    with manager.session_scope() as session:
+        account = Account(
+            email="keep@example.com",
+            email_service="outlook",
+            email_service_id="existing-service-id",
+        )
+        session.add(account)
+        session.flush()
+
+        service = DummyMoeMailService()
+        email_info = _prepare_recovery_email_info(session, account, service)
+
+        assert email_info == {
+            "email": "keep@example.com",
+            "service_id": "existing-service-id",
+        }
+        assert service.create_calls == []

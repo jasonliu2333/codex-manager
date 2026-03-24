@@ -724,6 +724,46 @@ def _find_mailbox_service_for_account(db, account: Account) -> Optional[EmailSer
     return None
 
 
+def _prepare_recovery_email_info(
+    db,
+    account: Account,
+    email_service,
+    log_callback=None,
+) -> Optional[Dict[str, str]]:
+    """为补录/查码准备邮箱凭据标识。"""
+    email_info = None
+    if account.email_service_id:
+        email_info = {"service_id": account.email_service_id, "email": account.email}
+
+    if account.email_service != "moe_mail":
+        return email_info
+
+    email_value = (account.email or "").strip()
+    if "@" not in email_value:
+        raise ValueError("MoeMail 账号邮箱格式无效，无法重建临时邮箱")
+
+    local_part, domain = email_value.split("@", 1)
+    if log_callback:
+        log_callback(f"[系统] MoeMail 邮箱为临时资源，正在通过 Admin API 重建: {email_value}")
+
+    rebuilt_info = email_service.create_email({"name": local_part, "domain": domain})
+    rebuilt_email = str((rebuilt_info or {}).get("email") or "").strip()
+    rebuilt_service_id = str((rebuilt_info or {}).get("service_id") or "").strip()
+
+    if not rebuilt_email or not rebuilt_service_id:
+        raise ValueError("MoeMail 重建邮箱失败：未返回有效的邮箱地址或 service_id")
+    if rebuilt_email.lower() != email_value.lower():
+        raise ValueError(f"MoeMail 重建邮箱返回地址不匹配：{rebuilt_email}")
+
+    crud.update_account(db, account.id, email_service_id=rebuilt_service_id)
+    account.email_service_id = rebuilt_service_id
+
+    rebuilt_email_info = {"service_id": rebuilt_service_id, "email": rebuilt_email}
+    if log_callback:
+        log_callback(f"[系统] MoeMail 邮箱已重建，新的凭据标识: {rebuilt_service_id}")
+    return rebuilt_email_info
+
+
 def _run_sync_recover_oauth_task(
     task_uuid: str,
     account_id: int,
@@ -769,9 +809,10 @@ def _run_sync_recover_oauth_task(
                 callback_logger=callback,
                 task_uuid=task_uuid,
             )
-            if account.email_service_id:
-                engine.email_info = {"service_id": account.email_service_id, "email": account.email}
-                callback(f"{full_prefix}[系统] 已注入邮箱凭据标识: {account.email_service_id}")
+            recovery_email_info = _prepare_recovery_email_info(db, account, email_service, callback)
+            if recovery_email_info:
+                engine.email_info = recovery_email_info
+                callback(f"{full_prefix}[系统] 已注入邮箱凭据标识: {recovery_email_info['service_id']}")
             callback(f"{full_prefix}[系统] 将使用全新登录会话，不复用注册阶段 session/cookie/device_id")
             token_info = engine.recover_oauth_tokens(account.email, account.password)
             if not token_info:
@@ -1454,9 +1495,10 @@ async def get_account_inbox_code(account_id: int):
 
         try:
             svc = EmailServiceFactory.create(service_type, config)
+            email_info = _prepare_recovery_email_info(db, account, svc)
             code = svc.get_verification_code(
                 account.email,
-                email_id=account.email_service_id,
+                email_id=(email_info or {}).get("service_id"),
                 timeout=12
             )
         except Exception as e:
