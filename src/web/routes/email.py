@@ -3,6 +3,7 @@
 """
 
 import logging
+import json
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -11,7 +12,7 @@ from pydantic import BaseModel
 from ...database import crud
 from ...database.session import get_db
 from ...database.models import EmailService as EmailServiceModel
-from ...services import EmailServiceFactory, EmailServiceType
+from ...services import EmailServiceFactory, EmailServiceType, TutaMailService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -81,10 +82,36 @@ class OutlookBatchImportResponse(BaseModel):
     errors: List[str]
 
 
+class TutaBatchImportRequest(BaseModel):
+    """Tuta 批量导入请求"""
+    data: str  # 多行数据，支持简要格式与 JSONL
+    enabled: bool = True
+    priority: int = 0
+
+
+class TutaBatchImportResponse(BaseModel):
+    """Tuta 批量导入响应"""
+    total: int
+    success: int
+    failed: int
+    accounts: List[Dict[str, Any]]
+    errors: List[str]
+
+
 # ============== Helper Functions ==============
 
 # 敏感字段列表，返回响应时需要过滤
-SENSITIVE_FIELDS = {'password', 'api_key', 'refresh_token', 'access_token', 'admin_token'}
+SENSITIVE_FIELDS = {
+    'password',
+    'api_key',
+    'refresh_token',
+    'access_token',
+    'admin_token',
+    'captcha_answer',
+    'recover_code_hex',
+    'session_raw',
+    'system_keys',
+}
 
 def filter_sensitive_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """过滤敏感配置信息"""
@@ -104,6 +131,52 @@ def filter_sensitive_config(config: Dict[str, Any]) -> Dict[str, Any]:
         filtered['has_oauth'] = True
 
     return filtered
+
+
+def _normalize_tuta_config(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """标准化 Tuta 配置字段"""
+    allowed_keys = {
+        "email",
+        "password",
+        "client_id",
+        "access_token",
+        "user_id",
+        "salt_b64",
+        "recover_code_hex",
+        "captcha_token",
+        "captcha_answer",
+        "system_keys",
+        "session_raw",
+    }
+    config = {}
+    for key in allowed_keys:
+        value = payload.get(key)
+        if value:
+            config[key] = value
+    return config
+
+
+def _complete_tuta_config(config: Dict[str, Any], fallback_email: Optional[str] = None) -> Dict[str, Any]:
+    if not config:
+        return config
+    email = config.get("email") or fallback_email
+    password = config.get("password")
+    if isinstance(email, str):
+        email = email.strip().lower()
+    if isinstance(password, str):
+        password = password.strip()
+    if email:
+        config["email"] = email
+    if password:
+        config["password"] = password
+    if not email or not password:
+        return config
+    if config.get("access_token") and config.get("user_id") and config.get("client_id"):
+        return config
+
+    service = TutaMailService(config)
+    updated = service.bootstrap_credentials()
+    return updated
 
 
 def service_to_response(service: EmailServiceModel) -> EmailServiceResponse:
@@ -142,6 +215,7 @@ async def get_email_services_stats():
 
         stats = {
             'outlook_count': 0,
+            'tuta_count': 0,
             'custom_count': 0,
             'temp_mail_count': 0,
             'duck_mail_count': 0,
@@ -154,6 +228,8 @@ async def get_email_services_stats():
         for service_type, count in type_stats:
             if service_type == 'outlook':
                 stats['outlook_count'] = count
+            elif service_type == 'tuta':
+                stats['tuta_count'] = count
             elif service_type == 'moe_mail':
                 stats['custom_count'] = count
             elif service_type == 'temp_mail':
@@ -191,6 +267,20 @@ async def get_service_types():
                     {"name": "password", "label": "密码", "required": True},
                     {"name": "client_id", "label": "OAuth Client ID", "required": False},
                     {"name": "refresh_token", "label": "OAuth Refresh Token", "required": False},
+                ]
+            },
+            {
+                "value": "tuta",
+                "label": "Tuta",
+                "description": "Tuta 邮箱账户（仅管理/导入，验证码读取需额外对接）",
+                "config_fields": [
+                    {"name": "email", "label": "邮箱地址", "required": True},
+                    {"name": "password", "label": "密码", "required": True},
+                    {"name": "client_id", "label": "Client ID", "required": False},
+                    {"name": "access_token", "label": "Access Token", "required": False},
+                    {"name": "user_id", "label": "User ID", "required": False},
+                    {"name": "salt_b64", "label": "Salt (base64)", "required": False},
+                    {"name": "recover_code_hex", "label": "Recover Code (hex)", "required": False},
                 ]
             },
             {
@@ -337,10 +427,17 @@ async def create_email_service(request: EmailServiceCreate):
         if existing:
             raise HTTPException(status_code=400, detail="服务名称已存在")
 
+        config = request.config
+        if request.service_type == "tuta":
+            try:
+                config = _complete_tuta_config(config, request.name)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Tuta 自动补全失败: {e}")
+
         service = EmailServiceModel(
             service_type=request.service_type,
             name=request.name,
-            config=request.config,
+            config=config,
             enabled=request.enabled,
             priority=request.priority
         )
@@ -368,6 +465,11 @@ async def update_email_service(service_id: int, request: EmailServiceUpdate):
             merged_config = {**current_config, **request.config}
             # 移除空值
             merged_config = {k: v for k, v in merged_config.items() if v}
+            if service.service_type == "tuta":
+                try:
+                    merged_config = _complete_tuta_config(merged_config, service.name)
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Tuta 自动补全失败: {e}")
             update_data["config"] = merged_config
         if request.enabled is not None:
             update_data["enabled"] = request.enabled
@@ -418,9 +520,10 @@ async def test_email_service(service_id: int):
                     details=email_service.get_service_info() if hasattr(email_service, 'get_service_info') else None
                 )
             else:
+                error_msg = getattr(email_service, "last_error", None) or "服务连接失败"
                 return ServiceTestResult(
                     success=False,
-                    message="服务连接失败"
+                    message=error_msg
                 )
 
         except Exception as e:
@@ -576,6 +679,114 @@ async def batch_import_outlook(request: OutlookBatchImportRequest):
     )
 
 
+@router.post("/tuta/batch-import", response_model=TutaBatchImportResponse)
+async def batch_import_tuta(request: TutaBatchImportRequest):
+    """
+    批量导入 Tuta 邮箱账户
+
+    支持两种格式：
+    - 简要格式：email----password----client_id----access_token
+    - JSONL：每行一个 JSON，包含 email / password / access_token 等字段
+    """
+    lines = request.data.strip().split("\n")
+    total = len(lines)
+    success = 0
+    failed = 0
+    accounts = []
+    errors = []
+
+    with get_db() as db:
+        for i, line in enumerate(lines):
+            line = line.strip()
+
+            if not line or line.startswith("#"):
+                continue
+
+            config = {}
+            email = ""
+
+            try:
+                if line.startswith("{") and line.endswith("}"):
+                    payload = json.loads(line)
+                    config = _normalize_tuta_config(payload)
+                    email = config.get("email", "")
+                else:
+                    parts = line.split("----")
+                    if len(parts) < 2:
+                        raise ValueError("格式错误，至少需要邮箱和密码")
+                    email = parts[0].strip()
+                    password = parts[1].strip()
+                    config = {
+                        "email": email,
+                        "password": password
+                    }
+                    if len(parts) >= 3 and parts[2].strip():
+                        config["client_id"] = parts[2].strip()
+                    if len(parts) >= 4 and parts[3].strip():
+                        config["access_token"] = parts[3].strip()
+
+                if "@" not in email:
+                    raise ValueError(f"无效的邮箱地址: {email}")
+
+                if not config.get("password"):
+                    raise ValueError("缺少密码")
+
+            except Exception as e:
+                failed += 1
+                errors.append(f"行 {i+1}: {str(e)}")
+                continue
+
+            if not (config.get("access_token") and config.get("user_id")):
+                try:
+                    config = _complete_tuta_config(config, email)
+                except Exception as e:
+                    failed += 1
+                    errors.append(f"行 {i+1}: 自动补全失败: {str(e)}")
+                    continue
+
+            existing = db.query(EmailServiceModel).filter(
+                EmailServiceModel.service_type == "tuta",
+                EmailServiceModel.name == email
+            ).first()
+
+            if existing:
+                failed += 1
+                errors.append(f"行 {i+1}: 邮箱已存在: {email}")
+                continue
+
+            try:
+                service = EmailServiceModel(
+                    service_type="tuta",
+                    name=email,
+                    config=config,
+                    enabled=request.enabled,
+                    priority=request.priority
+                )
+                db.add(service)
+                db.commit()
+                db.refresh(service)
+
+                accounts.append({
+                    "id": service.id,
+                    "email": email,
+                    "name": email,
+                    "has_access_token": bool(config.get("access_token")),
+                })
+                success += 1
+            except Exception as e:
+                failed += 1
+                errors.append(f"行 {i+1}: 创建失败: {str(e)}")
+                db.rollback()
+
+    return TutaBatchImportResponse(
+        total=total,
+        success=success,
+        failed=failed,
+        accounts=accounts,
+        errors=errors
+    )
+
+
 @router.delete("/outlook/batch")
 async def batch_delete_outlook(service_ids: List[int]):
     """批量删除 Outlook 邮箱服务"""
@@ -585,6 +796,24 @@ async def batch_delete_outlook(service_ids: List[int]):
             service = db.query(EmailServiceModel).filter(
                 EmailServiceModel.id == service_id,
                 EmailServiceModel.service_type == "outlook"
+            ).first()
+            if service:
+                db.delete(service)
+                deleted += 1
+        db.commit()
+
+    return {"success": True, "deleted": deleted, "message": f"已删除 {deleted} 个服务"}
+
+
+@router.delete("/tuta/batch")
+async def batch_delete_tuta(service_ids: List[int]):
+    """批量删除 Tuta 邮箱服务"""
+    deleted = 0
+    with get_db() as db:
+        for service_id in service_ids:
+            service = db.query(EmailServiceModel).filter(
+                EmailServiceModel.id == service_id,
+                EmailServiceModel.service_type == "tuta"
             ).first()
             if service:
                 db.delete(service)

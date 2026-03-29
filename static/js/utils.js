@@ -368,6 +368,7 @@ const statusMap = {
     service: {
         tempmail: 'Tempmail.lol',
         outlook: 'Outlook',
+        tuta: 'Tuta',
         moe_mail: 'MoeMail',
         temp_mail: 'Temp-Mail（自部署）',
         duck_mail: 'DuckMail',
@@ -391,6 +392,7 @@ function getServiceTypeText(type) {
 const serviceTypeOrder = [
     'tempmail',
     'outlook',
+    'tuta',
     'temp_mail',
     'moe_mail',
     'freemail',
@@ -404,6 +406,7 @@ function getServiceTypeOrder() {
 
 const oauthRecoveryServiceTypes = [
     'outlook',
+    'tuta',
     'imap_mail',
     'tempmail',
     'temp_mail',

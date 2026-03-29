@@ -625,6 +625,8 @@ class RegistrationEngine:
                         "未找到邮箱对应的账户",
                         "没有可用的",
                         "未找到匹配的邮箱配置",
+                        "缺少",
+                        "依赖",
                     ]
 
                     if any(keyword in error_lower for keyword in auth_keywords):

@@ -33,6 +33,7 @@ class EmailServiceType(str, Enum):
     """邮箱服务类型"""
     TEMPMAIL = "tempmail"
     OUTLOOK = "outlook"
+    TUTA = "tuta"
     MOE_MAIL = "moe_mail"
     TEMP_MAIL = "temp_mail"
     DUCK_MAIL = "duck_mail"
@@ -108,6 +109,9 @@ EMAIL_SERVICE_DEFAULTS = {
         "imap_port": 993,
         "smtp_server": "smtp.office365.com",
         "smtp_port": 587,
+        "timeout": 30,
+    },
+    "tuta": {
         "timeout": 30,
     },
     "moe_mail": {

@@ -17,10 +17,12 @@ from .temp_mail import TempMailService
 from .duck_mail import DuckMailService
 from .freemail import FreemailService
 from .imap_mail import ImapMailService
+from .tuta_mail import TutaMailService
 
 # 注册服务
 EmailServiceFactory.register(EmailServiceType.TEMPMAIL, TempmailService)
 EmailServiceFactory.register(EmailServiceType.OUTLOOK, OutlookService)
+EmailServiceFactory.register(EmailServiceType.TUTA, TutaMailService)
 EmailServiceFactory.register(EmailServiceType.MOE_MAIL, MeoMailEmailService)
 EmailServiceFactory.register(EmailServiceType.TEMP_MAIL, TempMailService)
 EmailServiceFactory.register(EmailServiceType.DUCK_MAIL, DuckMailService)
@@ -54,6 +56,7 @@ __all__ = [
     # 服务类
     'TempmailService',
     'OutlookService',
+    'TutaMailService',
     'MeoMailEmailService',
     'TempMailService',
     'DuckMailService',

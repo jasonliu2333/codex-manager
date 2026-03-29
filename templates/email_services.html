@@ -40,6 +40,10 @@
                     <div class="stat-value" id="outlook-count">0</div>
                     <div class="stat-label">Outlook 账户</div>
                 </div>
+                <div class="stat-card info">
+                    <div class="stat-value" id="tuta-count">0</div>
+                    <div class="stat-label">Tuta 账户</div>
+                </div>
                 <div class="stat-card success">
                     <div class="stat-value" id="custom-count">0</div>
                     <div class="stat-label">自定义邮箱</div>
@@ -145,6 +149,46 @@
                 </div>
             </div>
 
+            <!-- Tuta 管理 -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>📥 Tuta 批量导入</h3>
+                    <button class="btn btn-ghost btn-sm" id="toggle-tuta-import">展开</button>
+                </div>
+                <div class="card-body" id="tuta-import-body" style="display: none;">
+                    <div class="import-info">
+                        <p><strong>支持格式：</strong></p>
+                        <ul>
+                            <li><code>邮箱----密码</code></li>
+                            <li><code>邮箱----密码----client_id----access_token</code></li>
+                            <li><code>{"email":"a@tutamail.com","password":"***","access_token":"..."}</code>（JSONL）</li>
+                        </ul>
+                        <p>每行一个账户，使用四个连字符（----）分隔字段。以 # 开头的行将被忽略。</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="tuta-import-data">批量导入数据</label>
+                        <textarea id="tuta-import-data" rows="8" placeholder="example@tutamail.com----password123&#10;test@tutamail.com----password456----client_id----access_token"></textarea>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="tuta-import-enabled" checked>
+                                导入后启用
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label for="tuta-import-priority">优先级</label>
+                            <input type="number" id="tuta-import-priority" value="0" min="0">
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-primary" id="tuta-import-btn">📥 开始导入</button>
+                        <button type="button" class="btn btn-secondary" id="clear-tuta-import-btn">清空</button>
+                    </div>
+                    <div id="tuta-import-result" style="display: none; margin-top: var(--spacing-md);"></div>
+                </div>
+            </div>
+
             <!-- Outlook 账户列表 -->
             <div class="card">
                 <div class="card-header">
@@ -176,6 +220,57 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tuta 账户列表 -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>📧 Tuta 账户列表</h3>
+                    <button class="btn btn-danger btn-sm" id="batch-delete-tuta-btn" disabled>🗑️ 批量删除</button>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 40px;"><input type="checkbox" id="select-all-tuta"></th>
+                                    <th>邮箱</th>
+                                    <th style="width: 100px;">认证方式</th>
+                                    <th style="width: 100px;">状态</th>
+                                    <th style="width: 80px;">优先级</th>
+                                    <th style="width: 160px;">最后使用</th>
+                                    <th style="width: 140px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tuta-accounts-table">
+                                <tr>
+                                    <td colspan="7">
+                                        <div class="empty-state">
+                                            <div class="skeleton skeleton-text"></div>
+                                            <div class="skeleton skeleton-text" style="width: 80%;"></div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="pagination" id="tuta-pagination" style="display: none;">
+                        <button class="btn btn-secondary btn-sm" id="tuta-prev-page" disabled>
+                            ← 上一页
+                        </button>
+                        <span id="tuta-page-info">第 1 页 / 共 1 页</span>
+                        <button class="btn btn-secondary btn-sm" id="tuta-next-page" disabled>
+                            下一页 →
+                        </button>
+                        <select id="tuta-page-size" class="form-select" style="width: 110px;">
+                            <option value="20">20 / 页</option>
+                            <option value="50" selected>50 / 页</option>
+                            <option value="100">100 / 页</option>
+                            <option value="200">200 / 页</option>
+                        </select>
                     </div>
                 </div>
             </div>
@@ -525,6 +620,68 @@
                     <div class="form-actions">
                         <button type="submit" class="btn btn-primary">保存</button>
                         <button type="button" class="btn btn-secondary" id="cancel-edit-outlook">取消</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 编辑 Tuta 账户模态框 -->
+    <div class="modal" id="edit-tuta-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>✏️ 编辑 Tuta 账户</h3>
+                <button class="modal-close" id="close-edit-tuta-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="edit-tuta-form">
+                    <input type="hidden" id="edit-tuta-id" name="id">
+                    <div class="form-group">
+                        <label for="edit-tuta-email">邮箱地址</label>
+                        <input type="text" id="edit-tuta-email" name="email" required placeholder="example@tutamail.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-tuta-password">密码</label>
+                        <input type="password" id="edit-tuta-password" name="password" placeholder="留空则保持原值不变">
+                        <small style="color: var(--text-muted);">留空则保持原值不变</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-tuta-client-id">Client ID (可选)</label>
+                        <input type="text" id="edit-tuta-client-id" name="client_id" placeholder="可选">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-tuta-access-token">Access Token (可选)</label>
+                        <input type="text" id="edit-tuta-access-token" name="access_token" placeholder="留空则保持原值不变">
+                        <small style="color: var(--text-muted);">留空则保持原值不变</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-tuta-user-id">User ID (可选)</label>
+                        <input type="text" id="edit-tuta-user-id" name="user_id" placeholder="可选">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-tuta-salt">Salt (base64, 可选)</label>
+                        <input type="text" id="edit-tuta-salt" name="salt_b64" placeholder="可选">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-tuta-recover-code">Recover Code (hex, 可选)</label>
+                        <input type="text" id="edit-tuta-recover-code" name="recover_code_hex" placeholder="留空则保持原值不变">
+                        <small style="color: var(--text-muted);">留空则保持原值不变</small>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="edit-tuta-priority">优先级</label>
+                            <input type="number" id="edit-tuta-priority" name="priority" value="0" min="0">
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="edit-tuta-enabled" name="enabled">
+                                启用账户
+                            </label>
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">保存</button>
+                        <button type="button" class="btn btn-secondary" id="cancel-edit-tuta">取消</button>
                     </div>
                 </form>
             </div>

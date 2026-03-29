@@ -21,6 +21,7 @@ let toastShown = false;  // 标记是否已显示过 toast
 let availableServices = {
     tempmail: { available: true, services: [] },
     outlook: { available: false, services: [] },
+    tuta: { available: false, services: [] },
     moe_mail: { available: false, services: [] },
     temp_mail: { available: false, services: [] },
     duck_mail: { available: false, services: [] },
@@ -336,6 +337,68 @@ function updateEmailServiceOptions() {
         select.appendChild(optgroup);
     }
 
+    // Tuta
+    if (availableServices.tuta && availableServices.tuta.available) {
+        const showRegistered = !!elements.showRegisteredOutlook?.checked;
+        const unregisteredServices = availableServices.tuta.services.filter(service => !service.is_registered);
+        const registeredServices = availableServices.tuta.services.filter(service => service.is_registered);
+
+        if (unregisteredServices.length > 0) {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = `📧 Tuta 未注册 (${unregisteredServices.length} 个账户)`;
+
+            unregisteredServices.forEach(service => {
+                const option = document.createElement('option');
+                option.value = `tuta:${service.id}`;
+                option.textContent = service.name + (service.has_access_token ? ' (Token)' : '');
+                option.dataset.type = 'tuta';
+                option.dataset.serviceId = service.id;
+                optgroup.appendChild(option);
+            });
+
+            select.appendChild(optgroup);
+        }
+
+        if (showRegistered && registeredServices.length > 0) {
+            const registeredGroup = document.createElement('optgroup');
+            registeredGroup.label = `📧 Tuta 已注册 (${registeredServices.length} 个账户)`;
+
+            registeredServices.forEach(service => {
+                const option = document.createElement('option');
+                option.value = `tuta:${service.id}`;
+                option.textContent = `已注册 | ${service.name}` + (service.has_access_token ? ' (Token)' : '');
+                option.dataset.type = 'tuta';
+                option.dataset.serviceId = service.id;
+                registeredGroup.appendChild(option);
+            });
+
+            select.appendChild(registeredGroup);
+        }
+
+        if (!unregisteredServices.length && !showRegistered) {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = '📧 Tuta (无未注册账户)';
+
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '当前没有未注册 Tuta 账户';
+            option.disabled = true;
+            optgroup.appendChild(option);
+            select.appendChild(optgroup);
+        }
+    } else {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = '📧 Tuta (未配置)';
+
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '请先在邮箱服务页面导入账户';
+        option.disabled = true;
+        optgroup.appendChild(option);
+
+        select.appendChild(optgroup);
+    }
+
     // 自定义域名
     if (availableServices.moe_mail.available) {
         const optgroup = document.createElement('optgroup');
@@ -445,6 +508,11 @@ function handleServiceChange(e) {
         const service = availableServices.outlook.services.find(s => s.id == id);
         if (service) {
             addLog('info', `[系统] 已选择 Outlook 账户: ${service.name}`);
+        }
+    } else if (type === 'tuta') {
+        const service = availableServices.tuta?.services?.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 Tuta 账户: ${service.name}`);
         }
     } else if (type === 'moe_mail') {
         const service = availableServices.moe_mail.services.find(s => s.id == id);

@@ -4,18 +4,25 @@
 
 // 状态
 let outlookServices = [];
+let tutaServices = [];
 let customServices = [];  // 合并 moe_mail + temp_mail + duck_mail + freemail + imap_mail
 let selectedOutlook = new Set();
+let selectedTuta = new Set();
 let selectedCustom = new Set();
 let outlookPage = 1;
 let outlookPageSize = 50;
 let outlookTotal = 0;
 let isLoadingOutlook = false;
+let tutaPage = 1;
+let tutaPageSize = 50;
+let tutaTotal = 0;
+let isLoadingTuta = false;
 
 // DOM 元素
 const elements = {
     // 统计
     outlookCount: document.getElementById('outlook-count'),
+    tutaCount: document.getElementById('tuta-count'),
     customCount: document.getElementById('custom-count'),
     tempmailStatus: document.getElementById('tempmail-status'),
     totalEnabled: document.getElementById('total-enabled'),
@@ -30,6 +37,16 @@ const elements = {
     clearImportBtn: document.getElementById('clear-import-btn'),
     importResult: document.getElementById('import-result'),
 
+    // Tuta 导入
+    toggleTutaImport: document.getElementById('toggle-tuta-import'),
+    tutaImportBody: document.getElementById('tuta-import-body'),
+    tutaImportData: document.getElementById('tuta-import-data'),
+    tutaImportEnabled: document.getElementById('tuta-import-enabled'),
+    tutaImportPriority: document.getElementById('tuta-import-priority'),
+    tutaImportBtn: document.getElementById('tuta-import-btn'),
+    clearTutaImportBtn: document.getElementById('clear-tuta-import-btn'),
+    tutaImportResult: document.getElementById('tuta-import-result'),
+
     // Outlook 列表
     outlookTable: document.getElementById('outlook-accounts-table'),
     selectAllOutlook: document.getElementById('select-all-outlook'),
@@ -39,6 +56,16 @@ const elements = {
     outlookNextPage: document.getElementById('outlook-next-page'),
     outlookPageInfo: document.getElementById('outlook-page-info'),
     outlookPageSize: document.getElementById('outlook-page-size'),
+
+    // Tuta 列表
+    tutaTable: document.getElementById('tuta-accounts-table'),
+    selectAllTuta: document.getElementById('select-all-tuta'),
+    batchDeleteTutaBtn: document.getElementById('batch-delete-tuta-btn'),
+    tutaPagination: document.getElementById('tuta-pagination'),
+    tutaPrevPage: document.getElementById('tuta-prev-page'),
+    tutaNextPage: document.getElementById('tuta-next-page'),
+    tutaPageInfo: document.getElementById('tuta-page-info'),
+    tutaPageSize: document.getElementById('tuta-page-size'),
 
     // 自定义域名（合并）
     customTable: document.getElementById('custom-services-table'),
@@ -81,6 +108,12 @@ const elements = {
     editOutlookForm: document.getElementById('edit-outlook-form'),
     closeEditOutlookModal: document.getElementById('close-edit-outlook-modal'),
     cancelEditOutlook: document.getElementById('cancel-edit-outlook'),
+
+    // 编辑 Tuta 模态框
+    editTutaModal: document.getElementById('edit-tuta-modal'),
+    editTutaForm: document.getElementById('edit-tuta-form'),
+    closeEditTutaModal: document.getElementById('close-edit-tuta-modal'),
+    cancelEditTuta: document.getElementById('cancel-edit-tuta'),
 };
 
 const CUSTOM_SUBTYPE_LABELS = {
@@ -95,6 +128,7 @@ const CUSTOM_SUBTYPE_LABELS = {
 document.addEventListener('DOMContentLoaded', () => {
     loadStats();
     loadOutlookServices();
+    loadTutaServices();
     loadCustomServices();
     loadTempmailConfig();
     initEventListeners();
@@ -109,12 +143,32 @@ function initEventListeners() {
         elements.toggleOutlookImport.textContent = isHidden ? '收起' : '展开';
     });
 
+    // Tuta 导入展开/收起
+    if (elements.toggleTutaImport) {
+        elements.toggleTutaImport.addEventListener('click', () => {
+            const isHidden = elements.tutaImportBody.style.display === 'none';
+            elements.tutaImportBody.style.display = isHidden ? 'block' : 'none';
+            elements.toggleTutaImport.textContent = isHidden ? '收起' : '展开';
+        });
+    }
+
     // Outlook 导入
     elements.outlookImportBtn.addEventListener('click', handleOutlookImport);
     elements.clearImportBtn.addEventListener('click', () => {
         elements.outlookImportData.value = '';
         elements.importResult.style.display = 'none';
     });
+
+    // Tuta 导入
+    if (elements.tutaImportBtn) {
+        elements.tutaImportBtn.addEventListener('click', handleTutaImport);
+    }
+    if (elements.clearTutaImportBtn) {
+        elements.clearTutaImportBtn.addEventListener('click', () => {
+            elements.tutaImportData.value = '';
+            elements.tutaImportResult.style.display = 'none';
+        });
+    }
 
     // Outlook 全选
     elements.selectAllOutlook.addEventListener('change', (e) => {
@@ -132,6 +186,51 @@ function initEventListeners() {
 
     // Outlook 批量删除
     elements.batchDeleteOutlookBtn.addEventListener('click', handleBatchDeleteOutlook);
+
+    // Tuta 全选
+    if (elements.selectAllTuta) {
+        elements.selectAllTuta.addEventListener('change', (e) => {
+            const checkboxes = elements.tutaTable.querySelectorAll('input[type="checkbox"][data-id]');
+            elements.selectAllTuta.indeterminate = false;
+            checkboxes.forEach(cb => {
+                cb.checked = e.target.checked;
+                const id = parseInt(cb.dataset.id);
+                if (e.target.checked) selectedTuta.add(id);
+                else selectedTuta.delete(id);
+            });
+            updateTutaBatchButtons();
+            updateTutaSelectAllState();
+        });
+    }
+
+    // Tuta 批量删除
+    if (elements.batchDeleteTutaBtn) {
+        elements.batchDeleteTutaBtn.addEventListener('click', handleBatchDeleteTuta);
+    }
+
+    // Tuta 分页
+    if (elements.tutaPrevPage && elements.tutaNextPage) {
+        elements.tutaPrevPage.addEventListener('click', () => {
+            if (tutaPage > 1 && !isLoadingTuta) {
+                tutaPage -= 1;
+                loadTutaServices();
+            }
+        });
+        elements.tutaNextPage.addEventListener('click', () => {
+            const totalPages = Math.max(1, Math.ceil(tutaTotal / tutaPageSize));
+            if (tutaPage < totalPages && !isLoadingTuta) {
+                tutaPage += 1;
+                loadTutaServices();
+            }
+        });
+    }
+    if (elements.tutaPageSize) {
+        elements.tutaPageSize.addEventListener('change', (e) => {
+            tutaPageSize = parseInt(e.target.value, 10) || 50;
+            tutaPage = 1;
+            loadTutaServices();
+        });
+    }
 
     // Outlook 分页
     if (elements.outlookPrevPage && elements.outlookNextPage) {
@@ -191,6 +290,17 @@ function initEventListeners() {
     elements.cancelEditOutlook.addEventListener('click', () => elements.editOutlookModal.classList.remove('active'));
     elements.editOutlookForm.addEventListener('submit', handleEditOutlook);
 
+    // 编辑 Tuta
+    if (elements.closeEditTutaModal) {
+        elements.closeEditTutaModal.addEventListener('click', () => elements.editTutaModal.classList.remove('active'));
+    }
+    if (elements.cancelEditTuta) {
+        elements.cancelEditTuta.addEventListener('click', () => elements.editTutaModal.classList.remove('active'));
+    }
+    if (elements.editTutaForm) {
+        elements.editTutaForm.addEventListener('submit', handleEditTuta);
+    }
+
     // 临时邮箱配置
     elements.tempmailForm.addEventListener('submit', handleSaveTempmail);
     elements.testTempmailBtn.addEventListener('click', handleTestTempmail);
@@ -239,6 +349,9 @@ async function loadStats() {
     try {
         const data = await api.get('/email-services/stats');
         elements.outlookCount.textContent = data.outlook_count || 0;
+        if (elements.tutaCount) {
+            elements.tutaCount.textContent = data.tuta_count || 0;
+        }
         elements.customCount.textContent = (data.custom_count || 0) + (data.temp_mail_count || 0) + (data.duck_mail_count || 0) + (data.freemail_count || 0) + (data.imap_mail_count || 0);
         elements.tempmailStatus.textContent = data.tempmail_available ? '可用' : '不可用';
         elements.totalEnabled.textContent = data.enabled_count || 0;
@@ -325,6 +438,87 @@ async function loadOutlookServices() {
         updateOutlookPagination();
     } finally {
         isLoadingOutlook = false;
+    }
+}
+
+// 加载 Tuta 服务
+async function loadTutaServices() {
+    if (isLoadingTuta) return;
+    isLoadingTuta = true;
+    try {
+        const data = await api.get(`/email-services?service_type=tuta&page=${tutaPage}&page_size=${tutaPageSize}`);
+        tutaServices = data.services || [];
+        tutaTotal = data.total || 0;
+
+        if (tutaTotal > 0 && tutaServices.length === 0 && tutaPage > 1) {
+            tutaPage -= 1;
+            isLoadingTuta = false;
+            return loadTutaServices();
+        }
+
+        if (tutaServices.length === 0) {
+            elements.tutaTable.innerHTML = `
+                <tr>
+                    <td colspan="7">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📭</div>
+                            <div class="empty-state-title">暂无 Tuta 账户</div>
+                            <div class="empty-state-description">请使用上方导入功能添加账户</div>
+                        </div>
+                    </td>
+                </tr>
+            `;
+            updateTutaPagination();
+            return;
+        }
+
+        elements.tutaTable.innerHTML = tutaServices.map(service => `
+            <tr data-id="${service.id}">
+                <td><input type="checkbox" data-id="${service.id}" ${selectedTuta.has(service.id) ? 'checked' : ''}></td>
+                <td>${escapeHtml(service.config?.email || service.name)}</td>
+                <td>
+                    <span class="status-badge ${service.config?.has_access_token ? 'active' : 'pending'}">
+                        ${service.config?.has_access_token ? 'Token' : '密码'}
+                    </span>
+                </td>
+                <td title="${service.enabled ? '已启用' : '已禁用'}">${service.enabled ? '✅' : '⭕'}</td>
+                <td>${service.priority}</td>
+                <td>${format.date(service.last_used)}</td>
+                <td>
+                    <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;">
+                        <button class="btn btn-secondary btn-sm" onclick="editTutaService(${service.id})">编辑</button>
+                        <div class="dropdown" style="position:relative;">
+                            <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleEmailMoreMenu(this)">更多</button>
+                            <div class="dropdown-menu" style="min-width:80px;">
+                                <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);toggleService(${service.id}, ${!service.enabled})">${service.enabled ? '禁用' : '启用'}</a>
+                                <a href="#" class="dropdown-item" onclick="event.preventDefault();closeEmailMoreMenu(this);testService(${service.id})">测试</a>
+                            </div>
+                        </div>
+                        <button class="btn btn-danger btn-sm" onclick="deleteService(${service.id}, '${escapeHtml(service.name)}')">删除</button>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
+
+        elements.tutaTable.querySelectorAll('input[type="checkbox"][data-id]').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                const id = parseInt(e.target.dataset.id);
+                if (e.target.checked) selectedTuta.add(id);
+                else selectedTuta.delete(id);
+                updateTutaBatchButtons();
+                updateTutaSelectAllState();
+            });
+        });
+        updateTutaBatchButtons();
+        updateTutaSelectAllState();
+        updateTutaPagination();
+    } catch (error) {
+        console.error('加载 Tuta 服务失败:', error);
+        elements.tutaTable.innerHTML = `<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">❌</div><div class="empty-state-title">加载失败</div></div></td></tr>`;
+        tutaTotal = 0;
+        updateTutaPagination();
+    } finally {
+        isLoadingTuta = false;
     }
 }
 
@@ -566,8 +760,12 @@ async function toggleService(id, enabled) {
 async function testService(id) {
     try {
         const result = await api.post(`/email-services/${id}/test`);
-        if (result.success) toast.success('测试成功');
-        else toast.error('测试失败: ' + (result.error || '未知错误'));
+        if (result.success) {
+            toast.success('测试成功');
+        } else {
+            const msg = result.message || result.error || '未知错误';
+            toast.error('测试失败: ' + msg);
+        }
     } catch (error) {
         toast.error('测试失败: ' + error.message);
     }
@@ -581,8 +779,10 @@ async function deleteService(id, name) {
         await api.delete(`/email-services/${id}`);
         toast.success('已删除');
         selectedOutlook.delete(id);
+        selectedTuta.delete(id);
         selectedCustom.delete(id);
         loadOutlookServices();
+        loadTutaServices();
         loadCustomServices();
         loadStats();
     } catch (error) {
@@ -603,6 +803,25 @@ async function handleBatchDeleteOutlook() {
         toast.success(`成功删除 ${result.deleted || selectedOutlook.size} 个账户`);
         selectedOutlook.clear();
         loadOutlookServices();
+        loadStats();
+    } catch (error) {
+        toast.error('删除失败: ' + error.message);
+    }
+}
+
+// 批量删除 Tuta
+async function handleBatchDeleteTuta() {
+    if (selectedTuta.size === 0) return;
+    const confirmed = await confirm(`确定要删除选中的 ${selectedTuta.size} 个账户吗？`);
+    if (!confirmed) return;
+    try {
+        const result = await api.request('/email-services/tuta/batch', {
+            method: 'DELETE',
+            body: Array.from(selectedTuta)
+        });
+        toast.success(`成功删除 ${result.deleted || selectedTuta.size} 个账户`);
+        selectedTuta.clear();
+        loadTutaServices();
         loadStats();
     } catch (error) {
         toast.error('删除失败: ' + error.message);
@@ -648,6 +867,51 @@ function updateBatchButtons() {
     elements.batchDeleteOutlookBtn.textContent = count > 0 ? `🗑️ 删除选中 (${count})` : '🗑️ 批量删除';
 }
 
+function updateTutaBatchButtons() {
+    if (!elements.batchDeleteTutaBtn) return;
+    const count = selectedTuta.size;
+    elements.batchDeleteTutaBtn.disabled = count === 0;
+    elements.batchDeleteTutaBtn.textContent = count > 0 ? `🗑️ 删除选中 (${count})` : '🗑️ 批量删除';
+}
+
+// Tuta 导入
+async function handleTutaImport() {
+    const data = elements.tutaImportData.value.trim();
+    if (!data) { toast.error('请输入导入数据'); return; }
+
+    elements.tutaImportBtn.disabled = true;
+    elements.tutaImportBtn.textContent = '导入中...';
+
+    try {
+        const result = await api.post('/email-services/tuta/batch-import', {
+            data: data,
+            enabled: elements.tutaImportEnabled.checked,
+            priority: parseInt(elements.tutaImportPriority.value) || 0
+        });
+
+        elements.tutaImportResult.style.display = 'block';
+        elements.tutaImportResult.innerHTML = `
+            <div class="import-stats">
+                <span>✅ 成功导入: <strong>${result.success || 0}</strong></span>
+                <span>❌ 失败: <strong>${result.failed || 0}</strong></span>
+            </div>
+            ${result.errors?.length ? `<div class="import-errors" style="margin-top: var(--spacing-sm);"><strong>错误详情：</strong><ul>${result.errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul></div>` : ''}
+        `;
+
+        if (result.success > 0) {
+            toast.success(`成功导入 ${result.success} 个账户`);
+            loadTutaServices();
+            loadStats();
+            elements.tutaImportData.value = '';
+        }
+    } catch (error) {
+        toast.error('导入失败: ' + error.message);
+    } finally {
+        elements.tutaImportBtn.disabled = false;
+        elements.tutaImportBtn.textContent = '📥 开始导入';
+    }
+}
+
 function updateOutlookPagination() {
     if (!elements.outlookPagination) return;
     const totalPages = Math.max(1, Math.ceil(outlookTotal / outlookPageSize));
@@ -669,6 +933,29 @@ function updateOutlookSelectAllState() {
     const someChecked = checkedCount > 0 && !allChecked;
     elements.selectAllOutlook.checked = allChecked;
     elements.selectAllOutlook.indeterminate = someChecked;
+}
+
+function updateTutaPagination() {
+    if (!elements.tutaPagination) return;
+    const totalPages = Math.max(1, Math.ceil(tutaTotal / tutaPageSize));
+    elements.tutaPrevPage.disabled = tutaPage <= 1;
+    elements.tutaNextPage.disabled = tutaPage >= totalPages;
+    elements.tutaPageInfo.textContent = `第 ${tutaPage} 页 / 共 ${totalPages} 页`;
+    elements.tutaPagination.style.display = tutaTotal > tutaPageSize ? 'flex' : 'none';
+    if (elements.tutaPageSize) {
+        elements.tutaPageSize.value = String(tutaPageSize);
+    }
+}
+
+function updateTutaSelectAllState() {
+    if (!elements.selectAllTuta) return;
+    const checkboxes = elements.tutaTable.querySelectorAll('input[type="checkbox"][data-id]');
+    const ids = Array.from(checkboxes).map(cb => parseInt(cb.dataset.id));
+    const checkedCount = ids.filter(id => selectedTuta.has(id)).length;
+    const allChecked = ids.length > 0 && checkedCount === ids.length;
+    const someChecked = checkedCount > 0 && !allChecked;
+    elements.selectAllTuta.checked = allChecked;
+    elements.selectAllTuta.indeterminate = someChecked;
 }
 
 // HTML 转义
@@ -826,6 +1113,29 @@ async function editOutlookService(id) {
     }
 }
 
+// 编辑 Tuta 服务
+async function editTutaService(id) {
+    try {
+        const service = await api.get(`/email-services/${id}/full`);
+        document.getElementById('edit-tuta-id').value = service.id;
+        document.getElementById('edit-tuta-email').value = service.config?.email || service.name || '';
+        document.getElementById('edit-tuta-password').value = '';
+        document.getElementById('edit-tuta-password').placeholder = service.config?.password ? '已设置，留空保持不变' : '请输入密码';
+        document.getElementById('edit-tuta-client-id').value = service.config?.client_id || '';
+        document.getElementById('edit-tuta-access-token').value = '';
+        document.getElementById('edit-tuta-access-token').placeholder = service.config?.access_token ? '已设置，留空保持不变' : 'Access Token';
+        document.getElementById('edit-tuta-user-id').value = service.config?.user_id || '';
+        document.getElementById('edit-tuta-salt').value = service.config?.salt_b64 || '';
+        document.getElementById('edit-tuta-recover-code').value = '';
+        document.getElementById('edit-tuta-recover-code').placeholder = service.config?.recover_code_hex ? '已设置，留空保持不变' : 'Recover Code';
+        document.getElementById('edit-tuta-priority').value = service.priority || 0;
+        document.getElementById('edit-tuta-enabled').checked = service.enabled;
+        elements.editTutaModal.classList.add('active');
+    } catch (error) {
+        toast.error('获取服务信息失败: ' + error.message);
+    }
+}
+
 // 保存编辑 Outlook 服务
 async function handleEditOutlook(e) {
     e.preventDefault();
@@ -857,6 +1167,46 @@ async function handleEditOutlook(e) {
         toast.success('账户更新成功');
         elements.editOutlookModal.classList.remove('active');
         loadOutlookServices();
+        loadStats();
+    } catch (error) {
+        toast.error('更新失败: ' + error.message);
+    }
+}
+
+// 保存编辑 Tuta 服务
+async function handleEditTuta(e) {
+    e.preventDefault();
+    const id = document.getElementById('edit-tuta-id').value;
+    const formData = new FormData(e.target);
+
+    let currentService;
+    try {
+        currentService = await api.get(`/email-services/${id}/full`);
+    } catch (error) {
+        toast.error('获取服务信息失败');
+        return;
+    }
+
+    const updateData = {
+        name: formData.get('email'),
+        priority: parseInt(formData.get('priority')) || 0,
+        enabled: formData.get('enabled') === 'on',
+        config: {
+            email: formData.get('email'),
+            password: formData.get('password')?.trim() || currentService.config?.password || '',
+            client_id: formData.get('client_id')?.trim() || currentService.config?.client_id || '',
+            access_token: formData.get('access_token')?.trim() || currentService.config?.access_token || '',
+            user_id: formData.get('user_id')?.trim() || currentService.config?.user_id || '',
+            salt_b64: formData.get('salt_b64')?.trim() || currentService.config?.salt_b64 || '',
+            recover_code_hex: formData.get('recover_code_hex')?.trim() || currentService.config?.recover_code_hex || ''
+        }
+    };
+
+    try {
+        await api.patch(`/email-services/${id}`, updateData);
+        toast.success('账户更新成功');
+        elements.editTutaModal.classList.remove('active');
+        loadTutaServices();
         loadStats();
     } catch (error) {
         toast.error('更新失败: ' + error.message);

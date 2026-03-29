@@ -352,6 +352,36 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                         logger.info(f"使用数据库 Outlook 账户: {selected_service.name}")
                     else:
                         raise ValueError("所有 Outlook 账户都已注册过 OpenAI 账号，请添加新的 Outlook 账户")
+                elif service_type == EmailServiceType.TUTA:
+                    from ...database.models import EmailService as EmailServiceModel, Account
+
+                    tuta_services = db.query(EmailServiceModel).filter(
+                        EmailServiceModel.service_type == "tuta",
+                        EmailServiceModel.enabled == True
+                    ).order_by(EmailServiceModel.priority.asc()).all()
+
+                    if not tuta_services:
+                        raise ValueError("没有可用的 Tuta 账户，请先在邮箱服务页面导入账户")
+
+                    selected_service = None
+                    for svc in tuta_services:
+                        email = svc.config.get("email") if svc.config else None
+                        if not email:
+                            continue
+                        existing = db.query(Account).filter(Account.email == email).first()
+                        if not existing:
+                            selected_service = svc
+                            logger.info(f"选择未注册的 Tuta 账户: {email}")
+                            break
+                        else:
+                            logger.info(f"跳过已注册的 Tuta 账户: {email}")
+
+                    if selected_service and selected_service.config:
+                        config = selected_service.config.copy()
+                        crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
+                        logger.info(f"使用数据库 Tuta 账户: {selected_service.name}")
+                    else:
+                        raise ValueError("所有 Tuta 账户都已注册过 OpenAI 账号，请添加新的 Tuta 账户")
                 elif service_type == EmailServiceType.DUCK_MAIL:
                     from ...database.models import EmailService as EmailServiceModel
 
@@ -416,7 +446,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 # 更新代理使用时间
                 update_proxy_usage(db, proxy_id)
 
-                recoverable_types = {"outlook", "imap_mail", "tempmail", "temp_mail", "freemail", "moe_mail"}
+                recoverable_types = {"outlook", "tuta", "imap_mail", "tempmail", "temp_mail", "freemail", "moe_mail"}
                 if auto_recover_tokens and not result.access_token and result.password and engine.email_service.service_type.value in recoverable_types:
                     result.metadata = result.metadata or {}
                     result.metadata["auto_recover_requested"] = True
@@ -1146,6 +1176,11 @@ async def get_available_email_services():
             "count": 0,
             "services": []
         },
+        "tuta": {
+            "available": False,
+            "count": 0,
+            "services": []
+        },
         "moe_mail": {
             "available": False,
             "count": 0,
@@ -1197,6 +1232,30 @@ async def get_available_email_services():
 
         result["outlook"]["count"] = len(outlook_services)
         result["outlook"]["available"] = len(outlook_services) > 0
+
+        # 获取 Tuta 账户
+        tuta_services = db.query(EmailServiceModel).filter(
+            EmailServiceModel.service_type == "tuta",
+            EmailServiceModel.enabled == True
+        ).order_by(EmailServiceModel.priority.asc()).all()
+
+        for service in tuta_services:
+            config = service.config or {}
+            email = config.get("email") or service.name
+            existing_account = db.query(Account).filter(Account.email == email).first()
+            result["tuta"]["services"].append({
+                "id": service.id,
+                "name": service.name,
+                "type": "tuta",
+                "email": email,
+                "has_access_token": bool(config.get("access_token")),
+                "is_registered": existing_account is not None,
+                "registered_account_id": existing_account.id if existing_account else None,
+                "priority": service.priority
+            })
+
+        result["tuta"]["count"] = len(tuta_services)
+        result["tuta"]["available"] = len(tuta_services) > 0
 
         # 获取自定义域名服务
         custom_services = db.query(EmailServiceModel).filter(
