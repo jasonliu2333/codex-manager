@@ -255,6 +255,8 @@ async def get_service_types():
 async def list_email_services(
     service_type: Optional[str] = Query(None, description="服务类型筛选"),
     enabled_only: bool = Query(False, description="只显示启用的服务"),
+    page: Optional[int] = Query(None, ge=1, description="页码"),
+    page_size: Optional[int] = Query(None, ge=1, le=200, description="每页数量"),
 ):
     """获取邮箱服务列表"""
     with get_db() as db:
@@ -266,10 +268,25 @@ async def list_email_services(
         if enabled_only:
             query = query.filter(EmailServiceModel.enabled == True)
 
-        services = query.order_by(EmailServiceModel.priority.asc(), EmailServiceModel.id.asc()).all()
+        paginate = page is not None or page_size is not None
+        if paginate:
+            page = page or 1
+            page_size = page_size or 50
+            total = query.count()
+            offset = (page - 1) * page_size
+            services = query.order_by(
+                EmailServiceModel.priority.asc(),
+                EmailServiceModel.id.asc()
+            ).offset(offset).limit(page_size).all()
+        else:
+            services = query.order_by(
+                EmailServiceModel.priority.asc(),
+                EmailServiceModel.id.asc()
+            ).all()
+            total = len(services)
 
         return EmailServiceListResponse(
-            total=len(services),
+            total=total,
             services=[service_to_response(s) for s in services]
         )
 

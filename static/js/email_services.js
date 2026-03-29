@@ -7,6 +7,10 @@ let outlookServices = [];
 let customServices = [];  // 合并 moe_mail + temp_mail + duck_mail + freemail + imap_mail
 let selectedOutlook = new Set();
 let selectedCustom = new Set();
+let outlookPage = 1;
+let outlookPageSize = 50;
+let outlookTotal = 0;
+let isLoadingOutlook = false;
 
 // DOM 元素
 const elements = {
@@ -30,6 +34,11 @@ const elements = {
     outlookTable: document.getElementById('outlook-accounts-table'),
     selectAllOutlook: document.getElementById('select-all-outlook'),
     batchDeleteOutlookBtn: document.getElementById('batch-delete-outlook-btn'),
+    outlookPagination: document.getElementById('outlook-pagination'),
+    outlookPrevPage: document.getElementById('outlook-prev-page'),
+    outlookNextPage: document.getElementById('outlook-next-page'),
+    outlookPageInfo: document.getElementById('outlook-page-info'),
+    outlookPageSize: document.getElementById('outlook-page-size'),
 
     // 自定义域名（合并）
     customTable: document.getElementById('custom-services-table'),
@@ -110,6 +119,7 @@ function initEventListeners() {
     // Outlook 全选
     elements.selectAllOutlook.addEventListener('change', (e) => {
         const checkboxes = elements.outlookTable.querySelectorAll('input[type="checkbox"][data-id]');
+        elements.selectAllOutlook.indeterminate = false;
         checkboxes.forEach(cb => {
             cb.checked = e.target.checked;
             const id = parseInt(cb.dataset.id);
@@ -117,10 +127,35 @@ function initEventListeners() {
             else selectedOutlook.delete(id);
         });
         updateBatchButtons();
+        updateOutlookSelectAllState();
     });
 
     // Outlook 批量删除
     elements.batchDeleteOutlookBtn.addEventListener('click', handleBatchDeleteOutlook);
+
+    // Outlook 分页
+    if (elements.outlookPrevPage && elements.outlookNextPage) {
+        elements.outlookPrevPage.addEventListener('click', () => {
+            if (outlookPage > 1 && !isLoadingOutlook) {
+                outlookPage -= 1;
+                loadOutlookServices();
+            }
+        });
+        elements.outlookNextPage.addEventListener('click', () => {
+            const totalPages = Math.max(1, Math.ceil(outlookTotal / outlookPageSize));
+            if (outlookPage < totalPages && !isLoadingOutlook) {
+                outlookPage += 1;
+                loadOutlookServices();
+            }
+        });
+    }
+    if (elements.outlookPageSize) {
+        elements.outlookPageSize.addEventListener('change', (e) => {
+            outlookPageSize = parseInt(e.target.value, 10) || 50;
+            outlookPage = 1;
+            loadOutlookServices();
+        });
+    }
 
     // 自定义域名全选
     elements.selectAllCustom.addEventListener('change', (e) => {
@@ -214,9 +249,18 @@ async function loadStats() {
 
 // 加载 Outlook 服务
 async function loadOutlookServices() {
+    if (isLoadingOutlook) return;
+    isLoadingOutlook = true;
     try {
-        const data = await api.get('/email-services?service_type=outlook');
+        const data = await api.get(`/email-services?service_type=outlook&page=${outlookPage}&page_size=${outlookPageSize}`);
         outlookServices = data.services || [];
+        outlookTotal = data.total || 0;
+
+        if (outlookTotal > 0 && outlookServices.length === 0 && outlookPage > 1) {
+            outlookPage -= 1;
+            isLoadingOutlook = false;
+            return loadOutlookServices();
+        }
 
         if (outlookServices.length === 0) {
             elements.outlookTable.innerHTML = `
@@ -230,6 +274,7 @@ async function loadOutlookServices() {
                     </td>
                 </tr>
             `;
+            updateOutlookPagination();
             return;
         }
 
@@ -267,12 +312,19 @@ async function loadOutlookServices() {
                 if (e.target.checked) selectedOutlook.add(id);
                 else selectedOutlook.delete(id);
                 updateBatchButtons();
+                updateOutlookSelectAllState();
             });
         });
+        updateOutlookSelectAllState();
+        updateOutlookPagination();
 
     } catch (error) {
         console.error('加载 Outlook 服务失败:', error);
         elements.outlookTable.innerHTML = `<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">❌</div><div class="empty-state-title">加载失败</div></div></td></tr>`;
+        outlookTotal = 0;
+        updateOutlookPagination();
+    } finally {
+        isLoadingOutlook = false;
     }
 }
 
@@ -594,6 +646,29 @@ function updateBatchButtons() {
     const count = selectedOutlook.size;
     elements.batchDeleteOutlookBtn.disabled = count === 0;
     elements.batchDeleteOutlookBtn.textContent = count > 0 ? `🗑️ 删除选中 (${count})` : '🗑️ 批量删除';
+}
+
+function updateOutlookPagination() {
+    if (!elements.outlookPagination) return;
+    const totalPages = Math.max(1, Math.ceil(outlookTotal / outlookPageSize));
+    elements.outlookPrevPage.disabled = outlookPage <= 1;
+    elements.outlookNextPage.disabled = outlookPage >= totalPages;
+    elements.outlookPageInfo.textContent = `第 ${outlookPage} 页 / 共 ${totalPages} 页`;
+    elements.outlookPagination.style.display = outlookTotal > outlookPageSize ? 'flex' : 'none';
+    if (elements.outlookPageSize) {
+        elements.outlookPageSize.value = String(outlookPageSize);
+    }
+}
+
+function updateOutlookSelectAllState() {
+    if (!elements.selectAllOutlook) return;
+    const checkboxes = elements.outlookTable.querySelectorAll('input[type="checkbox"][data-id]');
+    const ids = Array.from(checkboxes).map(cb => parseInt(cb.dataset.id));
+    const checkedCount = ids.filter(id => selectedOutlook.has(id)).length;
+    const allChecked = ids.length > 0 && checkedCount === ids.length;
+    const someChecked = checkedCount > 0 && !allChecked;
+    elements.selectAllOutlook.checked = allChecked;
+    elements.selectAllOutlook.indeterminate = someChecked;
 }
 
 // HTML 转义
