@@ -295,26 +295,19 @@ class RegistrationEngine:
     def _check_sentinel(self, did: str, flow: str = "authorize_continue") -> Optional[str]:
         """检查 Sentinel 拦截"""
         try:
-            sen_req_body = json.dumps({"p": "", "id": did, "flow": flow}, separators=(",", ":"))
-
-            response = self.http_client.post(
-                OPENAI_API_ENDPOINTS["sentinel"],
-                headers={
-                    "origin": "https://sentinel.openai.com",
-                    "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
-                    "content-type": "text/plain;charset=UTF-8",
-                },
-                data=sen_req_body,
+            ua = self.http_client.default_headers.get("User-Agent", "")
+            sec_ch_ua = self.http_client.default_headers.get("sec-ch-ua") or self.http_client.default_headers.get("Sec-Ch-Ua")
+            sen_token = self.http_client.check_sentinel(
+                did,
+                flow=flow,
+                user_agent=ua,
+                sec_ch_ua=sec_ch_ua,
             )
-
-            if response.status_code == 200:
-                sen_token = response.json().get("token")
-                self._log(f"Sentinel token 获取成功")
-                return sen_token
+            if sen_token:
+                self._log("Sentinel token 获取成功")
             else:
-                self._log(f"Sentinel 检查失败: {response.status_code}", "warning")
-                return None
-
+                self._log("Sentinel 检查失败", "warning")
+            return sen_token
         except Exception as e:
             self._log(f"Sentinel 检查异常: {e}", "warning")
             return None
@@ -654,14 +647,33 @@ class RegistrationEngine:
         """验证验证码"""
         try:
             code_body = f'{{"code":"{code}"}}'
+            headers = {
+                "referer": "https://auth.openai.com/email-verification",
+                "accept": "application/json",
+                "content-type": "application/json",
+                "user-agent": self.http_client.default_headers.get("User-Agent", ""),
+                "sec-ch-ua": self.http_client.default_headers.get("sec-ch-ua"),
+                "sec-ch-ua-arch": self.http_client.default_headers.get("sec-ch-ua-arch"),
+                "sec-ch-ua-bitness": self.http_client.default_headers.get("sec-ch-ua-bitness"),
+                "sec-ch-ua-full-version-list": self.http_client.default_headers.get("sec-ch-ua-full-version-list"),
+                "sec-ch-ua-mobile": self.http_client.default_headers.get("sec-ch-ua-mobile"),
+                "sec-ch-ua-model": self.http_client.default_headers.get("sec-ch-ua-model"),
+                "sec-ch-ua-platform": self.http_client.default_headers.get("sec-ch-ua-platform"),
+                "sec-ch-ua-platform-version": self.http_client.default_headers.get("sec-ch-ua-platform-version"),
+                "priority": self.http_client.default_headers.get("priority", "u=1, i"),
+            }
+            if self.device_id:
+                sentinel = self._check_sentinel(self.device_id, flow="authorize_continue")
+                if sentinel:
+                    headers["openai-sentinel-token"] = self._build_sentinel_header(
+                        self.device_id,
+                        sentinel,
+                        flow="authorize_continue",
+                    )
 
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["validate_otp"],
-                headers={
-                    "referer": "https://auth.openai.com/email-verification",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
+                headers=headers,
                 data=code_body,
             )
 
@@ -680,18 +692,15 @@ class RegistrationEngine:
             user_info = generate_random_user_info()
             self._log(f"生成用户信息: {user_info['name']}, 生日: {user_info['birthdate']}")
             create_account_body = json.dumps(user_info)
-            headers = {
-                "referer": "https://auth.openai.com/about-you",
-                "accept": "application/json",
-                "content-type": "application/json",
-            }
+            headers = self._oauth_json_headers("https://auth.openai.com/about-you")
 
             if self.device_id:
-                sentinel_token = self._check_sentinel(self.device_id)
+                sentinel_token = self._check_sentinel(self.device_id, flow="create_account")
                 if sentinel_token:
                     headers["openai-sentinel-token"] = self._build_sentinel_header(
                         self.device_id,
                         sentinel_token,
+                        flow="create_account",
                     )
                     self._log("创建账户前已刷新 Sentinel token")
                 else:
@@ -809,7 +818,7 @@ class RegistrationEngine:
             return None
 
     def _oauth_json_headers(self, referer: str) -> Dict[str, str]:
-        return {
+        headers = {
             "accept": "application/json",
             "content-type": "application/json",
             "origin": "https://auth.openai.com",
@@ -817,6 +826,21 @@ class RegistrationEngine:
             "user-agent": self.http_client.default_headers.get("User-Agent", ""),
             "oai-device-id": self.device_id or "",
         }
+        for key in (
+            "sec-ch-ua",
+            "sec-ch-ua-arch",
+            "sec-ch-ua-bitness",
+            "sec-ch-ua-full-version-list",
+            "sec-ch-ua-mobile",
+            "sec-ch-ua-model",
+            "sec-ch-ua-platform",
+            "sec-ch-ua-platform-version",
+            "priority",
+        ):
+            value = self.http_client.default_headers.get(key)
+            if value:
+                headers[key] = value
+        return headers
 
     def _follow_redirects_for_code(
         self,
@@ -831,6 +855,20 @@ class RegistrationEngine:
             "upgrade-insecure-requests": "1",
             "user-agent": self.http_client.default_headers.get("User-Agent", ""),
         }
+        for key in (
+            "sec-ch-ua",
+            "sec-ch-ua-arch",
+            "sec-ch-ua-bitness",
+            "sec-ch-ua-full-version-list",
+            "sec-ch-ua-mobile",
+            "sec-ch-ua-model",
+            "sec-ch-ua-platform",
+            "sec-ch-ua-platform-version",
+            "priority",
+        ):
+            value = self.http_client.default_headers.get(key)
+            if value:
+                headers[key] = value
         if referer:
             headers["referer"] = referer
 
@@ -914,6 +952,15 @@ class RegistrationEngine:
                 "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "upgrade-insecure-requests": "1",
                 "user-agent": self.http_client.default_headers.get("User-Agent", ""),
+                "sec-ch-ua": self.http_client.default_headers.get("sec-ch-ua"),
+                "sec-ch-ua-arch": self.http_client.default_headers.get("sec-ch-ua-arch"),
+                "sec-ch-ua-bitness": self.http_client.default_headers.get("sec-ch-ua-bitness"),
+                "sec-ch-ua-full-version-list": self.http_client.default_headers.get("sec-ch-ua-full-version-list"),
+                "sec-ch-ua-mobile": self.http_client.default_headers.get("sec-ch-ua-mobile"),
+                "sec-ch-ua-model": self.http_client.default_headers.get("sec-ch-ua-model"),
+                "sec-ch-ua-platform": self.http_client.default_headers.get("sec-ch-ua-platform"),
+                "sec-ch-ua-platform-version": self.http_client.default_headers.get("sec-ch-ua-platform-version"),
+                "priority": self.http_client.default_headers.get("priority", "u=1, i"),
             },
             allow_redirects=True,
             timeout=30,
