@@ -654,6 +654,30 @@ class RegistrationEngine:
         """验证验证码"""
         try:
             code_body = f'{{"code":"{code}"}}'
+            def _extract_session_email(raw_cookie: str) -> Optional[str]:
+                try:
+                    segments = raw_cookie.split(".")
+                    if len(segments) < 2:
+                        return None
+                    import base64 as _b64
+                    import json as _json
+                    seg = segments[0]
+                    pad = "=" * ((4 - (len(seg) % 4)) % 4)
+                    payload = _json.loads(_b64.urlsafe_b64decode((seg + pad).encode("ascii")).decode("utf-8"))
+                    sess_email = (payload.get("email") or "").strip()
+                    return sess_email or None
+                except Exception:
+                    return None
+            try:
+                auth_cookie = self.session.cookies.get("oai-client-auth-session")
+                if auth_cookie:
+                    sess_email = _extract_session_email(auth_cookie)
+                    if sess_email:
+                        self._log(f"验证码校验会话邮箱: {sess_email}")
+                        if self.email and sess_email.lower() != self.email.lower():
+                            self._log(f"会话邮箱与目标邮箱不一致: {self.email}", "warning")
+            except Exception:
+                self._log("验证码校验会话邮箱解析失败", "warning")
 
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["validate_otp"],
@@ -674,6 +698,16 @@ class RegistrationEngine:
                 self._log(f"验证码校验响应头: {dict(response.headers) if response.headers else {}}", "warning")
             except Exception:
                 self._log("验证码校验响应头读取失败", "warning")
+            try:
+                resp_auth_cookie = response.cookies.get("oai-client-auth-session")
+                if resp_auth_cookie:
+                    resp_sess_email = _extract_session_email(resp_auth_cookie)
+                    if resp_sess_email:
+                        self._log(f"验证码校验响应会话邮箱: {resp_sess_email}", "warning")
+                        if self.email and resp_sess_email.lower() != self.email.lower():
+                            self._log(f"响应会话邮箱与目标邮箱不一致: {self.email}", "warning")
+            except Exception:
+                self._log("验证码校验响应会话邮箱解析失败", "warning")
             return response.status_code == 200
 
         except Exception as e:
