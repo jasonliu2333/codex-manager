@@ -138,6 +138,7 @@ class RegistrationEngine:
         self.device_id: Optional[str] = None
         self._create_account_response_data: Optional[Dict[str, Any]] = None
         self._post_signup_continue_url: Optional[str] = None
+        self._oauth_authorize_url: Optional[str] = None
 
     def _rebuild_clients_for_proxy(self, proxy_url: Optional[str]) -> None:
         """切换代理后重建 HTTP 客户端、Session 和 OAuth 管理器。"""
@@ -242,6 +243,7 @@ class RegistrationEngine:
                 screen_hint="signup",
                 prompt=None
             )
+            self._oauth_authorize_url = self.oauth_start.auth_url
             self._log(f"OAuth URL 已生成: {self.oauth_start.auth_url[:80]}...")
             return True
         except Exception as e:
@@ -272,6 +274,8 @@ class RegistrationEngine:
                     self.oauth_start.auth_url,
                     timeout=20
                 )
+                if response is not None and response.url:
+                    self._oauth_authorize_url = str(response.url)
                 did = self.session.cookies.get("oai-did")
 
                 if did:
@@ -399,11 +403,15 @@ class RegistrationEngine:
         try:
             signup_body = f'{{"username":{{"value":"{self.email}","kind":"email"}},"screen_hint":"signup"}}'
 
+            referer = self._oauth_authorize_url or "https://auth.openai.com/create-account"
             headers = {
-                "referer": "https://auth.openai.com/create-account",
+                "referer": referer,
                 "accept": "application/json",
                 "content-type": "application/json",
+                "origin": "https://auth.openai.com",
             }
+            if did:
+                headers["oai-device-id"] = did
 
             if sen_token:
                 headers["openai-sentinel-token"] = self._build_sentinel_header(did, sen_token)
