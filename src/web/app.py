@@ -10,6 +10,7 @@ import hmac
 import hashlib
 from typing import Optional
 from pathlib import Path
+import inspect
 
 from fastapi import FastAPI, Request, Form
 from fastapi.staticfiles import StaticFiles
@@ -92,6 +93,18 @@ def create_app() -> FastAPI:
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.globals["static_version"] = _build_static_asset_version(STATIC_DIR)
 
+    def _render_template(name: str, request: Request, context: Optional[dict] = None, **kwargs):
+        ctx = {"request": request}
+        if context:
+            ctx.update(context)
+        try:
+            params = list(inspect.signature(templates.TemplateResponse).parameters.keys())
+            if params and params[0] == "request":
+                return templates.TemplateResponse(request, name, ctx, **kwargs)
+        except Exception:
+            pass
+        return templates.TemplateResponse(name, ctx, **kwargs)
+
     def _auth_token(password: str) -> str:
         secret = get_settings().webui_secret_key.get_secret_value().encode("utf-8")
         return hmac.new(secret, password.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -107,9 +120,10 @@ def create_app() -> FastAPI:
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request, next: Optional[str] = "/"):
         """登录页面"""
-        return templates.TemplateResponse(
+        return _render_template(
             "login.html",
-            {"request": request, "error": "", "next": next or "/"}
+            request,
+            {"error": "", "next": next or "/"},
         )
 
     @app.post("/login")
@@ -117,10 +131,11 @@ def create_app() -> FastAPI:
         """处理登录提交"""
         expected = get_settings().webui_access_password.get_secret_value()
         if not secrets.compare_digest(password, expected):
-            return templates.TemplateResponse(
+            return _render_template(
                 "login.html",
-                {"request": request, "error": "密码错误", "next": next or "/"},
-                status_code=401
+                request,
+                {"error": "密码错误", "next": next or "/"},
+                status_code=401,
             )
 
         response = RedirectResponse(url=next or "/", status_code=302)
@@ -139,33 +154,33 @@ def create_app() -> FastAPI:
         """首页 - 注册页面"""
         if not _is_authenticated(request):
             return _redirect_to_login(request)
-        return templates.TemplateResponse("index.html", {"request": request})
+        return _render_template("index.html", request)
 
     @app.get("/accounts", response_class=HTMLResponse)
     async def accounts_page(request: Request):
         """账号管理页面"""
         if not _is_authenticated(request):
             return _redirect_to_login(request)
-        return templates.TemplateResponse("accounts.html", {"request": request})
+        return _render_template("accounts.html", request)
 
     @app.get("/email-services", response_class=HTMLResponse)
     async def email_services_page(request: Request):
         """邮箱服务管理页面"""
         if not _is_authenticated(request):
             return _redirect_to_login(request)
-        return templates.TemplateResponse("email_services.html", {"request": request})
+        return _render_template("email_services.html", request)
 
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page(request: Request):
         """设置页面"""
         if not _is_authenticated(request):
             return _redirect_to_login(request)
-        return templates.TemplateResponse("settings.html", {"request": request})
+        return _render_template("settings.html", request)
 
     @app.get("/payment", response_class=HTMLResponse)
     async def payment_page(request: Request):
         """支付页面"""
-        return templates.TemplateResponse("payment.html", {"request": request})
+        return _render_template("payment.html", request)
 
     @app.on_event("startup")
     async def startup_event():

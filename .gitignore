@@ -40,6 +40,12 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
+docs_integration/mail_plain.txt
+docs_integration/mail_readable*.txt
+docs_integration/mail_readable*.json
+docs_integration/mail_plain.txt
+docs_integration/mail_readable*.txt
+docs_integration/mail_readable*.json
 
 # Token files
 token_*.json
