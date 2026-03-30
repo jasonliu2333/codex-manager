@@ -192,7 +192,9 @@ def generate_oauth_url(
     scope: str = OAUTH_SCOPE,
     client_id: str = OAUTH_CLIENT_ID,
     screen_hint: Optional[str] = None,
-    prompt: Optional[str] = "login"
+    prompt: Optional[str] = "login",
+    codex_cli_simplified_flow: Optional[bool] = True,
+    id_token_add_organizations: Optional[bool] = True
 ) -> OAuthStart:
     """
     生成 OAuth 授权 URL
@@ -217,13 +219,15 @@ def generate_oauth_url(
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
-        "id_token_add_organizations": "true",
-        "codex_cli_simplified_flow": "true",
     }
     if prompt:
         params["prompt"] = prompt
     if screen_hint:
         params["screen_hint"] = screen_hint
+    if codex_cli_simplified_flow is not None:
+        params["codex_cli_simplified_flow"] = "true" if codex_cli_simplified_flow else "false"
+    if id_token_add_organizations is not None:
+        params["id_token_add_organizations"] = "true" if id_token_add_organizations else "false"
     auth_url = f"{OAUTH_AUTH_URL}?{urllib.parse.urlencode(params)}"
     return OAuthStart(
         auth_url=auth_url,
@@ -339,7 +343,9 @@ class OAuthManager:
         self,
         *,
         screen_hint: Optional[str] = None,
-        prompt: Optional[str] = "login"
+        prompt: Optional[str] = "login",
+        codex_cli_simplified_flow: Optional[bool] = True,
+        id_token_add_organizations: Optional[bool] = True
     ) -> OAuthStart:
         """开始 OAuth 流程"""
         return generate_oauth_url(
@@ -347,7 +353,9 @@ class OAuthManager:
             scope=self.scope,
             client_id=self.client_id,
             screen_hint=screen_hint,
-            prompt=prompt
+            prompt=prompt,
+            codex_cli_simplified_flow=codex_cli_simplified_flow,
+            id_token_add_organizations=id_token_add_organizations
         )
 
     def handle_callback(

@@ -241,7 +241,8 @@ class RegistrationEngine:
             self._log("开始 OAuth 授权流程...")
             self.oauth_start = self.oauth_manager.start_oauth(
                 screen_hint="signup",
-                prompt=None
+                prompt=None,
+                codex_cli_simplified_flow=False
             )
             self._oauth_authorize_url = self.oauth_start.auth_url
             self._log(f"OAuth URL 已生成: {self.oauth_start.auth_url[:80]}...")
