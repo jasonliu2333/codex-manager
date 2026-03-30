@@ -190,7 +190,9 @@ def generate_oauth_url(
     *,
     redirect_uri: str = OAUTH_REDIRECT_URI,
     scope: str = OAUTH_SCOPE,
-    client_id: str = OAUTH_CLIENT_ID
+    client_id: str = OAUTH_CLIENT_ID,
+    screen_hint: Optional[str] = None,
+    prompt: Optional[str] = "login"
 ) -> OAuthStart:
     """
     生成 OAuth 授权 URL
@@ -207,7 +209,7 @@ def generate_oauth_url(
     code_verifier = _pkce_verifier()
     code_challenge = _sha256_b64url_no_pad(code_verifier)
 
-    params = {
+    params: Dict[str, str] = {
         "client_id": client_id,
         "response_type": "code",
         "redirect_uri": redirect_uri,
@@ -215,10 +217,13 @@ def generate_oauth_url(
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
-        "prompt": "login",
         "id_token_add_organizations": "true",
         "codex_cli_simplified_flow": "true",
     }
+    if prompt:
+        params["prompt"] = prompt
+    if screen_hint:
+        params["screen_hint"] = screen_hint
     auth_url = f"{OAUTH_AUTH_URL}?{urllib.parse.urlencode(params)}"
     return OAuthStart(
         auth_url=auth_url,
@@ -330,12 +335,19 @@ class OAuthManager:
         self.scope = scope
         self.proxy_url = proxy_url
 
-    def start_oauth(self) -> OAuthStart:
+    def start_oauth(
+        self,
+        *,
+        screen_hint: Optional[str] = None,
+        prompt: Optional[str] = "login"
+    ) -> OAuthStart:
         """开始 OAuth 流程"""
         return generate_oauth_url(
             redirect_uri=self.redirect_uri,
             scope=self.scope,
-            client_id=self.client_id
+            client_id=self.client_id,
+            screen_hint=screen_hint,
+            prompt=prompt
         )
 
     def handle_callback(

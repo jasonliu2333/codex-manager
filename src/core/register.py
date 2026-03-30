@@ -238,7 +238,10 @@ class RegistrationEngine:
         """开始 OAuth 流程"""
         try:
             self._log("开始 OAuth 授权流程...")
-            self.oauth_start = self.oauth_manager.start_oauth()
+            self.oauth_start = self.oauth_manager.start_oauth(
+                screen_hint="signup",
+                prompt=None
+            )
             self._log(f"OAuth URL 已生成: {self.oauth_start.auth_url[:80]}...")
             return True
         except Exception as e:
