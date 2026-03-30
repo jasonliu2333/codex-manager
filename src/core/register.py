@@ -972,6 +972,14 @@ class RegistrationEngine:
         self._log("13. 开始注册后 OAuth 登录...")
         self.oauth_start = self.oauth_manager.start_oauth()
 
+        # 优先尝试复用当前会话直接拿授权 code
+        try:
+            callback_url = self._follow_redirects_for_code(self.oauth_start.auth_url)
+            if callback_url:
+                return self._handle_oauth_callback(callback_url)
+        except Exception:
+            pass
+
         response = self.session.get(
             self.oauth_start.auth_url,
             headers={

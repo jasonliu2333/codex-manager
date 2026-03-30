@@ -330,6 +330,8 @@ class TempMailService(BaseEmailService):
 
         start_time = time.time()
         seen_mail_ids: set = set()
+        use_address_filter = True
+        empty_cycles = 0
 
         # 优先使用用户级 JWT，回退到 admin API 先注释用户级API
         # cached = self._email_cache.get(email, {})
@@ -345,17 +347,23 @@ class TempMailService(BaseEmailService):
                 #         headers={"x-user-token": jwt, "Content-Type": "application/json", "Accept": "application/json"},
                 #     )
                 # else:
-                response = self._make_request(
-                    "GET",
-                    "/admin/mails",
-                    params={"limit": 20, "offset": 0, "address": email},
-                )
+                params = {"limit": 20, "offset": 0}
+                if use_address_filter:
+                    params["address"] = email
+                response = self._make_request("GET", "/admin/mails", params=params)
 
                 # /user_api/mails 和 /admin/mails 返回格式相同: {"results": [...], "total": N}
                 mails = response.get("results", [])
                 if not isinstance(mails, list):
                     time.sleep(3)
                     continue
+                if not mails:
+                    empty_cycles += 1
+                    if use_address_filter and empty_cycles >= 2:
+                        use_address_filter = False
+                    time.sleep(3)
+                    continue
+                empty_cycles = 0
 
                 for mail in mails:
                     mail_id = mail.get("id")
@@ -364,23 +372,41 @@ class TempMailService(BaseEmailService):
 
                     seen_mail_ids.add(mail_id)
 
+                    address = str(
+                        mail.get("address")
+                        or mail.get("to")
+                        or mail.get("to_address")
+                        or mail.get("recipient")
+                        or ""
+                    ).strip().lower()
+                    if address and address != email.lower():
+                        continue
+
                     mail_timestamp = self._extract_mail_timestamp(mail)
                     if otp_sent_at and mail_timestamp and mail_timestamp + 1 < otp_sent_at:
                         continue
 
                     parsed = self._extract_mail_fields(mail)
+                    if not parsed["body"] and not parsed["raw"] and mail_id:
+                        try:
+                            detail = self._make_request("GET", f"/admin/mails/{mail_id}")
+                            if isinstance(detail, dict):
+                                parsed = self._extract_mail_fields({**mail, **detail})
+                        except Exception:
+                            pass
                     sender = parsed["sender"].lower()
                     subject = parsed["subject"]
                     body_text = parsed["body"]
                     raw_text = parsed["raw"]
                     content = f"{sender}\n{subject}\n{body_text}\n{raw_text}".strip()
 
-                    # 只处理 OpenAI 邮件
-                    if "openai" not in sender and "openai" not in content.lower():
-                        continue
-
                     match = re.search(pattern, content)
                     if match:
+                        if not mail_timestamp and otp_sent_at:
+                            # 没有时间戳时，尽量依赖关键字过滤，避免误匹配
+                            content_lower = content.lower()
+                            if not any(key in content_lower for key in ("openai", "chatgpt", "验证码", "code")):
+                                continue
                         code = match.group(1)
                         logger.info(f"从 TempMail 邮箱 {email} 找到验证码: {code}")
                         self.update_status(True)
