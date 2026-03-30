@@ -146,6 +146,54 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.OPENAI,
         description="OpenAI OAuth 权限范围"
     ),
+    "openai_register_client_id": SettingDefinition(
+        db_key="openai.register.client_id",
+        default_value="app_X8zY6vW2pQ9tR3dE7nK1jL5gH",
+        category=SettingCategory.OPENAI,
+        description="OpenAI 注册流程客户端 ID"
+    ),
+    "openai_register_authorize_url": SettingDefinition(
+        db_key="openai.register.authorize_url",
+        default_value="https://auth.openai.com/api/accounts/authorize",
+        category=SettingCategory.OPENAI,
+        description="OpenAI 注册授权 URL"
+    ),
+    "openai_register_redirect_uri": SettingDefinition(
+        db_key="openai.register.redirect_uri",
+        default_value="https://chatgpt.com/api/auth/callback/openai",
+        category=SettingCategory.OPENAI,
+        description="OpenAI 注册授权回调 URI"
+    ),
+    "openai_register_scope": SettingDefinition(
+        db_key="openai.register.scope",
+        default_value="openid email profile offline_access model.request model.read organization.read organization.write",
+        category=SettingCategory.OPENAI,
+        description="OpenAI 注册授权 Scope"
+    ),
+    "openai_register_audience": SettingDefinition(
+        db_key="openai.register.audience",
+        default_value="https://api.openai.com/v1",
+        category=SettingCategory.OPENAI,
+        description="OpenAI 注册授权 Audience"
+    ),
+    "openai_register_screen_hint": SettingDefinition(
+        db_key="openai.register.screen_hint",
+        default_value="login_or_signup",
+        category=SettingCategory.OPENAI,
+        description="OpenAI 注册授权 Screen Hint"
+    ),
+    "openai_register_prompt": SettingDefinition(
+        db_key="openai.register.prompt",
+        default_value="login",
+        category=SettingCategory.OPENAI,
+        description="OpenAI 注册授权 Prompt"
+    ),
+    "openai_register_passkey_capabilities": SettingDefinition(
+        db_key="openai.register.passkey_capabilities",
+        default_value="1111",
+        category=SettingCategory.OPENAI,
+        description="OpenAI 注册授权 Passkey 能力位"
+    ),
 
     # 代理配置
     "proxy_enabled": SettingDefinition(
@@ -624,6 +672,14 @@ class Settings(BaseModel):
     openai_token_url: str = "https://auth.openai.com/oauth/token"
     openai_redirect_uri: str = "http://localhost:1455/auth/callback"
     openai_scope: str = "openid email profile offline_access"
+    openai_register_client_id: str = "app_X8zY6vW2pQ9tR3dE7nK1jL5gH"
+    openai_register_authorize_url: str = "https://auth.openai.com/api/accounts/authorize"
+    openai_register_redirect_uri: str = "https://chatgpt.com/api/auth/callback/openai"
+    openai_register_scope: str = "openid email profile offline_access model.request model.read organization.read organization.write"
+    openai_register_audience: str = "https://api.openai.com/v1"
+    openai_register_screen_hint: str = "login_or_signup"
+    openai_register_prompt: str = "login"
+    openai_register_passkey_capabilities: str = "1111"
 
     # 代理配置
     proxy_enabled: bool = False

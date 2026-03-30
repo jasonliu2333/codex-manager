@@ -9,6 +9,7 @@ import time
 import logging
 import secrets
 import string
+import uuid
 import urllib.parse
 from typing import Optional, Dict, Any, Tuple, Callable
 from dataclasses import dataclass
@@ -139,6 +140,9 @@ class RegistrationEngine:
         self._create_account_response_data: Optional[Dict[str, Any]] = None
         self._post_signup_continue_url: Optional[str] = None
         self._oauth_authorize_url: Optional[str] = None
+        self._signup_authorize_url: Optional[str] = None
+        self._signup_state: Optional[str] = None
+        self._signup_auth_session_logging_id: Optional[str] = None
 
     def _rebuild_clients_for_proxy(self, proxy_url: Optional[str]) -> None:
         """切换代理后重建 HTTP 客户端、Session 和 OAuth 管理器。"""
@@ -239,13 +243,50 @@ class RegistrationEngine:
         """开始 OAuth 流程"""
         try:
             self._log("开始 OAuth 授权流程...")
-            self.oauth_start = self.oauth_manager.start_oauth(
-                screen_hint="signup",
-                prompt=None,
-                codex_cli_simplified_flow=False
+            settings = get_settings()
+            if not self.device_id:
+                self.device_id = str(uuid.uuid4())
+            self._signup_state = secrets.token_urlsafe(32)
+            self._signup_auth_session_logging_id = str(uuid.uuid4())
+
+            params = {
+                "client_id": settings.openai_register_client_id,
+                "scope": settings.openai_register_scope,
+                "response_type": "code",
+                "redirect_uri": settings.openai_register_redirect_uri,
+                "audience": settings.openai_register_audience,
+                "device_id": self.device_id,
+                "prompt": settings.openai_register_prompt,
+                "ext-oai-did": self.device_id,
+                "auth_session_logging_id": self._signup_auth_session_logging_id,
+                "ext-passkey-client-capabilities": settings.openai_register_passkey_capabilities,
+                "screen_hint": settings.openai_register_screen_hint,
+                "state": self._signup_state,
+            }
+            if self.email:
+                params["login_hint"] = self.email
+
+            auth_url = f"{settings.openai_register_authorize_url}?{urllib.parse.urlencode(params)}"
+            self._signup_authorize_url = auth_url
+            self._oauth_authorize_url = auth_url
+            self._log(f"OAuth URL 已生成: {auth_url[:80]}...")
+
+            response = self.session.get(
+                auth_url,
+                headers={
+                    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "user-agent": self.http_client.default_headers.get("User-Agent", ""),
+                    "referer": "https://chatgpt.com/",
+                },
+                allow_redirects=True,
+                timeout=30,
             )
-            self._oauth_authorize_url = self.oauth_start.auth_url
-            self._log(f"OAuth URL 已生成: {self.oauth_start.auth_url[:80]}...")
+            if response is not None and response.url:
+                self._oauth_authorize_url = str(response.url)
+
+            did_cookie = self.session.cookies.get("oai-did")
+            if did_cookie:
+                self.device_id = did_cookie
             return True
         except Exception as e:
             self._log(f"生成 OAuth URL 失败: {e}", "error")
@@ -262,7 +303,14 @@ class RegistrationEngine:
 
     def _get_device_id(self) -> Optional[str]:
         """获取 Device ID"""
-        if not self.oauth_start:
+        if self.device_id:
+            self._log(f"Device ID: {self.device_id}")
+            return self.device_id
+
+        auth_url = self._signup_authorize_url
+        if not auth_url and self.oauth_start:
+            auth_url = self.oauth_start.auth_url
+        if not auth_url:
             return None
 
         max_attempts = 3
@@ -272,7 +320,7 @@ class RegistrationEngine:
                     self.session = self.http_client.session
 
                 response = self.session.get(
-                    self.oauth_start.auth_url,
+                    auth_url,
                     timeout=20
                 )
                 if response is not None and response.url:
@@ -402,83 +450,32 @@ class RegistrationEngine:
             SignupFormResult: 提交结果，包含账号状态判断
         """
         try:
-            signup_body = f'{{"username":{{"value":"{self.email}","kind":"email"}},"screen_hint":"signup"}}'
-
-            referer = self._oauth_authorize_url or "https://auth.openai.com/create-account"
+            referer = self._signup_authorize_url or "https://auth.openai.com/"
             headers = {
                 "referer": referer,
-                "accept": "application/json",
-                "content-type": "application/json",
-                "origin": "https://auth.openai.com",
+                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "user-agent": self.http_client.default_headers.get("User-Agent", ""),
             }
-            if did:
-                headers["oai-device-id"] = did
 
-            if sen_token:
-                headers["openai-sentinel-token"] = self._build_sentinel_header(did, sen_token)
+            response = self.session.get(
+                "https://auth.openai.com/create-account/password",
+                headers=headers,
+                allow_redirects=True,
+                timeout=30,
+            )
 
-            max_attempts = 3
-            response = None
-            for attempt in range(1, max_attempts + 1):
-                response = self.session.post(
-                    OPENAI_API_ENDPOINTS["signup"],
-                    headers=headers,
-                    data=signup_body,
-                )
+            self._log(f"提交注册表单状态: {response.status_code}")
 
-                self._log(
-                    f"提交注册表单状态: {response.status_code}"
-                    + (f" (第 {attempt}/{max_attempts} 次)" if max_attempts > 1 else "")
-                )
-
-                if response.status_code != 429:
-                    break
-
-                if attempt >= max_attempts:
-                    self._log("提交注册表单触发限流，已达到最大重试次数", "warning")
-                    break
-
-                self._rotate_proxy_for_rate_limit()
-                retry_delay = min(15 * attempt, 45)
-                self._log(
-                    f"提交注册表单触发限流(429)，将在 {retry_delay} 秒后重试...",
-                    "warning"
-                )
-                time.sleep(retry_delay)
-
-            if response is None:
-                return SignupFormResult(success=False, error_message="未获得注册表单响应")
-
-            if response.status_code != 200:
+            if response.status_code >= 400:
                 return SignupFormResult(
                     success=False,
                     error_message=f"HTTP {response.status_code}: {response.text[:200]}"
                 )
 
-            # 解析响应判断账号状态
-            try:
-                response_data = response.json()
-                page_type = response_data.get("page", {}).get("type", "")
-                self._log(f"响应页面类型: {page_type}")
+            if response is not None and response.url:
+                self._oauth_authorize_url = str(response.url)
 
-                # 判断是否为已注册账号
-                is_existing = page_type == OPENAI_PAGE_TYPES["EMAIL_OTP_VERIFICATION"]
-
-                if is_existing:
-                    self._log(f"检测到已注册账号，将自动切换到登录流程")
-                    self._is_existing_account = True
-
-                return SignupFormResult(
-                    success=True,
-                    page_type=page_type,
-                    is_existing_account=is_existing,
-                    response_data=response_data
-                )
-
-            except Exception as parse_error:
-                self._log(f"解析响应失败: {parse_error}", "warning")
-                # 无法解析，默认成功
-                return SignupFormResult(success=True)
+            return SignupFormResult(success=True, page_type="password", is_existing_account=False)
 
         except Exception as e:
             self._log(f"提交注册表单失败: {e}", "error")
@@ -498,13 +495,25 @@ class RegistrationEngine:
                 "username": self.email
             })
 
+            headers = {
+                "referer": "https://auth.openai.com/create-account/password",
+                "accept": "application/json",
+                "content-type": "application/json",
+                "origin": "https://auth.openai.com",
+            }
+            if self.device_id:
+                headers["oai-device-id"] = self.device_id
+                sentinel = self._check_sentinel(self.device_id, flow="username_password_create")
+                if sentinel:
+                    headers["openai-sentinel-token"] = self._build_sentinel_header(
+                        self.device_id,
+                        sentinel,
+                        flow="username_password_create",
+                    )
+
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["register"],
-                headers={
-                    "referer": "https://auth.openai.com/create-account/password",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
+                headers=headers,
                 data=register_body,
             )
 
@@ -741,11 +750,12 @@ class RegistrationEngine:
             }
 
             if self.device_id:
-                sentinel_token = self._check_sentinel(self.device_id)
+                sentinel_token = self._check_sentinel(self.device_id, flow="oauth_create_account")
                 if sentinel_token:
                     headers["openai-sentinel-token"] = self._build_sentinel_header(
                         self.device_id,
                         sentinel_token,
+                        flow="oauth_create_account",
                     )
                     self._log("创建账户前已刷新 Sentinel token")
                 else:
@@ -1277,13 +1287,9 @@ class RegistrationEngine:
                 return result
             self.device_id = did
 
-            # 6. 检查 Sentinel 拦截
-            self._log("6. 检查 Sentinel 拦截...")
-            sen_token = self._check_sentinel(did)
-            if sen_token:
-                self._log("Sentinel 检查通过")
-            else:
-                self._log("Sentinel 检查失败或未启用", "warning")
+            # 6. 初始化注册会话
+            self._log("6. 初始化注册会话...")
+            sen_token = None
 
             # 7. 提交注册表单 + 解析响应判断账号状态
             self._log("7. 提交注册表单...")
