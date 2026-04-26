@@ -638,19 +638,17 @@ async function refreshToken(id) {
     }
     refreshingAccountIds.add(id);
 
-    try {
-        toast.info('正在刷新Token...');
-        const result = await api.post(`/accounts/${id}/refresh`);
+    openRecoveryLogModal(`账号 ${id} 刷新 Token`);
+    appendRecoveryLog('[系统] 正在创建刷新任务...');
 
-        if (result.success) {
-            toast.success('Token刷新成功');
-            loadAccounts();
-        } else {
-            toast.error('刷新失败: ' + (result.error || '未知错误'));
-        }
+    try {
+        const result = await api.post(`/accounts/${id}/refresh`, {}, { timeoutMs: 120000 });
+        appendRecoveryLog(`[系统] 刷新任务已创建: ${result.task_uuid}`);
+        watchRefreshTask(result.task_uuid);
     } catch (error) {
+        appendRecoveryLog(`[失败] 创建刷新任务失败: ${error.message}`);
+        elements.recoveryLogStatus.textContent = '刷新任务创建失败';
         toast.error('刷新失败: ' + error.message);
-    } finally {
         refreshingAccountIds.delete(id);
     }
 }
@@ -696,6 +694,36 @@ function connectRecoverySocket(path) {
     recoverySocket.onerror = () => {
         appendRecoveryLog('[系统] 日志连接异常，已切换为状态轮询');
     };
+}
+
+function watchRefreshTask(taskUuid) {
+    connectRecoverySocket(`/api/ws/task/${taskUuid}`);
+    recoveryStatusTimer = setInterval(async () => {
+        try {
+            const task = await api.get(`/accounts/refresh/task/${taskUuid}`);
+            elements.recoveryLogStatus.textContent = `任务状态: ${task.status}`;
+            if (task.status === 'completed') {
+                appendRecoveryLog('[系统] 刷新任务完成');
+                cleanupRecoveryWatchers();
+                refreshingAccountIds.clear();
+                loadAccounts();
+                updateBatchButtons();
+                toast.success('Token 刷新完成');
+            } else if (task.status === 'failed' || task.status === 'cancelled') {
+                appendRecoveryLog(`[系统] 刷新任务结束: ${task.error || task.status}`);
+                cleanupRecoveryWatchers();
+                refreshingAccountIds.clear();
+                loadAccounts();
+                updateBatchButtons();
+                toast.error(task.error || 'Token 刷新失败');
+            }
+        } catch (error) {
+            appendRecoveryLog(`[系统] 刷新状态查询失败: ${error.message}`);
+            cleanupRecoveryWatchers();
+            refreshingAccountIds.clear();
+            updateBatchButtons();
+        }
+    }, 2000);
 }
 
 function watchRecoveryTask(taskUuid) {

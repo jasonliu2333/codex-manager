@@ -1393,6 +1393,41 @@ def _run_single_refresh(account_id: int, proxy: Optional[str]):
     return do_refresh(account_id, proxy)
 
 
+def _run_sync_refresh_task(task_uuid: str, account_id: int, request_proxy: Optional[str]):
+    callback = task_manager.create_log_callback(task_uuid)
+    task_manager.update_status(task_uuid, "running")
+    callback("[系统] 刷新任务开始")
+    try:
+        proxy = _get_proxy(request_proxy, purpose="refresh")
+        if proxy:
+            callback(f"[系统] 本次刷新将使用代理: {proxy}")
+        else:
+            callback("[系统] 本次刷新将直连")
+        result = do_refresh(account_id, proxy)
+        if result.success:
+            callback("[成功] Token 刷新完成")
+            task_manager.update_status(task_uuid, "completed", result={
+                "account_id": account_id,
+                "expires_at": result.expires_at.isoformat() if result.expires_at else None,
+            })
+        else:
+            callback(f"[失败] {result.error_message}")
+            task_manager.update_status(task_uuid, "failed", error=result.error_message)
+    except Exception as exc:
+        callback(f"[失败] {exc}")
+        task_manager.update_status(task_uuid, "failed", error=str(exc))
+
+
+async def run_refresh_task(task_uuid: str, account_id: int, request_proxy: Optional[str]):
+    loop = task_manager.get_loop()
+    if loop is None:
+        loop = asyncio.get_event_loop()
+        task_manager.set_loop(loop)
+    task_manager.update_status(task_uuid, "pending")
+    task_manager.add_log(task_uuid, f"[系统] 刷新任务 {task_uuid[:8]} 已加入队列")
+    await loop.run_in_executor(task_manager.executor, _run_sync_refresh_task, task_uuid, account_id, request_proxy)
+
+
 async def run_batch_refresh(batch_id: str, account_ids: List[int], request_proxy: Optional[str]):
     settings = get_settings()
     concurrency = max(1, min(5, int(getattr(settings, "registration_max_retries", 3) or 3)))
@@ -1465,22 +1500,15 @@ async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: B
 
 
 @router.post("/{account_id}/refresh")
-async def refresh_account_token(account_id: int, request: Optional[TokenRefreshRequest] = Body(default=None)):
-    """刷新单个账号的 Token"""
-    proxy = _get_proxy(request.proxy if request else None, purpose="refresh")
-    result = do_refresh(account_id, proxy)
-
-    if result.success:
-        return {
-            "success": True,
-            "message": "Token 刷新成功",
-            "expires_at": result.expires_at.isoformat() if result.expires_at else None
-        }
-    else:
-        return {
-            "success": False,
-            "error": result.error_message
-        }
+async def refresh_account_token(account_id: int, background_tasks: BackgroundTasks, request: Optional[TokenRefreshRequest] = Body(default=None)):
+    """刷新单个账号的 Token（后台任务化）。"""
+    task_uuid = str(uuid.uuid4())
+    background_tasks.add_task(run_refresh_task, task_uuid, account_id, request.proxy if request else None)
+    return {
+        "success": True,
+        "task_uuid": task_uuid,
+        "status": "pending",
+    }
 
 
 @router.get("/batch-refresh/{batch_id}")
@@ -1489,6 +1517,17 @@ async def get_batch_refresh_status(batch_id: str):
     if not batch:
         raise HTTPException(status_code=404, detail="批量任务不存在")
     return batch
+
+
+@router.get("/refresh/task/{task_uuid}")
+async def get_refresh_task(task_uuid: str):
+    status = task_manager.get_status(task_uuid)
+    if not status:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {
+        "task_uuid": task_uuid,
+        **status,
+    }
 
 
 @router.post("/batch-recover-oauth")
