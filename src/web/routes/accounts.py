@@ -1418,6 +1418,38 @@ def _run_sync_refresh_task(task_uuid: str, account_id: int, request_proxy: Optio
         task_manager.update_status(task_uuid, "failed", error=str(exc))
 
 
+def _run_sync_validate_task(task_uuid: str, account_id: int, request_proxy: Optional[str]):
+    callback = task_manager.create_log_callback(task_uuid)
+    task_manager.update_status(task_uuid, "running")
+    callback("[系统] 验证任务开始")
+    try:
+        proxy = _get_proxy(request_proxy, purpose="validate")
+        if proxy:
+            callback(f"[系统] 本次验证将使用代理: {proxy}")
+        else:
+            callback("[系统] 本次验证将直连")
+        ok, error = do_validate(account_id, proxy)
+        if ok:
+            callback("[成功] Token 验证通过")
+            task_manager.update_status(task_uuid, "completed", result={"account_id": account_id})
+        else:
+            callback(f"[失败] {error or 'Token 验证失败'}")
+            task_manager.update_status(task_uuid, "failed", error=error or 'Token 验证失败')
+    except Exception as exc:
+        callback(f"[失败] {exc}")
+        task_manager.update_status(task_uuid, "failed", error=str(exc))
+
+
+async def run_validate_task(task_uuid: str, account_id: int, request_proxy: Optional[str]):
+    loop = task_manager.get_loop()
+    if loop is None:
+        loop = asyncio.get_event_loop()
+        task_manager.set_loop(loop)
+    task_manager.update_status(task_uuid, "pending")
+    task_manager.add_log(task_uuid, f"[系统] 验证任务 {task_uuid[:8]} 已加入队列")
+    await loop.run_in_executor(task_manager.executor, _run_sync_validate_task, task_uuid, account_id, request_proxy)
+
+
 async def run_refresh_task(task_uuid: str, account_id: int, request_proxy: Optional[str]):
     loop = task_manager.get_loop()
     if loop is None:
@@ -1517,6 +1549,14 @@ async def get_batch_refresh_status(batch_id: str):
     if not batch:
         raise HTTPException(status_code=404, detail="批量任务不存在")
     return batch
+
+
+@router.get("/validate/task/{task_uuid}")
+async def get_validate_task(task_uuid: str):
+    status = task_manager.get_status(task_uuid)
+    if not status:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"task_uuid": task_uuid, **status}
 
 
 @router.get("/refresh/task/{task_uuid}")
@@ -1650,15 +1690,14 @@ async def batch_validate_tokens(request: BatchValidateRequest):
 
 
 @router.post("/{account_id}/validate")
-async def validate_account_token(account_id: int, request: Optional[TokenValidateRequest] = Body(default=None)):
-    """验证单个账号的 Token 有效性"""
-    proxy = _get_proxy(request.proxy if request else None, purpose="validate")
-    is_valid, error = do_validate(account_id, proxy)
-
+async def validate_account_token(account_id: int, background_tasks: BackgroundTasks, request: Optional[TokenValidateRequest] = Body(default=None)):
+    """验证单个账号的 Token 有效性（后台任务化）。"""
+    task_uuid = str(uuid.uuid4())
+    background_tasks.add_task(run_validate_task, task_uuid, account_id, request.proxy if request else None)
     return {
-        "id": account_id,
-        "valid": is_valid,
-        "error": error
+        "success": True,
+        "task_uuid": task_uuid,
+        "status": "pending",
     }
 
 

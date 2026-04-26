@@ -422,6 +422,8 @@ function renderAccounts(accounts) {
                         <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleMoreMenu(this)">更多</button>
                         <div class="dropdown-menu" style="min-width:100px;">
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);refreshToken(${account.id})">刷新</a>
+                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);validateToken(${account.id})">验证</a>
+                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);checkSubscription(${account.id})">检测订阅</a>
                             ${supportsOAuthRecoveryService(account.email_service)
                                 ? `<a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);recoverOAuth(${account.id})">补录OAuth</a>`
                                 : ''}
@@ -721,6 +723,60 @@ function watchRefreshTask(taskUuid) {
             appendRecoveryLog(`[系统] 刷新状态查询失败: ${error.message}`);
             cleanupRecoveryWatchers();
             refreshingAccountIds.clear();
+            updateBatchButtons();
+        }
+    }, 2000);
+}
+
+function watchValidateTask(taskUuid) {
+    connectRecoverySocket(`/api/ws/task/${taskUuid}`);
+    recoveryStatusTimer = setInterval(async () => {
+        try {
+            const task = await api.get(`/accounts/validate/task/${taskUuid}`);
+            elements.recoveryLogStatus.textContent = `任务状态: ${task.status}`;
+            if (task.status === 'completed') {
+                appendRecoveryLog('[系统] 验证任务完成');
+                cleanupRecoveryWatchers();
+                loadAccounts();
+                updateBatchButtons();
+                toast.success('Token 验证完成');
+            } else if (task.status === 'failed' || task.status === 'cancelled') {
+                appendRecoveryLog(`[系统] 验证任务结束: ${task.error || task.status}`);
+                cleanupRecoveryWatchers();
+                loadAccounts();
+                updateBatchButtons();
+                toast.error(task.error || 'Token 验证失败');
+            }
+        } catch (error) {
+            appendRecoveryLog(`[系统] 验证状态查询失败: ${error.message}`);
+            cleanupRecoveryWatchers();
+            updateBatchButtons();
+        }
+    }, 2000);
+}
+
+function watchSubscriptionTask(taskUuid) {
+    connectRecoverySocket(`/api/ws/task/${taskUuid}`);
+    recoveryStatusTimer = setInterval(async () => {
+        try {
+            const task = await api.get(`/payment/accounts/check-subscription/task/${taskUuid}`);
+            elements.recoveryLogStatus.textContent = `任务状态: ${task.status}`;
+            if (task.status === 'completed') {
+                appendRecoveryLog('[系统] 订阅检测任务完成');
+                cleanupRecoveryWatchers();
+                loadAccounts();
+                updateBatchButtons();
+                toast.success('订阅检测完成');
+            } else if (task.status === 'failed' || task.status === 'cancelled') {
+                appendRecoveryLog(`[系统] 订阅检测任务结束: ${task.error || task.status}`);
+                cleanupRecoveryWatchers();
+                loadAccounts();
+                updateBatchButtons();
+                toast.error(task.error || '订阅检测失败');
+            }
+        } catch (error) {
+            appendRecoveryLog(`[系统] 订阅检测状态查询失败: ${error.message}`);
+            cleanupRecoveryWatchers();
             updateBatchButtons();
         }
     }, 2000);
@@ -1081,6 +1137,12 @@ async function viewAccount(id) {
                 <button class="btn btn-primary" onclick="refreshToken(${id}); elements.detailModal.classList.remove('active');">
                     🔄 刷新Token
                 </button>
+                <button class="btn btn-info" onclick="validateToken(${id}); elements.detailModal.classList.remove('active');">
+                    ✅ 验证Token
+                </button>
+                <button class="btn btn-info" onclick="checkSubscription(${id}); elements.detailModal.classList.remove('active');">
+                    🔍 检测订阅
+                </button>
                 ${supportsOAuthRecoveryService(account.email_service)
                     ? `<button class="btn btn-warning" onclick="recoverOAuth(${id}); elements.detailModal.classList.remove('active');">
                         🔐 补录OAuth
@@ -1407,6 +1469,34 @@ async function handleBatchUploadCpa() {
 // ============== 订阅状态 ==============
 
 // 手动标记订阅类型
+async function validateToken(id) {
+    openRecoveryLogModal(`账号 ${id} 验证 Token`);
+    appendRecoveryLog('[系统] 正在创建验证任务...');
+    try {
+        const result = await api.post(`/accounts/${id}/validate`, {}, { timeoutMs: 120000 });
+        appendRecoveryLog(`[系统] 验证任务已创建: ${result.task_uuid}`);
+        watchValidateTask(result.task_uuid);
+    } catch (error) {
+        appendRecoveryLog(`[失败] 创建验证任务失败: ${error.message}`);
+        elements.recoveryLogStatus.textContent = '验证任务创建失败';
+        toast.error('验证失败: ' + error.message);
+    }
+}
+
+async function checkSubscription(id) {
+    openRecoveryLogModal(`账号 ${id} 检测订阅`);
+    appendRecoveryLog('[系统] 正在创建订阅检测任务...');
+    try {
+        const result = await api.post(`/payment/accounts/${id}/check-subscription`, {}, { timeoutMs: 120000 });
+        appendRecoveryLog(`[系统] 订阅检测任务已创建: ${result.task_uuid}`);
+        watchSubscriptionTask(result.task_uuid);
+    } catch (error) {
+        appendRecoveryLog(`[失败] 创建订阅检测任务失败: ${error.message}`);
+        elements.recoveryLogStatus.textContent = '订阅检测任务创建失败';
+        toast.error('检测订阅失败: ' + error.message);
+    }
+}
+
 async function markSubscription(id) {
     const type = prompt('请输入订阅类型 (plus / team / free):', 'plus');
     if (!type) return;
