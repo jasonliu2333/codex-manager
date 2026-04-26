@@ -750,6 +750,7 @@ function watchValidateTask(taskUuid) {
         } catch (error) {
             appendRecoveryLog(`[系统] 验证状态查询失败: ${error.message}`);
             cleanupRecoveryWatchers();
+            isBatchValidating = false;
             updateBatchButtons();
         }
     }, 2000);
@@ -824,6 +825,49 @@ function watchRecoveryBatch(batchId) {
             }
         } catch (error) {
             appendRecoveryLog(`[系统] 批量状态查询失败: ${error.message}`);
+            cleanupRecoveryWatchers();
+            updateBatchButtons();
+        }
+    }, 2000);
+}
+
+function watchValidateBatch(batchId) {
+    connectRecoverySocket(`/api/ws/batch/${batchId}`);
+    recoveryStatusTimer = setInterval(async () => {
+        try {
+            const batch = await api.get(`/accounts/batch-validate/${batchId}`);
+            elements.recoveryLogStatus.textContent = `批量验证: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            if (batch.finished) {
+                appendRecoveryLog('[系统] 批量验证任务已结束');
+                cleanupRecoveryWatchers();
+                isBatchValidating = false;
+                loadAccounts();
+                updateBatchButtons();
+                toast.success(`批量验证完成，成功 ${batch.success}，失败 ${batch.failed}`);
+            }
+        } catch (error) {
+            appendRecoveryLog(`[系统] 批量验证状态查询失败: ${error.message}`);
+            cleanupRecoveryWatchers();
+            updateBatchButtons();
+        }
+    }, 2000);
+}
+
+function watchSubscriptionBatch(batchId) {
+    connectRecoverySocket(`/api/ws/batch/${batchId}`);
+    recoveryStatusTimer = setInterval(async () => {
+        try {
+            const batch = await api.get(`/payment/accounts/batch-check-subscription/${batchId}`);
+            elements.recoveryLogStatus.textContent = `批量订阅检测: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            if (batch.finished) {
+                appendRecoveryLog('[系统] 批量订阅检测任务已结束');
+                cleanupRecoveryWatchers();
+                loadAccounts();
+                updateBatchButtons();
+                toast.success(`批量订阅检测完成，成功 ${batch.success}，失败 ${batch.failed}`);
+            }
+        } catch (error) {
+            appendRecoveryLog(`[系统] 批量订阅检测状态查询失败: ${error.message}`);
             cleanupRecoveryWatchers();
             updateBatchButtons();
         }
@@ -929,17 +973,21 @@ async function handleBatchValidate() {
     }
 
     isBatchValidating = true;
+    const count = getEffectiveCount();
+    openRecoveryLogModal(`批量验证 Token (${count})`);
+    appendRecoveryLog('[系统] 正在创建批量验证任务...');
 
     elements.batchValidateBtn.disabled = true;
     elements.batchValidateBtn.textContent = '验证中...';
 
     try {
         const result = await api.post('/accounts/batch-validate', buildBatchPayload(), { timeoutMs: 120000 });
-        toast.info(`有效: ${result.valid_count}，无效: ${result.invalid_count}`);
-        loadAccounts();
+        appendRecoveryLog(`[系统] 批量验证任务已创建: ${result.batch_id}`);
+        watchValidateBatch(result.batch_id);
     } catch (error) {
+        appendRecoveryLog(`[失败] 创建批量验证任务失败: ${error.message}`);
+        elements.recoveryLogStatus.textContent = '批量验证任务创建失败';
         toast.error('批量验证失败: ' + error.message);
-    } finally {
         isBatchValidating = false;
         updateBatchButtons();
     }
@@ -1522,18 +1570,20 @@ async function handleBatchCheckSubscription() {
     const confirmed = await confirm(`确定要检测选中的 ${count} 个账号的订阅状态吗？`);
     if (!confirmed) return;
 
+    openRecoveryLogModal(`批量检测订阅 (${count})`);
+    appendRecoveryLog('[系统] 正在创建批量订阅检测任务...');
+
     elements.batchCheckSubBtn.disabled = true;
     elements.batchCheckSubBtn.textContent = '检测中...';
 
     try {
-        const result = await api.post('/payment/accounts/batch-check-subscription', buildBatchPayload());
-        let message = `成功: ${result.success_count}`;
-        if (result.failed_count > 0) message += `, 失败: ${result.failed_count}`;
-        toast.success(message);
-        loadAccounts();
+        const result = await api.post('/payment/accounts/batch-check-subscription', buildBatchPayload(), { timeoutMs: 120000 });
+        appendRecoveryLog(`[系统] 批量订阅检测任务已创建: ${result.batch_id}`);
+        watchSubscriptionBatch(result.batch_id);
     } catch (e) {
+        appendRecoveryLog(`[失败] 创建批量订阅检测任务失败: ${e.message}`);
+        elements.recoveryLogStatus.textContent = '批量订阅检测任务创建失败';
         toast.error('批量检测失败: ' + e.message);
-    } finally {
         updateBatchButtons();
     }
 }

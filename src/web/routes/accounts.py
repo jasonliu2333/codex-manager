@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 recovery_batches: Dict[str, dict] = {}
 refresh_batches: Dict[str, dict] = {}
+validate_batches: Dict[str, dict] = {}
 
 
 def _extra_data_flag_filter(column, key: str, value: str):
@@ -1389,6 +1390,61 @@ async def run_batch_recover_oauth(batch_id: str, task_account_pairs: List[dict],
     )
 
 
+def _run_single_validate(account_id: int, proxy: Optional[str]):
+    return do_validate(account_id, proxy)
+
+
+async def run_batch_validate(batch_id: str, account_ids: List[int], request_proxy: Optional[str]):
+    settings = get_settings()
+    concurrency = max(1, min(5, int(getattr(settings, "registration_max_retries", 3) or 3)))
+    task_manager.init_batch(batch_id, len(account_ids))
+    validate_batches[batch_id] = {
+        "status": "running",
+        "total": len(account_ids),
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "finished": False,
+        "mode": "batch_validate",
+    }
+    task_manager.add_batch_log(batch_id, f"[系统] 批量验证开始，共 {len(account_ids)} 个账号，并发 {concurrency}")
+
+    loop = task_manager.get_loop() or asyncio.get_event_loop()
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def worker(index: int, account_id: int):
+        async with semaphore:
+            prefix = f"[任务{index}]"
+            task_manager.add_batch_log(batch_id, f"{prefix} 开始验证账号 ID={account_id}")
+            try:
+                proxy = _get_proxy(request_proxy, purpose="validate")
+                ok, error = await loop.run_in_executor(task_manager.executor, _run_single_validate, account_id, proxy)
+                if ok:
+                    validate_batches[batch_id]["success"] += 1
+                    task_manager.add_batch_log(batch_id, f"{prefix} 验证成功 ID={account_id}")
+                else:
+                    validate_batches[batch_id]["failed"] += 1
+                    task_manager.add_batch_log(batch_id, f"{prefix} 验证失败 ID={account_id} | 原因: {error or '未知错误'}")
+            except Exception as exc:
+                validate_batches[batch_id]["failed"] += 1
+                task_manager.add_batch_log(batch_id, f"{prefix} 验证异常 ID={account_id} | 原因: {exc}")
+            finally:
+                validate_batches[batch_id]["completed"] += 1
+                task_manager.update_batch_status(
+                    batch_id,
+                    completed=validate_batches[batch_id]["completed"],
+                    success=validate_batches[batch_id]["success"],
+                    failed=validate_batches[batch_id]["failed"],
+                    current_index=validate_batches[batch_id]["completed"],
+                )
+
+    await asyncio.gather(*(worker(i, aid) for i, aid in enumerate(account_ids, start=1)))
+    validate_batches[batch_id]["status"] = "completed"
+    validate_batches[batch_id]["finished"] = True
+    task_manager.update_batch_status(batch_id, status="completed", finished=True)
+    task_manager.add_batch_log(batch_id, f"[系统] 批量验证结束，成功 {validate_batches[batch_id]['success']}，失败 {validate_batches[batch_id]['failed']}")
+
+
 def _run_single_refresh(account_id: int, proxy: Optional[str]):
     return do_refresh(account_id, proxy)
 
@@ -1551,6 +1607,14 @@ async def get_batch_refresh_status(batch_id: str):
     return batch
 
 
+@router.get("/batch-validate/{batch_id}")
+async def get_batch_validate_status(batch_id: str):
+    batch = validate_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    return batch
+
+
 @router.get("/validate/task/{task_uuid}")
 async def get_validate_task(task_uuid: str):
     status = task_manager.get_status(task_uuid)
@@ -1650,43 +1714,16 @@ async def get_recover_oauth_batch(batch_id: str):
 
 
 @router.post("/batch-validate")
-async def batch_validate_tokens(request: BatchValidateRequest):
-    """批量验证账号 Token 有效性"""
-    proxy = _get_proxy(request.proxy, purpose="validate")
-
-    results = {
-        "valid_count": 0,
-        "invalid_count": 0,
-        "details": []
-    }
-
+async def batch_validate_tokens(request: BatchValidateRequest, background_tasks: BackgroundTasks):
+    """批量验证账号 Token 有效性（后台任务化）。"""
     with get_db() as db:
         ids = resolve_account_ids(
             db, request.ids, request.select_all,
             request.status_filter, request.email_service_filter, request.search_filter
         )
-
-    for account_id in ids:
-        try:
-            is_valid, error = do_validate(account_id, proxy)
-            results["details"].append({
-                "id": account_id,
-                "valid": is_valid,
-                "error": error
-            })
-            if is_valid:
-                results["valid_count"] += 1
-            else:
-                results["invalid_count"] += 1
-        except Exception as e:
-            results["invalid_count"] += 1
-            results["details"].append({
-                "id": account_id,
-                "valid": False,
-                "error": str(e)
-            })
-
-    return results
+    batch_id = str(uuid.uuid4())
+    background_tasks.add_task(run_batch_validate, batch_id, ids, request.proxy)
+    return {"success": True, "batch_id": batch_id, "count": len(ids)}
 
 
 @router.post("/{account_id}/validate")

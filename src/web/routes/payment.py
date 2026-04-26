@@ -24,6 +24,7 @@ from ...core.openai.payment import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+subscription_batches: dict[str, dict] = {}
 
 
 # ============== Pydantic Models ==============
@@ -93,6 +94,50 @@ async def run_check_subscription_task(task_uuid: str, account_id: int, request_p
     await loop.run_in_executor(task_manager.executor, _run_sync_check_subscription_task, task_uuid, account_id, request_proxy)
 
 
+async def run_batch_check_subscription(batch_id: str, account_ids: List[int], request_proxy: Optional[str]):
+    import asyncio
+    settings = get_settings()
+    concurrency = max(1, min(5, int(getattr(settings, "registration_max_retries", 3) or 3)))
+    task_manager.init_batch(batch_id, len(account_ids))
+    subscription_batches[batch_id] = {
+        "status": "running",
+        "total": len(account_ids),
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "finished": False,
+        "mode": "batch_subscription",
+    }
+    task_manager.add_batch_log(batch_id, f"[系统] 批量订阅检测开始，共 {len(account_ids)} 个账号，并发 {concurrency}")
+
+    loop = task_manager.get_loop() or asyncio.get_event_loop()
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def worker(index: int, account_id: int):
+        async with semaphore:
+            prefix = f"[任务{index}]"
+            task_manager.add_batch_log(batch_id, f"{prefix} 开始检测订阅 ID={account_id}")
+            try:
+                await loop.run_in_executor(task_manager.executor, _run_sync_check_subscription_task, f"batch-{batch_id}-{index}", account_id, request_proxy)
+                with get_db() as db:
+                    account = db.query(Account).filter(Account.id == account_id).first()
+                    sub = (account.subscription_type if account else None) or 'free'
+                subscription_batches[batch_id]["success"] += 1
+                task_manager.add_batch_log(batch_id, f"{prefix} 检测完成 ID={account_id} | 订阅: {sub}")
+            except Exception as exc:
+                subscription_batches[batch_id]["failed"] += 1
+                task_manager.add_batch_log(batch_id, f"{prefix} 检测异常 ID={account_id} | 原因: {exc}")
+            finally:
+                subscription_batches[batch_id]["completed"] += 1
+                task_manager.update_batch_status(batch_id, completed=subscription_batches[batch_id]["completed"], success=subscription_batches[batch_id]["success"], failed=subscription_batches[batch_id]["failed"], current_index=subscription_batches[batch_id]["completed"])
+
+    await asyncio.gather(*(worker(i, aid) for i, aid in enumerate(account_ids, start=1)))
+    subscription_batches[batch_id]["status"] = "completed"
+    subscription_batches[batch_id]["finished"] = True
+    task_manager.update_batch_status(batch_id, status="completed", finished=True)
+    task_manager.add_batch_log(batch_id, f"[系统] 批量订阅检测结束，成功 {subscription_batches[batch_id]['success']}，失败 {subscription_batches[batch_id]['failed']}")
+
+
 # ============== 支付链接生成 ==============
 
 @router.post("/generate-link")
@@ -159,6 +204,14 @@ def open_browser_incognito(request: OpenIncognitoRequest):
 
 # ============== 订阅状态 ==============
 
+@router.get("/accounts/batch-check-subscription/{batch_id}")
+def get_batch_check_subscription(batch_id: str):
+    batch = subscription_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    return batch
+
+
 @router.get("/accounts/check-subscription/task/{task_uuid}")
 def get_check_subscription_task(task_uuid: str):
     status = task_manager.get_status(task_uuid)
@@ -176,42 +229,16 @@ async def check_subscription(account_id: int, background_tasks: BackgroundTasks,
 
 
 @router.post("/accounts/batch-check-subscription")
-def batch_check_subscription(request: BatchCheckSubscriptionRequest):
-    """批量检测账号订阅状态"""
-    proxy = request.proxy or get_settings().proxy_url
-
-    results = {"success_count": 0, "failed_count": 0, "details": []}
-
+async def batch_check_subscription(request: BatchCheckSubscriptionRequest, background_tasks: BackgroundTasks):
+    """批量检测账号订阅状态（后台任务化）。"""
     with get_db() as db:
         ids = resolve_account_ids(
             db, request.ids, request.select_all,
             request.status_filter, request.email_service_filter, request.search_filter
         )
-        for account_id in ids:
-            account = db.query(Account).filter(Account.id == account_id).first()
-            if not account:
-                results["failed_count"] += 1
-                results["details"].append(
-                    {"id": account_id, "email": None, "success": False, "error": "账号不存在"}
-                )
-                continue
-
-            try:
-                status = check_subscription_status(account, proxy)
-                account.subscription_type = None if status == "free" else status
-                account.subscription_at = datetime.utcnow() if status != "free" else account.subscription_at
-                db.commit()
-                results["success_count"] += 1
-                results["details"].append(
-                    {"id": account_id, "email": account.email, "success": True, "subscription_type": status}
-                )
-            except Exception as e:
-                results["failed_count"] += 1
-                results["details"].append(
-                    {"id": account_id, "email": account.email, "success": False, "error": str(e)}
-                )
-
-    return results
+    batch_id = __import__('uuid').uuid4().hex
+    background_tasks.add_task(run_batch_check_subscription, batch_id, ids, request.proxy)
+    return {"success": True, "batch_id": batch_id, "count": len(ids)}
 
 
 @router.post("/accounts/{account_id}/mark-subscription")
