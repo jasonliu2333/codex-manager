@@ -37,6 +37,7 @@ from ..task_manager import task_manager
 logger = logging.getLogger(__name__)
 router = APIRouter()
 recovery_batches: Dict[str, dict] = {}
+refresh_batches: Dict[str, dict] = {}
 
 
 def _extra_data_flag_filter(column, key: str, value: str):
@@ -55,10 +56,21 @@ def _extra_data_bool_filter(column, key: str, value: bool):
     )
 
 
-def _get_proxy(request_proxy: Optional[str] = None) -> Optional[str]:
-    """获取代理 URL，策略与注册流程一致：代理列表 → 动态代理 → 静态配置"""
+def _get_proxy(request_proxy: Optional[str] = None, purpose: str = "general") -> Optional[str]:
+    """获取代理 URL。
+
+    优先级：请求指定代理 >（按操作开关判断）代理池 > 动态代理 > 静态代理。
+    purpose 支持: general / refresh / validate
+    """
     if request_proxy:
         return request_proxy
+
+    settings = get_settings()
+    if purpose == "refresh" and not bool(getattr(settings, "proxy_refresh_use_proxy", False)):
+        return None
+    if purpose == "validate" and not bool(getattr(settings, "proxy_validate_use_proxy", False)):
+        return None
+
     with get_db() as db:
         proxy = crud.get_random_proxy(db)
         if proxy:
@@ -66,7 +78,7 @@ def _get_proxy(request_proxy: Optional[str] = None) -> Optional[str]:
     proxy_url = get_proxy_url_for_task()
     if proxy_url:
         return proxy_url
-    return get_settings().proxy_url
+    return settings.proxy_url
 
 
 def _detect_deleted_or_deactivated_account(engine) -> Optional[str]:
@@ -221,6 +233,13 @@ def resolve_account_ids(
                 Account.extra_data.is_not(None),
                 _extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required")
             )
+        elif status_filter == "failed":
+            query = query.filter(Account.status == status_filter)
+            query = query.filter(
+                ~_extra_data_bool_filter(Account.extra_data, "oauth_recovery_required", True),
+                ~_extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required"),
+                ~_extra_data_flag_filter(Account.extra_data, "openai_account_state", "deleted_or_deactivated"),
+            )
         else:
             query = query.filter(Account.status == status_filter)
     if email_service_filter:
@@ -299,6 +318,13 @@ async def list_accounts(
                 query = query.filter(
                     Account.extra_data.is_not(None),
                     _extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required")
+                )
+            elif status == "failed":
+                query = query.filter(Account.status == status)
+                query = query.filter(
+                    ~_extra_data_bool_filter(Account.extra_data, "oauth_recovery_required", True),
+                    ~_extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required"),
+                    ~_extra_data_flag_filter(Account.extra_data, "openai_account_state", "deleted_or_deactivated"),
                 )
             else:
                 query = query.filter(Account.status == status)
@@ -1363,42 +1389,85 @@ async def run_batch_recover_oauth(batch_id: str, task_account_pairs: List[dict],
     )
 
 
+def _run_single_refresh(account_id: int, proxy: Optional[str]):
+    return do_refresh(account_id, proxy)
+
+
+async def run_batch_refresh(batch_id: str, account_ids: List[int], request_proxy: Optional[str]):
+    settings = get_settings()
+    concurrency = max(1, min(5, int(getattr(settings, "registration_max_retries", 3) or 3)))
+    task_manager.init_batch(batch_id, len(account_ids))
+    refresh_batches[batch_id] = {
+        "status": "running",
+        "total": len(account_ids),
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "finished": False,
+        "mode": "batch_refresh",
+    }
+    task_manager.add_batch_log(batch_id, f"[系统] 批量刷新开始，共 {len(account_ids)} 个账号，并发 {concurrency}")
+
+    loop = task_manager.get_loop() or asyncio.get_event_loop()
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def worker(index: int, account_id: int):
+        async with semaphore:
+            prefix = f"[任务{index}]"
+            task_manager.add_batch_log(batch_id, f"{prefix} 开始刷新账号 ID={account_id}")
+            try:
+                proxy = _get_proxy(request_proxy, purpose="refresh")
+                result = await loop.run_in_executor(task_manager.executor, _run_single_refresh, account_id, proxy)
+                ok = bool(result and result.success)
+                if ok:
+                    refresh_batches[batch_id]["success"] += 1
+                    task_manager.add_batch_log(batch_id, f"{prefix} 刷新成功 ID={account_id}")
+                else:
+                    refresh_batches[batch_id]["failed"] += 1
+                    err = getattr(result, "error_message", None) or "未知错误"
+                    task_manager.add_batch_log(batch_id, f"{prefix} 刷新失败 ID={account_id} | 原因: {err}")
+            except Exception as exc:
+                refresh_batches[batch_id]["failed"] += 1
+                task_manager.add_batch_log(batch_id, f"{prefix} 刷新异常 ID={account_id} | 原因: {exc}")
+            finally:
+                refresh_batches[batch_id]["completed"] += 1
+                task_manager.update_batch_status(
+                    batch_id,
+                    completed=refresh_batches[batch_id]["completed"],
+                    success=refresh_batches[batch_id]["success"],
+                    failed=refresh_batches[batch_id]["failed"],
+                    current_index=refresh_batches[batch_id]["completed"],
+                )
+
+    await asyncio.gather(*(worker(i, aid) for i, aid in enumerate(account_ids, start=1)))
+    refresh_batches[batch_id]["status"] = "completed"
+    refresh_batches[batch_id]["finished"] = True
+    task_manager.update_batch_status(batch_id, status="completed", finished=True)
+    task_manager.add_batch_log(batch_id, f"[系统] 批量刷新结束，成功 {refresh_batches[batch_id]['success']}，失败 {refresh_batches[batch_id]['failed']}")
+
+
 @router.post("/batch-refresh")
 async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: BackgroundTasks):
-    """批量刷新账号 Token"""
-    proxy = _get_proxy(request.proxy)
-
-    results = {
-        "success_count": 0,
-        "failed_count": 0,
-        "errors": []
-    }
-
+    """批量刷新账号 Token（后台任务化）。"""
     with get_db() as db:
         ids = resolve_account_ids(
             db, request.ids, request.select_all,
             request.status_filter, request.email_service_filter, request.search_filter
         )
 
-    for account_id in ids:
-        try:
-            result = do_refresh(account_id, proxy)
-            if result.success:
-                results["success_count"] += 1
-            else:
-                results["failed_count"] += 1
-                results["errors"].append({"id": account_id, "error": result.error_message})
-        except Exception as e:
-            results["failed_count"] += 1
-            results["errors"].append({"id": account_id, "error": str(e)})
-
-    return results
+    batch_id = str(uuid.uuid4())
+    background_tasks.add_task(run_batch_refresh, batch_id, ids, request.proxy)
+    return {
+        "success": True,
+        "batch_id": batch_id,
+        "count": len(ids),
+    }
 
 
 @router.post("/{account_id}/refresh")
 async def refresh_account_token(account_id: int, request: Optional[TokenRefreshRequest] = Body(default=None)):
     """刷新单个账号的 Token"""
-    proxy = _get_proxy(request.proxy if request else None)
+    proxy = _get_proxy(request.proxy if request else None, purpose="refresh")
     result = do_refresh(account_id, proxy)
 
     if result.success:
@@ -1412,6 +1481,14 @@ async def refresh_account_token(account_id: int, request: Optional[TokenRefreshR
             "success": False,
             "error": result.error_message
         }
+
+
+@router.get("/batch-refresh/{batch_id}")
+async def get_batch_refresh_status(batch_id: str):
+    batch = refresh_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    return batch
 
 
 @router.post("/batch-recover-oauth")
@@ -1496,7 +1573,7 @@ async def get_recover_oauth_batch(batch_id: str):
 @router.post("/batch-validate")
 async def batch_validate_tokens(request: BatchValidateRequest):
     """批量验证账号 Token 有效性"""
-    proxy = _get_proxy(request.proxy)
+    proxy = _get_proxy(request.proxy, purpose="validate")
 
     results = {
         "valid_count": 0,
@@ -1536,7 +1613,7 @@ async def batch_validate_tokens(request: BatchValidateRequest):
 @router.post("/{account_id}/validate")
 async def validate_account_token(account_id: int, request: Optional[TokenValidateRequest] = Body(default=None)):
     """验证单个账号的 Token 有效性"""
-    proxy = _get_proxy(request.proxy if request else None)
+    proxy = _get_proxy(request.proxy if request else None, purpose="validate")
     is_valid, error = do_validate(account_id, proxy)
 
     return {

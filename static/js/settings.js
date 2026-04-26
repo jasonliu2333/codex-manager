@@ -38,6 +38,7 @@ const elements = {
     proxyModalTitle: document.getElementById('proxy-modal-title'),
     // 动态代理设置
     dynamicProxyForm: document.getElementById('dynamic-proxy-form'),
+    proxyOperationSettingsForm: document.getElementById('proxy-operation-settings-form'),
     testDynamicProxyBtn: document.getElementById('test-dynamic-proxy-btn'),
     // CPA 服务管理
     addCpaServiceBtn: document.getElementById('add-cpa-service-btn'),
@@ -238,6 +239,9 @@ function initEventListeners() {
     if (elements.testDynamicProxyBtn) {
         elements.testDynamicProxyBtn.addEventListener('click', handleTestDynamicProxy);
     }
+    if (elements.proxyOperationSettingsForm) {
+        elements.proxyOperationSettingsForm.addEventListener('submit', handleSaveProxyOperationSettings);
+    }
 
     // 验证码设置
     if (elements.emailCodeForm) {
@@ -350,6 +354,10 @@ async function loadSettings() {
         document.getElementById('dynamic-proxy-api-url').value = data.proxy?.dynamic_api_url || '';
         document.getElementById('dynamic-proxy-api-key-header').value = data.proxy?.dynamic_api_key_header || 'X-API-Key';
         document.getElementById('dynamic-proxy-result-field').value = data.proxy?.dynamic_result_field || '';
+        const refreshProxyToggle = document.getElementById('proxy-refresh-use-proxy');
+        const validateProxyToggle = document.getElementById('proxy-validate-use-proxy');
+        if (refreshProxyToggle) refreshProxyToggle.checked = !!data.proxy?.refresh_use_proxy;
+        if (validateProxyToggle) validateProxyToggle.checked = !!data.proxy?.validate_use_proxy;
         const dynamicKeyInput = document.getElementById('dynamic-proxy-api-key');
         const dynamicKeyStatus = document.getElementById('dynamic-proxy-api-key-status');
         if (dynamicKeyInput) {
@@ -1254,6 +1262,25 @@ async function handleSaveOutlookSettings(e) {
 
 // ============== 动态代理设置 ==============
 
+async function handleSaveProxyOperationSettings(e) {
+    e.preventDefault();
+    const payload = {
+        enabled: document.getElementById('dynamic-proxy-enabled').checked,
+        api_url: document.getElementById('dynamic-proxy-api-url').value.trim(),
+        api_key: null,
+        api_key_header: document.getElementById('dynamic-proxy-api-key-header').value.trim() || 'X-API-Key',
+        result_field: document.getElementById('dynamic-proxy-result-field').value.trim(),
+        refresh_use_proxy: !!document.getElementById('proxy-refresh-use-proxy')?.checked,
+        validate_use_proxy: !!document.getElementById('proxy-validate-use-proxy')?.checked,
+    };
+    try {
+        await api.post('/settings/proxy/dynamic', payload);
+        toast.success('刷新/验证代理开关已保存');
+    } catch (error) {
+        toast.error('保存失败: ' + error.message);
+    }
+}
+
 async function handleSaveDynamicProxy(e) {
     e.preventDefault();
     const data = {
@@ -1261,7 +1288,9 @@ async function handleSaveDynamicProxy(e) {
         api_url: document.getElementById('dynamic-proxy-api-url').value.trim(),
         api_key: document.getElementById('dynamic-proxy-api-key').value || null,
         api_key_header: document.getElementById('dynamic-proxy-api-key-header').value.trim() || 'X-API-Key',
-        result_field: document.getElementById('dynamic-proxy-result-field').value.trim()
+        result_field: document.getElementById('dynamic-proxy-result-field').value.trim(),
+        refresh_use_proxy: !!document.getElementById('proxy-refresh-use-proxy')?.checked,
+        validate_use_proxy: !!document.getElementById('proxy-validate-use-proxy')?.checked
     };
     try {
         await api.post('/settings/proxy/dynamic', data);

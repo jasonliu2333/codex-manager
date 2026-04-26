@@ -377,7 +377,7 @@ function renderAccounts(accounts) {
             <td>${getServiceTypeText(account.email_service)}</td>
             <td>
                 <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;">
-                    ${getStatusIcon(account.status)}
+                    ${getStatusIcon(getDerivedAccountStatus(account)?.key === 'expired' ? 'expired' : (getDerivedAccountStatus(account) ? 'failed' : account.status))}
                     ${account.extra_data?.openai_account_state === 'deleted_or_deactivated'
                         ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_account_state_reason || 'OpenAI 标记为已删除/停用')}">已删除/停用</span>`
                         : ''}
@@ -478,6 +478,30 @@ function renderAccounts(accounts) {
     elements.selectAll.checked = allCbs.length > 0 && checkedCbs.length === allCbs.length;
     elements.selectAll.indeterminate = checkedCbs.length > 0 && checkedCbs.length < allCbs.length;
     renderSelectAllBanner();
+}
+
+function getDerivedAccountStatus(account) {
+    if (account?.extra_data?.openai_account_state === 'deleted_or_deactivated') {
+        return { key: 'deleted_or_deactivated', text: '已删除/停用', css: 'failed' };
+    }
+    if (account?.extra_data?.openai_auth_state === 'mfa_required') {
+        return { key: 'mfa_required', text: '需要MFA', css: 'failed' };
+    }
+    if (account?.extra_data?.oauth_recovery_required) {
+        return { key: 'oauth_recovery_required', text: '需要补录', css: 'warning' };
+    }
+    if (account?.extra_data?.token_validation_state === 'access_token_invalid_or_expired') {
+        return { key: 'expired', text: '过期', css: 'warning' };
+    }
+    return null;
+}
+
+function renderAccountStatusBadge(account) {
+    const derived = getDerivedAccountStatus(account);
+    if (derived) {
+        return `<span class="status-badge ${derived.css}">${derived.text}</span>`;
+    }
+    return `<span class="status-badge ${getStatusClass('account', account.status)}">${getStatusText('account', account.status)}</span>`;
 }
 
 function renderTokenStatusBadge(account) {
@@ -722,6 +746,27 @@ function watchRecoveryBatch(batchId) {
     }, 2000);
 }
 
+function watchRefreshBatch(batchId) {
+    connectRecoverySocket(`/api/ws/batch/${batchId}`);
+    recoveryStatusTimer = setInterval(async () => {
+        try {
+            const batch = await api.get(`/accounts/batch-refresh/${batchId}`);
+            elements.recoveryLogStatus.textContent = `批量刷新: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            if (batch.finished) {
+                appendRecoveryLog('[系统] 批量刷新任务已结束');
+                cleanupRecoveryWatchers();
+                loadAccounts();
+                updateBatchButtons();
+                toast.success(`批量刷新完成，成功 ${batch.success}，失败 ${batch.failed}`);
+            }
+        } catch (error) {
+            appendRecoveryLog(`[系统] 批量刷新状态查询失败: ${error.message}`);
+            cleanupRecoveryWatchers();
+            updateBatchButtons();
+        }
+    }, 2000);
+}
+
 async function recoverOAuth(id) {
     const confirmed = await confirm('将使用全新登录会话再次发送验证码邮件并补录 ak/rk，是否继续？');
     if (!confirmed) return;
@@ -748,16 +793,20 @@ async function handleBatchRefresh() {
     const confirmed = await confirm(`确定要刷新选中的 ${count} 个账号的Token吗？`);
     if (!confirmed) return;
 
+    openRecoveryLogModal(`批量刷新 Token (${count})`);
+    appendRecoveryLog('[系统] 正在创建批量刷新任务...');
+
     elements.batchRefreshBtn.disabled = true;
     elements.batchRefreshBtn.textContent = '刷新中...';
 
     try {
-        const result = await api.post('/accounts/batch-refresh', buildBatchPayload());
-        toast.success(`成功刷新 ${result.success_count} 个，失败 ${result.failed_count} 个`);
-        loadAccounts();
+        const result = await api.post('/accounts/batch-refresh', buildBatchPayload(), { timeoutMs: 120000 });
+        appendRecoveryLog(`[系统] 批量刷新任务已创建: ${result.batch_id}`);
+        watchRefreshBatch(result.batch_id);
     } catch (error) {
+        appendRecoveryLog(`[失败] 创建批量刷新任务失败: ${error.message}`);
+        elements.recoveryLogStatus.textContent = '批量刷新任务创建失败';
         toast.error('批量刷新失败: ' + error.message);
-    } finally {
         updateBatchButtons();
     }
 }
@@ -857,9 +906,7 @@ async function viewAccount(id) {
                 <div class="info-item">
                     <span class="label">状态</span>
                     <span class="value">
-                        <span class="status-badge ${getStatusClass('account', account.status)}">
-                            ${getStatusText('account', account.status)}
-                        </span>
+                        ${renderAccountStatusBadge(account)}
                         ${openaiState === 'deleted_or_deactivated'
                             ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(openaiStateReason || 'OpenAI 标记为已删除/停用')}">已删除/停用</span>`
                             : ''}

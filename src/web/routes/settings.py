@@ -183,6 +183,8 @@ def _load_proxy_settings_from_db() -> dict:
         "dynamic_api_url": str(getattr(settings, "proxy_dynamic_api_url", "") or ""),
         "dynamic_api_key_header": str(getattr(settings, "proxy_dynamic_api_key_header", "X-API-Key") or "X-API-Key"),
         "dynamic_result_field": str(getattr(settings, "proxy_dynamic_result_field", "") or ""),
+        "refresh_use_proxy": bool(getattr(settings, "proxy_refresh_use_proxy", False)),
+        "validate_use_proxy": bool(getattr(settings, "proxy_validate_use_proxy", False)),
         "has_dynamic_api_key": bool(_get_saved_dynamic_proxy_api_key()),
     }
     db_key_map = {
@@ -195,6 +197,8 @@ def _load_proxy_settings_from_db() -> dict:
         "dynamic_api_url": ("proxy.dynamic_api_url", lambda v: str(v).strip()),
         "dynamic_api_key_header": ("proxy.dynamic_api_key_header", lambda v: str(v).strip() or defaults["dynamic_api_key_header"]),
         "dynamic_result_field": ("proxy.dynamic_result_field", lambda v: str(v).strip()),
+        "refresh_use_proxy": ("proxy.refresh_use_proxy", lambda v: _parse_bool(v, defaults["refresh_use_proxy"])),
+        "validate_use_proxy": ("proxy.validate_use_proxy", lambda v: _parse_bool(v, defaults["validate_use_proxy"])),
     }
     try:
         with get_db() as db:
@@ -324,6 +328,8 @@ async def get_dynamic_proxy_settings():
         "api_url": proxy_settings["dynamic_api_url"],
         "api_key_header": proxy_settings["dynamic_api_key_header"],
         "result_field": proxy_settings["dynamic_result_field"],
+        "refresh_use_proxy": proxy_settings["refresh_use_proxy"],
+        "validate_use_proxy": proxy_settings["validate_use_proxy"],
         "has_api_key": proxy_settings["has_dynamic_api_key"],
         "diagnostics": _build_proxy_runtime_diagnostics(),
     }
@@ -336,6 +342,8 @@ class DynamicProxySettings(BaseModel):
     api_key: Optional[str] = None
     api_key_header: str = "X-API-Key"
     result_field: str = ""
+    refresh_use_proxy: bool = False
+    validate_use_proxy: bool = False
 
 
 @router.post("/proxy/dynamic")
@@ -346,6 +354,8 @@ async def update_dynamic_proxy_settings(request: DynamicProxySettings):
         "proxy_dynamic_api_url": request.api_url,
         "proxy_dynamic_api_key_header": request.api_key_header,
         "proxy_dynamic_result_field": request.result_field,
+        "proxy_refresh_use_proxy": request.refresh_use_proxy,
+        "proxy_validate_use_proxy": request.validate_use_proxy,
     }
     if request.api_key is not None:
         update_dict["proxy_dynamic_api_key"] = request.api_key

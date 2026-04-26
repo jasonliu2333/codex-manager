@@ -118,6 +118,36 @@
                     </div>
                 </div>
 
+                <div class="card" style="margin-top: var(--spacing-lg);">
+                    <div class="card-header">
+                        <h3>账号刷新/验证代理开关</h3>
+                        <span class="hint">单独控制“刷新Token”和“验证Token”是否走代理</span>
+                    </div>
+                    <div class="card-body">
+                        <form id="proxy-operation-settings-form">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label style="display:flex;align-items:center;gap:8px;">
+                                        <input type="checkbox" id="proxy-refresh-use-proxy">
+                                        刷新 Token 时使用代理
+                                    </label>
+                                    <p class="hint">关闭后，账号刷新将强制直连，不使用代理池 / 动态代理 / 静态代理。</p>
+                                </div>
+                                <div class="form-group">
+                                    <label style="display:flex;align-items:center;gap:8px;">
+                                        <input type="checkbox" id="proxy-validate-use-proxy">
+                                        验证 Token 时使用代理
+                                    </label>
+                                    <p class="hint">关闭后，账号验证将强制直连，不使用代理池 / 动态代理 / 静态代理。</p>
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">💾 保存开关</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
                 <!-- 代理列表 -->
                 <div class="card" style="margin-top: var(--spacing-lg);">
                     <div class="card-header">

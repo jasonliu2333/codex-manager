@@ -383,6 +383,18 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.PROXY,
         description="从 JSON 响应中提取代理 URL 的字段路径（留空则使用响应原文）"
     ),
+    "proxy_refresh_use_proxy": SettingDefinition(
+        db_key="proxy.refresh_use_proxy",
+        default_value=False,
+        category=SettingCategory.PROXY,
+        description="刷新 Token 时是否使用代理"
+    ),
+    "proxy_validate_use_proxy": SettingDefinition(
+        db_key="proxy.validate_use_proxy",
+        default_value=False,
+        category=SettingCategory.PROXY,
+        description="验证 Token 时是否使用代理"
+    ),
 
     # 注册配置
     "registration_max_retries": SettingDefinition(
@@ -568,6 +580,8 @@ SETTING_TYPES: Dict[str, Type] = {
     "proxy_enabled": bool,
     "proxy_port": int,
     "proxy_dynamic_enabled": bool,
+    "proxy_refresh_use_proxy": bool,
+    "proxy_validate_use_proxy": bool,
     "herosms_enabled": bool,
     "herosms_country": int,
     "herosms_timeout": int,
@@ -914,6 +928,8 @@ class Settings(BaseModel):
     proxy_password: Optional[SecretStr] = None
     proxy_dynamic_enabled: bool = False
     proxy_dynamic_api_url: str = ""
+    proxy_refresh_use_proxy: bool = False
+    proxy_validate_use_proxy: bool = False
     proxy_dynamic_api_key: Optional[SecretStr] = None
     proxy_dynamic_api_key_header: str = "X-API-Key"
     proxy_dynamic_result_field: str = ""
