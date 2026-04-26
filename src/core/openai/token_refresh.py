@@ -20,6 +20,154 @@ from ...database.models import Account
 logger = logging.getLogger(__name__)
 
 
+def _error_text(response: cffi_requests.Response) -> str:
+    """尽量从响应中提取可读错误文本。"""
+    body_text = (response.text or "").strip()
+    try:
+        body = response.json()
+        if isinstance(body, dict):
+            error_obj = body.get("error")
+            if isinstance(error_obj, dict):
+                message = str(error_obj.get("message") or error_obj.get("code") or "").strip()
+                if message:
+                    return message
+            for key in ("error_description", "message", "detail", "code"):
+                message = str(body.get(key) or "").strip()
+                if message:
+                    return message
+    except Exception:
+        pass
+    return body_text[:300]
+
+
+def _is_deleted_or_deactivated(error_message: str) -> bool:
+    text = str(error_message or "").lower()
+    return (
+        "deleted or deactivated" in text
+        or "do not have an account because it has been deleted or deactivated" in text
+        or "account has been deactivated" in text
+    )
+
+
+def _is_forbidden_or_banned(error_message: str) -> bool:
+    text = str(error_message or "").lower()
+    if _looks_like_html_challenge(text):
+        return False
+    return (
+        "账号可能被封禁" in text
+        or "account banned" in text
+        or "user banned" in text
+        or "account suspended" in text
+        or "user suspended" in text
+        or "your account has been suspended" in text
+    )
+
+
+def _looks_like_html_challenge(text: str) -> bool:
+    text = str(text or "").lower()
+    return (
+        "<html" in text
+        or "<!doctype html" in text
+        or "<head>" in text
+        or "cloudflare" in text
+        or "just a moment" in text
+        or "enable javascript" in text
+        or "cf-ray" in text
+    )
+
+
+def _should_mark_oauth_recovery_required(error_message: str) -> bool:
+    text = str(error_message or "").lower()
+    markers = [
+        "refresh_token 已失效",
+        "refresh token has already been used",
+        "一次性令牌已被使用",
+        "invalid_grant",
+        "refresh_token 无效或已过期",
+        "账号没有可用的刷新方式",
+        "缺少 session_token 和 refresh_token",
+    ]
+    return any(marker.lower() in text for marker in markers)
+
+
+def _mark_account_deleted_or_deactivated(db, account: Account, reason: str) -> None:
+    extra = dict(account.extra_data or {})
+    extra["openai_account_state"] = "deleted_or_deactivated"
+    extra["openai_account_state_reason"] = reason
+    extra["openai_account_state_marked_at"] = datetime.utcnow().isoformat()
+    extra["oauth_recovery_required"] = False
+    crud.update_account(db, account.id, status="banned", extra_data=extra)
+
+
+def _mark_account_forbidden_or_banned(db, account: Account, reason: str) -> None:
+    extra = dict(account.extra_data or {})
+    extra["openai_account_state"] = "forbidden_or_banned"
+    extra["openai_account_state_reason"] = reason
+    extra["openai_account_state_marked_at"] = datetime.utcnow().isoformat()
+    crud.update_account(db, account.id, status="banned", extra_data=extra)
+
+
+def _mark_oauth_recovery_required(db, account: Account, reason: str) -> None:
+    extra = dict(account.extra_data or {})
+    extra["oauth_recovery_required"] = True
+    extra["oauth_recovery_required_reason"] = reason
+    extra["oauth_recovery_required_marked_at"] = datetime.utcnow().isoformat()
+    crud.update_account(
+        db,
+        account.id,
+        status="failed",
+        extra_data=extra,
+    )
+
+
+def _mark_access_token_expired(db, account: Account, reason: str) -> None:
+    extra = dict(account.extra_data or {})
+    extra["token_validation_state"] = "access_token_invalid_or_expired"
+    extra["token_validation_reason"] = reason
+    extra["token_validation_marked_at"] = datetime.utcnow().isoformat()
+    crud.update_account(db, account.id, status="expired", extra_data=extra)
+
+
+def _clear_success_state(db, account: Account, *, clear_oauth_recovery: bool = False) -> None:
+    extra = dict(account.extra_data or {})
+    for key in (
+        "token_validation_state",
+        "token_validation_reason",
+        "token_validation_marked_at",
+    ):
+        extra.pop(key, None)
+    if clear_oauth_recovery:
+        for key in (
+            "oauth_recovery_required",
+            "oauth_recovery_required_reason",
+            "oauth_recovery_required_marked_at",
+        ):
+            extra.pop(key, None)
+
+    # 验证/刷新成功时，清理会被成功结果推翻的暂态标记。
+    # deleted_or_deactivated 这类硬状态不应在这里静默清理；
+    # 但 forbidden_or_banned 常见于旧版本将 HTML challenge / 代理风控误判为封禁，
+    # 一旦 token 再次验证成功，说明该标记已经失效，应立即移除，避免页面持续显示“疑似封禁”。
+    openai_state = str(extra.get("openai_account_state") or "").strip().lower()
+    if openai_state == "forbidden_or_banned":
+        for key in (
+            "openai_account_state",
+            "openai_account_state_reason",
+            "openai_account_state_marked_at",
+        ):
+            extra.pop(key, None)
+
+    if str(extra.get("openai_auth_state") or "").strip().lower() == "mfa_required":
+        for key in (
+            "openai_auth_state",
+            "openai_auth_state_reason",
+            "openai_auth_state_marked_at",
+        ):
+            extra.pop(key, None)
+
+    crud.update_account(db, account.id, status="active", extra_data=extra)
+
+
 @dataclass
 class TokenRefreshResult:
     """Token 刷新结果"""
@@ -60,17 +208,7 @@ class TokenRefreshManager:
     def _parse_oauth_error(self, response: cffi_requests.Response) -> str:
         """解析 OAuth 错误信息"""
         body_text = (response.text or "").strip()
-        error_message = ""
-
-        try:
-            body = response.json()
-            error_obj = body.get("error") if isinstance(body, dict) else None
-            if isinstance(error_obj, dict):
-                error_message = str(error_obj.get("message") or "").strip()
-            elif isinstance(body, dict):
-                error_message = str(body.get("error_description") or body.get("message") or "").strip()
-        except Exception:
-            pass
+        error_message = _error_text(response)
 
         error_lower = error_message.lower()
         if "refresh token has already been used" in error_lower:
@@ -291,11 +429,18 @@ class TokenRefreshManager:
             if response.status_code == 200:
                 return True, None
             elif response.status_code == 401:
-                return False, "Token 无效或已过期"
+                detail = _error_text(response)
+                return False, f"Token 无效或已过期{': ' + detail if detail else ''}"
             elif response.status_code == 403:
-                return False, "账号可能被封禁"
+                detail = _error_text(response)
+                if _is_deleted_or_deactivated(detail):
+                    return False, f"账号已删除或停用: {detail}"
+                if _looks_like_html_challenge(detail):
+                    return False, "验证受阻: HTTP 403 返回 HTML/挑战页，疑似代理/IP/Cloudflare 风控，并非账号封禁"
+                return False, f"账号可能被封禁{': ' + detail if detail else ''}"
             else:
-                return False, f"验证失败: HTTP {response.status_code}"
+                detail = _error_text(response)
+                return False, f"验证失败: HTTP {response.status_code}{', ' + detail if detail else ''}"
 
         except Exception as e:
             return False, f"验证异常: {str(e)}"
@@ -333,7 +478,40 @@ def refresh_account_token(account_id: int, proxy_url: Optional[str] = None) -> T
             if result.expires_at:
                 update_data["expires_at"] = result.expires_at
 
+            extra = dict(account.extra_data or {})
+            for key in (
+                "oauth_recovery_required",
+                "oauth_recovery_required_reason",
+                "oauth_recovery_required_marked_at",
+                "token_validation_state",
+                "token_validation_reason",
+                "token_validation_marked_at",
+            ):
+                extra.pop(key, None)
+            if str(extra.get("openai_account_state") or "").strip().lower() == "forbidden_or_banned":
+                for key in (
+                    "openai_account_state",
+                    "openai_account_state_reason",
+                    "openai_account_state_marked_at",
+                ):
+                    extra.pop(key, None)
+            if str(extra.get("openai_auth_state") or "").strip().lower() == "mfa_required":
+                for key in (
+                    "openai_auth_state",
+                    "openai_auth_state_reason",
+                    "openai_auth_state_marked_at",
+                ):
+                    extra.pop(key, None)
+            update_data["extra_data"] = extra
+            update_data["status"] = "active"
             crud.update_account(db, account_id, **update_data)
+        else:
+            if _is_deleted_or_deactivated(result.error_message):
+                _mark_account_deleted_or_deactivated(db, account, result.error_message)
+            elif _is_forbidden_or_banned(result.error_message):
+                _mark_account_forbidden_or_banned(db, account, result.error_message)
+            elif _should_mark_oauth_recovery_required(result.error_message):
+                _mark_oauth_recovery_required(db, account, result.error_message)
 
         return result
 
@@ -355,7 +533,23 @@ def validate_account_token(account_id: int, proxy_url: Optional[str] = None) -> 
             return False, "账号不存在"
 
         if not account.access_token:
+            _mark_oauth_recovery_required(db, account, "账号没有 access_token，需要补录 OAuth")
             return False, "账号没有 access_token"
 
         manager = TokenRefreshManager(proxy_url=proxy_url)
-        return manager.validate_token(account.access_token)
+        is_valid, error = manager.validate_token(account.access_token)
+        if is_valid:
+            _clear_success_state(db, account, clear_oauth_recovery=False)
+            return True, None
+
+        error = error or "Token 验证失败"
+        if _is_deleted_or_deactivated(error):
+            _mark_account_deleted_or_deactivated(db, account, error)
+        elif _is_forbidden_or_banned(error):
+            _mark_account_forbidden_or_banned(db, account, error)
+        elif "Token 无效或已过期" in error or "HTTP 401" in error:
+            _mark_access_token_expired(db, account, error)
+        elif "账号没有 access_token" in error:
+            _mark_oauth_recovery_required(db, account, error)
+
+        return False, error

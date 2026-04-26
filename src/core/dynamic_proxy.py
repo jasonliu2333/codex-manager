@@ -10,7 +10,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-def fetch_dynamic_proxy(api_url: str, api_key: str = "", api_key_header: str = "X-API-Key", result_field: str = "") -> Optional[str]:
+def fetch_dynamic_proxy(api_url: str, api_key: str = "", api_key_header: str = "X-API-Key", result_field: str = "", retries: int = 3) -> Optional[str]:
     """
     从代理 API 获取代理 URL
 
@@ -23,71 +23,80 @@ def fetch_dynamic_proxy(api_url: str, api_key: str = "", api_key_header: str = "
     Returns:
         代理 URL 字符串（如 http://user:pass@host:port），失败返回 None
     """
-    try:
-        from curl_cffi import requests as cffi_requests
+    from curl_cffi import requests as cffi_requests
 
-        headers = {}
-        if api_key:
-            headers[api_key_header] = api_key
+    headers = {}
+    if api_key:
+        headers[api_key_header] = api_key
 
-        response = cffi_requests.get(
-            api_url,
-            headers=headers,
-            timeout=10,
-            impersonate="chrome110"
-        )
+    last_error = None
+    max_attempts = max(1, int(retries or 1))
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = cffi_requests.get(
+                api_url,
+                headers=headers,
+                timeout=10,
+                impersonate="chrome110"
+            )
 
-        if response.status_code != 200:
-            logger.warning(f"动态代理 API 返回错误状态码: {response.status_code}")
-            return None
+            if response.status_code != 200:
+                last_error = f"动态代理 API 返回错误状态码: {response.status_code}"
+                logger.warning(f"{last_error} (第 {attempt}/{max_attempts} 次)")
+                continue
 
-        text = response.text.strip()
+            text = response.text.strip()
 
-        # 尝试解析 JSON
-        if result_field or text.startswith("{") or text.startswith("["):
-            try:
-                import json
-                data = json.loads(text)
-                if result_field:
-                    # 按点号路径逐层提取
-                    for key in result_field.split("."):
-                        if isinstance(data, dict):
-                            data = data.get(key)
-                        elif isinstance(data, list) and key.isdigit():
-                            data = data[int(key)]
-                        else:
-                            data = None
-                        if data is None:
-                            break
-                    proxy_url = str(data).strip() if data is not None else None
-                else:
-                    # 无指定字段，尝试常见键名
-                    for key in ("proxy", "url", "proxy_url", "data", "ip"):
-                        val = data.get(key) if isinstance(data, dict) else None
-                        if val:
-                            proxy_url = str(val).strip()
-                            break
+            # 尝试解析 JSON
+            if result_field or text.startswith("{") or text.startswith("["):
+                try:
+                    import json
+                    data = json.loads(text)
+                    if result_field:
+                        # 按点号路径逐层提取
+                        for key in result_field.split("."):
+                            if isinstance(data, dict):
+                                data = data.get(key)
+                            elif isinstance(data, list) and key.isdigit():
+                                data = data[int(key)]
+                            else:
+                                data = None
+                            if data is None:
+                                break
+                        proxy_url = str(data).strip() if data is not None else None
                     else:
-                        proxy_url = text
-            except (ValueError, AttributeError):
+                        # 无指定字段，尝试常见键名
+                        for key in ("proxy", "url", "proxy_url", "data", "ip"):
+                            val = data.get(key) if isinstance(data, dict) else None
+                            if val:
+                                proxy_url = str(val).strip()
+                                break
+                        else:
+                            proxy_url = text
+                except (ValueError, AttributeError):
+                    proxy_url = text
+            else:
                 proxy_url = text
-        else:
-            proxy_url = text
 
-        if not proxy_url:
-            logger.warning("动态代理 API 返回空代理 URL")
-            return None
+            if not proxy_url:
+                last_error = "动态代理 API 返回空代理 URL"
+                logger.warning(f"{last_error} (第 {attempt}/{max_attempts} 次)")
+                continue
 
-        # 若未包含协议头，默认加 http://
-        if not re.match(r'^(http|socks5)://', proxy_url):
-            proxy_url = "http://" + proxy_url
+            # 若未包含协议头，默认加 http://
+            if not re.match(r'^(http|socks5)://', proxy_url):
+                proxy_url = "http://" + proxy_url
 
-        logger.info(f"动态代理获取成功: {proxy_url[:40]}..." if len(proxy_url) > 40 else f"动态代理获取成功: {proxy_url}")
-        return proxy_url
+            logger.info(f"动态代理获取成功: {proxy_url[:40]}..." if len(proxy_url) > 40 else f"动态代理获取成功: {proxy_url}")
+            return proxy_url
 
-    except Exception as e:
-        logger.error(f"获取动态代理失败: {e}")
-        return None
+        except Exception as e:
+            last_error = str(e)
+            logger.error(f"获取动态代理失败(第 {attempt}/{max_attempts} 次): {e}")
+            continue
+
+    logger.error(f"获取动态代理最终失败: {last_error}")
+    return None
 
 
 def get_proxy_url_for_task() -> Optional[str]:

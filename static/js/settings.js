@@ -68,6 +68,9 @@ const elements = {
     testTmServiceBtn: document.getElementById('test-tm-service-btn'),
     // 验证码设置
     emailCodeForm: document.getElementById('email-code-form'),
+    // HeroSMS 设置
+    herosmsSettingsForm: document.getElementById('herosms-settings-form'),
+    testHeroSMSBtn: document.getElementById('test-herosms-btn'),
     // Outlook 设置
     outlookSettingsForm: document.getElementById('outlook-settings-form'),
     // Web UI 访问控制
@@ -76,6 +79,7 @@ const elements = {
 
 // 选中的服务 ID
 let selectedServiceIds = new Set();
+let herosmsCountries = [];
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -87,6 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCpaServices();
     loadSub2ApiServices();
     loadTmServices();
+    loadHeroSMSCountries();
     initEventListeners();
 });
 
@@ -239,6 +244,27 @@ function initEventListeners() {
         elements.emailCodeForm.addEventListener('submit', handleSaveEmailCode);
     }
 
+    // HeroSMS 设置
+    if (elements.herosmsSettingsForm) {
+        elements.herosmsSettingsForm.addEventListener('submit', handleSaveHeroSMS);
+    }
+    if (elements.testHeroSMSBtn) {
+        elements.testHeroSMSBtn.addEventListener('click', handleTestHeroSMS);
+    }
+    const herosmsCountrySearch = document.getElementById('herosms-country-search');
+    if (herosmsCountrySearch) {
+        herosmsCountrySearch.addEventListener('input', renderHeroSMSCountryMenu);
+        herosmsCountrySearch.addEventListener('focus', renderHeroSMSCountryMenu);
+        herosmsCountrySearch.addEventListener('change', handleHeroSMSCountrySearchChange);
+    }
+    document.addEventListener('click', (e) => {
+        const box = document.getElementById('herosms-country-select');
+        const menu = document.getElementById('herosms-country-menu');
+        if (box && menu && !box.contains(e.target)) {
+            menu.classList.remove('active');
+        }
+    });
+
     // Outlook 设置
     if (elements.outlookSettingsForm) {
         elements.outlookSettingsForm.addEventListener('submit', handleSaveOutlookSettings);
@@ -334,11 +360,30 @@ async function loadSettings() {
         if (dynamicKeyStatus) {
             dynamicKeyStatus.textContent = data.proxy?.has_dynamic_api_key ? '已保存 API Key' : '未保存 API Key';
         }
+        const proxyDiagnostics = data.proxy?.diagnostics || {};
+        const diagSource = document.getElementById('proxy-diagnostics-source');
+        const diagDynamicKey = document.getElementById('proxy-diagnostics-dynamic-key');
+        const diagStaticPassword = document.getElementById('proxy-diagnostics-static-password');
+        const diagDbPath = document.getElementById('proxy-diagnostics-db-path');
+        if (diagSource) diagSource.textContent = proxyDiagnostics.settings_source || '-';
+        if (diagDynamicKey) diagDynamicKey.textContent = proxyDiagnostics.has_dynamic_api_key ? '是' : '否';
+        if (diagStaticPassword) diagStaticPassword.textContent = proxyDiagnostics.has_static_proxy_password ? '是' : '否';
+        if (diagDbPath) diagDbPath.textContent = proxyDiagnostics.database_path || proxyDiagnostics.database_url || '-';
 
         // 注册配置
         document.getElementById('max-retries').value = data.registration?.max_retries || 3;
         document.getElementById('timeout').value = data.registration?.timeout || 120;
         document.getElementById('password-length').value = data.registration?.default_password_length || 12;
+        const flowSelect = document.getElementById('registration-flow-template');
+        if (flowSelect) {
+            const templates = data.registration?.templates || [];
+            if (templates.length > 0) {
+                flowSelect.innerHTML = templates.map(tpl => `
+                    <option value="${tpl.id}">${tpl.name || tpl.id}</option>
+                `).join('');
+            }
+            flowSelect.value = data.registration?.flow_template || 'default';
+        }
         document.getElementById('sleep-min').value = data.registration?.sleep_min || 5;
         document.getElementById('sleep-max').value = data.registration?.sleep_max || 30;
 
@@ -346,6 +391,37 @@ async function loadSettings() {
         if (data.email_code) {
             document.getElementById('email-code-timeout').value = data.email_code.timeout || 120;
             document.getElementById('email-code-poll-interval').value = data.email_code.poll_interval || 3;
+        }
+
+        // HeroSMS 接码配置
+        if (data.herosms) {
+            document.getElementById('herosms-enabled').checked = !!data.herosms.enabled;
+            document.getElementById('herosms-service').value = data.herosms.service || 'dr';
+            document.getElementById('herosms-country').value = data.herosms.country || 187;
+            updateHeroSMSCountrySearch(data.herosms.country || 187);
+            document.getElementById('herosms-max-price').value = data.herosms.max_price ?? '-1';
+            document.getElementById('herosms-proxy').value = data.herosms.proxy || '';
+            document.getElementById('herosms-timeout').value = data.herosms.timeout || 30;
+            document.getElementById('herosms-verify-timeout').value = data.herosms.verify_timeout || 180;
+            document.getElementById('herosms-poll-interval').value = data.herosms.poll_interval || 3;
+            document.getElementById('herosms-lowest-price-first').checked = data.herosms.lowest_price_first !== false;
+            document.getElementById('herosms-max-number-attempts').value = data.herosms.max_number_attempts || 1;
+            document.getElementById('herosms-target-number-index').value = data.herosms.target_number_index || 1;
+            document.getElementById('herosms-price-relax-enabled').checked = data.herosms.price_relax_enabled !== false;
+            document.getElementById('herosms-price-relax-max-multiplier').value = data.herosms.price_relax_max_multiplier || 5;
+            document.getElementById('herosms-reuse-enabled').checked = !!data.herosms.reuse_enabled;
+            document.getElementById('herosms-reuse-max-uses').value = data.herosms.reuse_max_uses || 2;
+            const keyInput = document.getElementById('herosms-api-key');
+            const keyStatus = document.getElementById('herosms-api-key-status');
+            if (keyInput) {
+                keyInput.value = '';
+                keyInput.dataset.hasKey = data.herosms.has_api_key ? '1' : '0';
+                keyInput.placeholder = data.herosms.has_api_key ? '留空保持已保存 Key 不变' : '请输入 HeroSMS API Key';
+            }
+            if (keyStatus) {
+                keyStatus.dataset.hasKey = data.herosms.has_api_key ? '1' : '0';
+                keyStatus.textContent = data.herosms.has_api_key ? '当前已保存 API Key：是' : '当前已保存 API Key：否';
+            }
         }
 
         // 加载 Outlook 设置
@@ -481,6 +557,7 @@ async function handleSaveRegistration(e) {
         max_retries: parseInt(document.getElementById('max-retries').value),
         timeout: parseInt(document.getElementById('timeout').value),
         default_password_length: parseInt(document.getElementById('password-length').value),
+        flow_template: document.getElementById('registration-flow-template')?.value || 'default',
         sleep_min: parseInt(document.getElementById('sleep-min').value),
         sleep_max: parseInt(document.getElementById('sleep-max').value),
     };
@@ -521,6 +598,165 @@ async function handleSaveEmailCode(e) {
     } catch (error) {
         toast.error('保存失败: ' + error.message);
     }
+}
+
+// 保存 HeroSMS 接码配置
+async function handleSaveHeroSMS(e) {
+    e.preventDefault();
+
+    const data = {
+        enabled: document.getElementById('herosms-enabled').checked,
+        api_key: document.getElementById('herosms-api-key').value || null,
+        service: document.getElementById('herosms-service').value.trim() || 'dr',
+        country: parseInt(document.getElementById('herosms-country').value) || 187,
+        max_price: document.getElementById('herosms-max-price').value.trim() || '-1',
+        proxy: document.getElementById('herosms-proxy').value.trim(),
+        timeout: parseInt(document.getElementById('herosms-timeout').value) || 30,
+        verify_timeout: parseInt(document.getElementById('herosms-verify-timeout').value) || 180,
+        poll_interval: parseInt(document.getElementById('herosms-poll-interval').value) || 3,
+        lowest_price_first: document.getElementById('herosms-lowest-price-first').checked,
+        max_number_attempts: parseInt(document.getElementById('herosms-max-number-attempts').value) || 1,
+        target_number_index: parseInt(document.getElementById('herosms-target-number-index').value) || 1,
+        price_relax_enabled: document.getElementById('herosms-price-relax-enabled').checked,
+        price_relax_max_multiplier: parseInt(document.getElementById('herosms-price-relax-max-multiplier').value) || 5,
+        reuse_enabled: document.getElementById('herosms-reuse-enabled').checked,
+        reuse_max_uses: parseInt(document.getElementById('herosms-reuse-max-uses').value) || 2,
+    };
+
+    if (data.country <= 0) {
+        toast.error('国家代码必须大于 0');
+        return;
+    }
+    if (data.verify_timeout < 30 || data.verify_timeout > 600) {
+        toast.error('短信等待超时必须在 30-600 秒之间');
+        return;
+    }
+    if (data.max_number_attempts < 1 || data.max_number_attempts > 20) {
+        toast.error('最大换号次数必须在 1-20 之间');
+        return;
+    }
+    if (data.target_number_index < 1 || data.target_number_index > data.max_number_attempts) {
+        toast.error('使用第 N 个号码必须在 1 到最大换号次数之间');
+        return;
+    }
+    if (data.price_relax_max_multiplier < 1 || data.price_relax_max_multiplier > 20) {
+        toast.error('价格放宽最大倍数必须在 1-20 之间');
+        return;
+    }
+    if (data.reuse_max_uses < 1 || data.reuse_max_uses > 5) {
+        toast.error('号码复用次数必须在 1-5 之间');
+        return;
+    }
+
+    try {
+        await api.post('/settings/herosms', data);
+        toast.success(data.enabled ? 'HeroSMS 已启用' : 'HeroSMS 已关闭');
+        document.getElementById('herosms-api-key').value = '';
+        loadSettings();
+    } catch (error) {
+        toast.error('保存失败: ' + error.message);
+    }
+}
+
+async function handleTestHeroSMS() {
+    const btn = elements.testHeroSMSBtn;
+    if (!btn) return;
+    btn.disabled = true;
+    btn.textContent = '测试中...';
+    try {
+        const result = await api.post('/settings/herosms/test', {
+            api_key: document.getElementById('herosms-api-key').value || null,
+            proxy: document.getElementById('herosms-proxy').value.trim() || ''
+        });
+        if (result.success) {
+            toast.success(result.message);
+        } else {
+            toast.error(result.message);
+        }
+    } catch (error) {
+        toast.error('测试失败: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔌 测试 HeroSMS 连接';
+    }
+}
+
+async function loadHeroSMSCountries() {
+    const menu = document.getElementById('herosms-country-menu');
+    if (!menu) return;
+    try {
+        const data = await api.get('/settings/herosms/countries');
+        herosmsCountries = data.countries || [];
+        const current = parseInt(document.getElementById('herosms-country')?.value) || 187;
+        updateHeroSMSCountrySearch(current);
+    } catch (error) {
+        console.warn('加载 HeroSMS 国家列表失败:', error);
+        menu.innerHTML = '<div class="search-select-item">国家列表加载失败</div>';
+    }
+}
+
+function handleHeroSMSCountrySearchChange() {
+    const input = document.getElementById('herosms-country-search');
+    const countryInput = document.getElementById('herosms-country');
+    if (!input || !countryInput) return;
+    const value = input.value.trim();
+    const matched = herosmsCountries.find(c => c.display === value)
+        || herosmsCountries.find(c => String(c.code) === value)
+        || herosmsCountries.find(c => (c.name || '').toLowerCase() === value.toLowerCase());
+    if (matched) {
+        selectHeroSMSCountry(matched);
+    }
+}
+
+function updateHeroSMSCountrySearch(code) {
+    const input = document.getElementById('herosms-country-search');
+    if (!input) return;
+    const matched = herosmsCountries.find(c => String(c.code) === String(code));
+    input.value = matched ? matched.display : '';
+}
+
+function renderHeroSMSCountryMenu() {
+    const input = document.getElementById('herosms-country-search');
+    const menu = document.getElementById('herosms-country-menu');
+    if (!input || !menu) return;
+    const query = input.value.trim().toLowerCase();
+    const items = herosmsCountries.filter(c => {
+        const haystack = [
+            c.code,
+            c.name,
+            c.zh_name,
+            c.en_name,
+            c.display
+        ].join(' ').toLowerCase();
+        return !query || haystack.includes(query);
+    }).slice(0, 80);
+
+    if (items.length === 0) {
+        menu.innerHTML = '<div class="search-select-item">没有匹配的国家</div>';
+    } else {
+        menu.innerHTML = items.map(c => `
+            <div class="search-select-item" data-code="${c.code}">
+                ${escapeHtml(c.display)}
+                <span class="muted">代码 ${c.code}</span>
+            </div>
+        `).join('');
+        menu.querySelectorAll('.search-select-item[data-code]').forEach(item => {
+            item.addEventListener('click', () => {
+                const country = herosmsCountries.find(c => String(c.code) === String(item.dataset.code));
+                if (country) selectHeroSMSCountry(country);
+            });
+        });
+    }
+    menu.classList.add('active');
+}
+
+function selectHeroSMSCountry(country) {
+    const input = document.getElementById('herosms-country-search');
+    const countryInput = document.getElementById('herosms-country');
+    const menu = document.getElementById('herosms-country-menu');
+    if (countryInput) countryInput.value = country.code;
+    if (input) input.value = country.display;
+    if (menu) menu.classList.remove('active');
 }
 
 // 备份数据库

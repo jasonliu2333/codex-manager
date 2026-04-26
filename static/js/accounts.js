@@ -375,7 +375,26 @@ function renderAccounts(accounts) {
                     : '-'}
             </td>
             <td>${getServiceTypeText(account.email_service)}</td>
-            <td>${getStatusIcon(account.status)}</td>
+            <td>
+                <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;">
+                    ${getStatusIcon(account.status)}
+                    ${account.extra_data?.openai_account_state === 'deleted_or_deactivated'
+                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_account_state_reason || 'OpenAI 标记为已删除/停用')}">已删除/停用</span>`
+                        : ''}
+                    ${account.extra_data?.openai_account_state === 'forbidden_or_banned'
+                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_account_state_reason || 'OpenAI 返回禁止访问/疑似封禁')}">疑似封禁</span>`
+                        : ''}
+                    ${account.extra_data?.openai_auth_state === 'mfa_required'
+                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_auth_state_reason || '该账号需要 MFA 二次验证')}">需要MFA</span>`
+                        : ''}
+                    ${account.extra_data?.oauth_recovery_required
+                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.oauth_recovery_required_reason || 'refresh_token 已失效，需要补录 OAuth')}">需要补录</span>`
+                        : ''}
+                    ${account.extra_data?.token_validation_state === 'access_token_invalid_or_expired'
+                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.token_validation_reason || 'access_token 无效或已过期')}">Token过期</span>`
+                        : ''}
+                </div>
+            </td>
             <td>
                 <div class="cpa-status">
                     ${renderTokenStatusBadge(account)}
@@ -464,6 +483,14 @@ function renderAccounts(accounts) {
 function renderTokenStatusBadge(account) {
     if (!account.has_tokens) {
         return '<span class="badge pending" title="缺少 access_token 或 refresh_token">缺失</span>';
+    }
+
+    if (account.extra_data?.oauth_recovery_required) {
+        return '<span class="badge pending" title="refresh_token 已失效或缺少可用刷新方式，需要补录 OAuth">需补录</span>';
+    }
+
+    if (account.extra_data?.token_validation_state === 'access_token_invalid_or_expired') {
+        return '<span class="badge pending" title="验证发现 access_token 无效或已过期">过期</span>';
     }
 
     if (account.status === 'expired') {
@@ -790,6 +817,18 @@ async function viewAccount(id) {
     try {
         const account = await api.get(`/accounts/${id}`);
         const tokens = await api.get(`/accounts/${id}/tokens`);
+        const openaiState = account.extra_data?.openai_account_state || '';
+        const openaiStateReason = account.extra_data?.openai_account_state_reason || '';
+        const openaiStateMarkedAt = account.extra_data?.openai_account_state_marked_at || '';
+        const openaiAuthState = account.extra_data?.openai_auth_state || '';
+        const openaiAuthReason = account.extra_data?.openai_auth_state_reason || '';
+        const openaiAuthMarkedAt = account.extra_data?.openai_auth_state_marked_at || '';
+        const oauthRecoveryRequired = !!account.extra_data?.oauth_recovery_required;
+        const oauthRecoveryReason = account.extra_data?.oauth_recovery_required_reason || '';
+        const oauthRecoveryMarkedAt = account.extra_data?.oauth_recovery_required_marked_at || '';
+        const tokenValidationState = account.extra_data?.token_validation_state || '';
+        const tokenValidationReason = account.extra_data?.token_validation_reason || '';
+        const tokenValidationMarkedAt = account.extra_data?.token_validation_marked_at || '';
 
         elements.modalBody.innerHTML = `
             <div class="info-grid">
@@ -821,6 +860,21 @@ async function viewAccount(id) {
                         <span class="status-badge ${getStatusClass('account', account.status)}">
                             ${getStatusText('account', account.status)}
                         </span>
+                        ${openaiState === 'deleted_or_deactivated'
+                            ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(openaiStateReason || 'OpenAI 标记为已删除/停用')}">已删除/停用</span>`
+                            : ''}
+                        ${openaiState === 'forbidden_or_banned'
+                            ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(openaiStateReason || 'OpenAI 返回禁止访问/疑似封禁')}">疑似封禁</span>`
+                            : ''}
+                        ${openaiAuthState === 'mfa_required'
+                            ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(openaiAuthReason || '该账号需要 MFA 二次验证')}">需要MFA</span>`
+                            : ''}
+                        ${oauthRecoveryRequired
+                            ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(oauthRecoveryReason || 'refresh_token 已失效，需要补录 OAuth')}">需要补录</span>`
+                            : ''}
+                        ${tokenValidationState === 'access_token_invalid_or_expired'
+                            ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(tokenValidationReason || 'access_token 无效或已过期')}">Token过期</span>`
+                            : ''}
                     </span>
                 </div>
                 <div class="info-item">
@@ -849,6 +903,66 @@ async function viewAccount(id) {
                         ${escapeHtml(account.client_id || '-')}
                     </span>
                 </div>
+                ${(openaiState === 'deleted_or_deactivated' || openaiState === 'forbidden_or_banned') ? `
+                <div class="info-item" style="grid-column: span 2;">
+                    <span class="label">OpenAI 标记</span>
+                    <span class="value">
+                        ${openaiState === 'deleted_or_deactivated' ? '已删除/停用' : '疑似封禁/禁止访问'}
+                        ${openaiStateMarkedAt ? `<span style="color:var(--text-muted);font-size:0.8rem;">（标记时间：${format.date(openaiStateMarkedAt)}）</span>` : ''}
+                    </span>
+                </div>
+                <div class="info-item" style="grid-column: span 2;">
+                    <span class="label">OpenAI 原因</span>
+                    <span class="value" style="font-size: 0.875rem; word-break: break-word;">
+                        ${escapeHtml(openaiStateReason || '-')}
+                    </span>
+                </div>
+                ` : ''}
+                ${openaiAuthState === 'mfa_required' ? `
+                <div class="info-item" style="grid-column: span 2;">
+                    <span class="label">OpenAI 认证状态</span>
+                    <span class="value">
+                        需要 MFA 二次验证
+                        ${openaiAuthMarkedAt ? `<span style="color:var(--text-muted);font-size:0.8rem;">（标记时间：${format.date(openaiAuthMarkedAt)}）</span>` : ''}
+                    </span>
+                </div>
+                <div class="info-item" style="grid-column: span 2;">
+                    <span class="label">MFA 原因</span>
+                    <span class="value" style="font-size: 0.875rem; word-break: break-word;">
+                        ${escapeHtml(openaiAuthReason || '-')}
+                    </span>
+                </div>
+                ` : ''}
+                ${tokenValidationState === 'access_token_invalid_or_expired' ? `
+                <div class="info-item" style="grid-column: span 2;">
+                    <span class="label">Token 验证状态</span>
+                    <span class="value">
+                        access_token 无效或已过期
+                        ${tokenValidationMarkedAt ? `<span style="color:var(--text-muted);font-size:0.8rem;">（标记时间：${format.date(tokenValidationMarkedAt)}）</span>` : ''}
+                    </span>
+                </div>
+                <div class="info-item" style="grid-column: span 2;">
+                    <span class="label">Token 验证原因</span>
+                    <span class="value" style="font-size: 0.875rem; word-break: break-word;">
+                        ${escapeHtml(tokenValidationReason || '-')}
+                    </span>
+                </div>
+                ` : ''}
+                ${oauthRecoveryRequired ? `
+                <div class="info-item" style="grid-column: span 2;">
+                    <span class="label">OAuth 补录状态</span>
+                    <span class="value">
+                        需要补录
+                        ${oauthRecoveryMarkedAt ? `<span style="color:var(--text-muted);font-size:0.8rem;">（标记时间：${format.date(oauthRecoveryMarkedAt)}）</span>` : ''}
+                    </span>
+                </div>
+                <div class="info-item" style="grid-column: span 2;">
+                    <span class="label">补录原因</span>
+                    <span class="value" style="font-size: 0.875rem; word-break: break-word;">
+                        ${escapeHtml(oauthRecoveryReason || '-')}
+                    </span>
+                </div>
+                ` : ''}
                 <div class="info-item" style="grid-column: span 2;">
                     <span class="label">Access Token</span>
                     <div class="value" style="font-size: 0.7rem; word-break: break-all; font-family: var(--font-mono); background: var(--surface-hover); padding: 8px; border-radius: 4px;">
@@ -872,6 +986,19 @@ async function viewAccount(id) {
                         <button class="btn btn-secondary btn-sm" style="margin-top:4px" onclick="saveCookies(${id})">
                             保存 Cookies
                         </button>
+                    </div>
+                </div>
+                <div class="info-item" style="grid-column: span 2;">
+                    <span class="label">MFA 密钥（TOTP）</span>
+                    <div class="value">
+                        <input id="mfa-secret-input-${id}" type="password"
+                            value="${escapeHtml(account.mfa_secret || '')}"
+                            style="width:100%;font-size:0.8rem;font-family:var(--font-mono);background:var(--surface-hover);border:1px solid var(--border);border-radius:4px;padding:6px;color:var(--text-primary);"
+                            placeholder="填入 TOTP/Base32 密钥；留空并保存可清空">
+                        <div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <button class="btn btn-secondary btn-sm" onclick="saveMfaSecret(${id})">保存 MFA 密钥</button>
+                            <span style="color:var(--text-muted);font-size:0.8rem;">${account.mfa_secret ? '当前已配置' : '当前未配置'}</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1509,6 +1636,19 @@ async function saveCookies(id) {
         toast.success('Cookies 已保存');
     } catch (e) {
         toast.error('保存 Cookies 失败: ' + e.message);
+    }
+}
+
+async function saveMfaSecret(id) {
+    const input = document.getElementById(`mfa-secret-input-${id}`);
+    if (!input) return;
+    const secret = input.value.trim();
+    try {
+        await api.patch(`/accounts/${id}`, { mfa_secret: secret });
+        toast.success(secret ? 'MFA 密钥已保存' : 'MFA 密钥已清空');
+        await viewAccount(id);
+    } catch (e) {
+        toast.error('保存 MFA 密钥失败: ' + e.message);
     }
 }
 

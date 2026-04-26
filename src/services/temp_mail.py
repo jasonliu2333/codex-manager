@@ -13,6 +13,7 @@ from email import message_from_string
 from email.header import decode_header, make_header
 from email.message import Message
 from email.policy import default as email_policy
+from email.utils import parsedate_to_datetime
 from html import unescape
 from typing import Optional, Dict, Any, List
 
@@ -68,6 +69,8 @@ class TempMailService(BaseEmailService):
 
         # 邮箱缓存：email -> {jwt, address}
         self._email_cache: Dict[str, Dict[str, Any]] = {}
+        # 已使用的邮件 ID：email -> set(ids)
+        self._used_mail_ids: Dict[str, set] = {}
 
     def _decode_mime_header(self, value: str) -> str:
         """解码 MIME 头，兼容 RFC 2047 编码主题。"""
@@ -130,6 +133,13 @@ class TempMailService(BaseEmailService):
             or mail.get("fromAddress")
             or ""
         ).strip()
+        to_addr = str(
+            mail.get("to")
+            or mail.get("to_address")
+            or mail.get("recipient")
+            or mail.get("address")
+            or ""
+        ).strip()
         subject = str(mail.get("subject") or mail.get("title") or "").strip()
         body_text = str(
             mail.get("text")
@@ -144,6 +154,7 @@ class TempMailService(BaseEmailService):
             try:
                 message = message_from_string(raw, policy=email_policy)
                 sender = sender or self._decode_mime_header(message.get("From", ""))
+                to_addr = to_addr or self._decode_mime_header(message.get("To", ""))
                 subject = subject or self._decode_mime_header(message.get("Subject", ""))
                 parsed_body = self._extract_body_from_message(message)
                 if parsed_body:
@@ -155,6 +166,7 @@ class TempMailService(BaseEmailService):
         body_text = unescape(re.sub(r"<[^>]+>", " ", body_text))
         return {
             "sender": sender,
+            "to": to_addr,
             "subject": subject,
             "body": body_text,
             "raw": raw,
@@ -189,6 +201,20 @@ class TempMailService(BaseEmailService):
                 return dt.timestamp()
             except ValueError:
                 continue
+
+        raw = mail.get("raw")
+        if raw:
+            try:
+                message = message_from_string(str(raw), policy=email_policy)
+                date_header = message.get("Date")
+                if date_header:
+                    dt = parsedate_to_datetime(date_header)
+                    if dt is not None:
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        return dt.timestamp()
+            except Exception:
+                pass
 
         return None
 
@@ -329,9 +355,12 @@ class TempMailService(BaseEmailService):
         logger.info(f"正在从 TempMail 邮箱 {email} 获取验证码...")
 
         start_time = time.time()
+        target_email = (email or "").strip().lower()
+        used_ids = self._used_mail_ids.setdefault(target_email, set())
         seen_mail_ids: set = set()
         use_address_filter = True
         empty_cycles = 0
+        time_skew_seconds = 120
 
         # 优先使用用户级 JWT，回退到 admin API 先注释用户级API
         # cached = self._email_cache.get(email, {})
@@ -365,25 +394,51 @@ class TempMailService(BaseEmailService):
                     continue
                 empty_cycles = 0
 
-                for mail in mails:
+                def _mail_sort_key(item: Dict[str, Any]) -> tuple:
+                    mail_ts = self._extract_mail_timestamp(item)
+                    mail_id = item.get("id")
+                    mail_id_num = 0
+                    if mail_id is not None:
+                        try:
+                            mail_id_num = int(str(mail_id))
+                        except Exception:
+                            mail_id_num = 0
+                    return (mail_ts or 0, mail_id_num)
+
+                def _extract_emails(value: Any) -> List[str]:
+                    emails: List[str] = []
+                    if value is None:
+                        return emails
+                    if isinstance(value, (list, tuple, set)):
+                        for item in value:
+                            emails.extend(_extract_emails(item))
+                        return emails
+                    if isinstance(value, dict):
+                        for key in ("address", "email", "value"):
+                            if key in value:
+                                emails.extend(_extract_emails(value.get(key)))
+                                return emails
+                        return emails
+                    text = str(value)
+                    if not text:
+                        return emails
+                    matches = re.findall(r"[\w.+-]+@[\w.-]+\.\w+", text)
+                    if matches:
+                        emails.extend(matches)
+                        return emails
+                    parts = re.split(r"[;,\\s]+", text)
+                    emails.extend([part for part in parts if "@" in part])
+                    return emails
+
+                for mail in sorted(mails, key=_mail_sort_key, reverse=True):
                     mail_id = mail.get("id")
-                    if not mail_id or mail_id in seen_mail_ids:
+                    if not mail_id or mail_id in seen_mail_ids or mail_id in used_ids:
                         continue
 
                     seen_mail_ids.add(mail_id)
 
-                    address = str(
-                        mail.get("address")
-                        or mail.get("to")
-                        or mail.get("to_address")
-                        or mail.get("recipient")
-                        or ""
-                    ).strip().lower()
-                    if address and address != email.lower():
-                        continue
-
                     mail_timestamp = self._extract_mail_timestamp(mail)
-                    if otp_sent_at and mail_timestamp and mail_timestamp + 1 < otp_sent_at:
+                    if otp_sent_at and mail_timestamp and mail_timestamp < (otp_sent_at - time_skew_seconds):
                         continue
 
                     parsed = self._extract_mail_fields(mail)
@@ -398,17 +453,53 @@ class TempMailService(BaseEmailService):
                     subject = parsed["subject"]
                     body_text = parsed["body"]
                     raw_text = parsed["raw"]
-                    content = f"{sender}\n{subject}\n{body_text}\n{raw_text}".strip()
+                    mail_to = parsed.get("to") or ""
+                    address_candidates = set()
+                    for addr_val in (
+                        mail.get("address"),
+                        mail.get("to"),
+                        mail.get("to_address"),
+                        mail.get("recipient"),
+                        mail_to,
+                    ):
+                        for item in _extract_emails(addr_val):
+                            address_candidates.add(item.lower())
+                    if address_candidates and target_email and target_email not in address_candidates:
+                        continue
 
-                    match = re.search(pattern, content)
-                    if match:
+                    raw_body = ""
+                    if raw_text:
+                        if "\r\n\r\n" in raw_text:
+                            raw_body = raw_text.split("\r\n\r\n", 1)[1]
+                        elif "\n\n" in raw_text:
+                            raw_body = raw_text.split("\n\n", 1)[1]
+                        else:
+                            raw_body = raw_text
+
+                    def _find_code(text: str) -> Optional[str]:
+                        if not text:
+                            return None
+                        m = re.search(pattern, text)
+                        return m.group(1) if m else None
+
+                    code = (
+                        _find_code(subject)
+                        or _find_code(body_text)
+                        or _find_code(raw_body)
+                        or _find_code(raw_text)
+                    )
+                    if code:
                         if not mail_timestamp and otp_sent_at:
                             # 没有时间戳时，尽量依赖关键字过滤，避免误匹配
-                            content_lower = content.lower()
+                            content_lower = f"{subject}\n{body_text}\n{raw_body}".lower()
                             if not any(key in content_lower for key in ("openai", "chatgpt", "验证码", "code")):
                                 continue
-                        code = match.group(1)
-                        logger.info(f"从 TempMail 邮箱 {email} 找到验证码: {code}")
+                        used_ids.add(mail_id)
+                        self._used_mail_ids[target_email] = used_ids
+                        logger.info(
+                            f"从 TempMail 邮箱 {email} 找到验证码: {code} "
+                            f"(mail_id={mail_id}, ts={mail_timestamp})"
+                        )
                         self.update_status(True)
                         return code
 

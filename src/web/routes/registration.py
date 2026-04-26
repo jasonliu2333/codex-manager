@@ -16,6 +16,7 @@ from ...database import crud
 from ...database.session import get_db
 from ...database.models import RegistrationTask, Proxy
 from ...core.register import RegistrationEngine, RegistrationResult
+from ...core.registration_flow_templates import normalize_flow_template
 from ...services import EmailServiceFactory, EmailServiceType
 from ...config.settings import get_settings
 from ..task_manager import task_manager
@@ -69,6 +70,7 @@ class RegistrationTaskCreate(BaseModel):
     """创建注册任务请求"""
     email_service_type: str = "tempmail"
     proxy: Optional[str] = None
+    flow_template: Optional[str] = None
     email_service_config: Optional[dict] = None
     email_service_id: Optional[int] = None
     auto_upload_cpa: bool = False
@@ -85,6 +87,7 @@ class BatchRegistrationRequest(BaseModel):
     count: int = 1
     email_service_type: str = "tempmail"
     proxy: Optional[str] = None
+    flow_template: Optional[str] = None
     email_service_config: Optional[dict] = None
     email_service_id: Optional[int] = None
     interval_min: int = 5
@@ -156,6 +159,7 @@ class OutlookBatchRegistrationRequest(BaseModel):
     service_ids: List[int]
     skip_registered: bool = True
     proxy: Optional[str] = None
+    flow_template: Optional[str] = None
     interval_min: int = 5
     interval_max: int = 30
     concurrency: int = 1
@@ -224,7 +228,7 @@ def _normalize_email_service_config(
     return normalized
 
 
-def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_recover_tokens: bool = False):
+def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, flow_template: Optional[str] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_recover_tokens: bool = False):
     """
     在线程池中执行的同步注册任务
 
@@ -432,11 +436,17 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             # 创建注册引擎 - 使用 TaskManager 的日志回调
             log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
 
+            selected_template = normalize_flow_template(
+                flow_template or settings.registration_flow_template
+            )
+            log_callback(f"[系统] 注册流程模板: {selected_template}")
+
             engine = RegistrationEngine(
                 email_service=email_service,
                 proxy_url=actual_proxy_url,
                 callback_logger=log_callback,
-                task_uuid=task_uuid
+                task_uuid=task_uuid,
+                flow_template=selected_template
             )
 
             # 执行注册
@@ -598,7 +608,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 pass
 
 
-async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_recover_tokens: bool = False):
+async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, flow_template: Optional[str] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_recover_tokens: bool = False):
     """
     异步执行注册任务
 
@@ -623,6 +633,7 @@ async def run_registration_task(task_uuid: str, email_service_type: str, proxy: 
             proxy,
             email_service_config,
             email_service_id,
+            flow_template,
             log_prefix,
             batch_id,
             auto_upload_cpa,
@@ -677,6 +688,7 @@ async def run_batch_parallel(
     proxy: Optional[str],
     email_service_config: Optional[dict],
     email_service_id: Optional[int],
+    flow_template: Optional[str],
     concurrency: int,
     auto_upload_cpa: bool = False,
     cpa_service_ids: List[int] = None,
@@ -700,6 +712,7 @@ async def run_batch_parallel(
         async with semaphore:
             await run_registration_task(
                 uuid, email_service_type, proxy, email_service_config, email_service_id,
+                flow_template,
                 log_prefix=prefix, batch_id=batch_id,
                 auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids or [],
                 auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids or [],
@@ -743,6 +756,7 @@ async def run_batch_pipeline(
     proxy: Optional[str],
     email_service_config: Optional[dict],
     email_service_id: Optional[int],
+    flow_template: Optional[str],
     interval_min: int,
     interval_max: int,
     concurrency: int,
@@ -768,6 +782,7 @@ async def run_batch_pipeline(
         try:
             await run_registration_task(
                 uuid, email_service_type, proxy, email_service_config, email_service_id,
+                flow_template,
                 log_prefix=pfx, batch_id=batch_id,
                 auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids or [],
                 auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids or [],
@@ -834,6 +849,7 @@ async def run_batch_registration(
     proxy: Optional[str],
     email_service_config: Optional[dict],
     email_service_id: Optional[int],
+    flow_template: Optional[str],
     interval_min: int,
     interval_max: int,
     concurrency: int = 1,
@@ -850,7 +866,7 @@ async def run_batch_registration(
     if mode == "parallel":
         await run_batch_parallel(
             batch_id, task_uuids, email_service_type, proxy,
-            email_service_config, email_service_id, concurrency,
+            email_service_config, email_service_id, flow_template, concurrency,
             auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids,
             auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids,
             auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids,
@@ -859,7 +875,7 @@ async def run_batch_registration(
     else:
         await run_batch_pipeline(
             batch_id, task_uuids, email_service_type, proxy,
-            email_service_config, email_service_id,
+            email_service_config, email_service_id, flow_template,
             interval_min, interval_max, concurrency,
             auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids,
             auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids,
@@ -909,6 +925,7 @@ async def start_registration(
         request.proxy,
         request.email_service_config,
         request.email_service_id,
+        request.flow_template,
         "",
         "",
         request.auto_upload_cpa,
@@ -985,6 +1002,7 @@ async def start_batch_registration(
         request.proxy,
         request.email_service_config,
         request.email_service_id,
+        request.flow_template,
         request.interval_min,
         request.interval_max,
         request.concurrency,
@@ -1425,6 +1443,7 @@ async def run_outlook_batch_registration(
     service_ids: List[int],
     skip_registered: bool,
     proxy: Optional[str],
+    flow_template: Optional[str],
     interval_min: int,
     interval_max: int,
     concurrency: int = 1,
@@ -1469,6 +1488,7 @@ async def run_outlook_batch_registration(
         proxy=proxy,
         email_service_config=None,
         email_service_id=None,   # 每个任务已绑定了独立的 email_service_id
+        flow_template=flow_template,
         interval_min=interval_min,
         interval_max=interval_max,
         concurrency=concurrency,
@@ -1574,6 +1594,7 @@ async def start_outlook_batch_registration(
         actual_service_ids,
         request.skip_registered,
         request.proxy,
+        request.flow_template,
         request.interval_min,
         request.interval_max,
         request.concurrency,

@@ -1,0 +1,15 @@
+{
+  "id": "default",
+  "name": "默认流程（auth.openai.com）",
+  "version": "2026-03-30",
+  "description": "当前系统内置注册流程：直接走 auth.openai.com 注册接口，随后再走 Codex OAuth。",
+  "steps": [
+    "GET https://auth.openai.com/api/accounts/authorize",
+    "GET https://auth.openai.com/create-account/password",
+    "POST https://auth.openai.com/api/accounts/user/register",
+    "GET https://auth.openai.com/api/accounts/email-otp/send",
+    "POST https://auth.openai.com/api/accounts/email-otp/validate",
+    "POST https://auth.openai.com/api/accounts/create_account",
+    "注册后 OAuth（app_EMoam...）-> /oauth/token"
+  ]
+}

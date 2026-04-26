@@ -255,7 +255,7 @@ class OpenAIHTTPClient(HTTPClient):
         # 默认请求头
         self.default_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                         "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+                         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json",
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
@@ -263,21 +263,7 @@ class OpenAIHTTPClient(HTTPClient):
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-site",
-            "sec-ch-ua": '"Chromium";v="145", "Not:A-Brand";v="99", "Google Chrome";v="145"',
-            "sec-ch-ua-arch": '"x86_64"',
-            "sec-ch-ua-bitness": '"64"',
-            "sec-ch-ua-full-version-list": '"Chromium";v="145.0.0.0", "Not:A-Brand";v="99.0.0.0", "Google Chrome";v="145.0.0.0"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-model": '""',
-            "sec-ch-ua-platform": '"Windows"',
-            "sec-ch-ua-platform-version": '"10.0.0"',
-            "priority": "u=1, i",
         }
-
-        try:
-            self.session.headers.update(self.default_headers)
-        except Exception:
-            pass
 
     def check_ip_location(self) -> Tuple[bool, Optional[str]]:
         """
@@ -363,14 +349,7 @@ class OpenAIHTTPClient(HTTPClient):
         except cffi_requests.RequestsError as e:
             raise HTTPClientError(f"OpenAI 请求失败: {endpoint} - {e}")
 
-    def check_sentinel(
-        self,
-        did: str,
-        proxies: Optional[Dict] = None,
-        flow: str = "authorize_continue",
-        user_agent: Optional[str] = None,
-        sec_ch_ua: Optional[str] = None,
-    ) -> Optional[str]:
+    def check_sentinel(self, did: str, proxies: Optional[Dict] = None) -> Optional[str]:
         """
         检查 Sentinel 拦截
 
@@ -384,9 +363,7 @@ class OpenAIHTTPClient(HTTPClient):
         from ..config.constants import OPENAI_API_ENDPOINTS
 
         try:
-            sen_req_body = f'{{"p":"","id":"{did}","flow":"{flow}"}}'
-            ua = user_agent or self.default_headers.get("User-Agent", "")
-            sec_ua = sec_ch_ua or self.default_headers.get("sec-ch-ua") or self.default_headers.get("Sec-Ch-Ua")
+            sen_req_body = f'{{"p":"","id":"{did}","flow":"authorize_continue"}}'
 
             response = self.post(
                 OPENAI_API_ENDPOINTS["sentinel"],
@@ -394,16 +371,6 @@ class OpenAIHTTPClient(HTTPClient):
                     "origin": "https://sentinel.openai.com",
                     "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
                     "content-type": "text/plain;charset=UTF-8",
-                    "User-Agent": ua,
-                    "sec-ch-ua": sec_ua,
-                    "sec-ch-ua-arch": self.default_headers.get("sec-ch-ua-arch"),
-                    "sec-ch-ua-bitness": self.default_headers.get("sec-ch-ua-bitness"),
-                    "sec-ch-ua-full-version-list": self.default_headers.get("sec-ch-ua-full-version-list"),
-                    "sec-ch-ua-mobile": self.default_headers.get("sec-ch-ua-mobile"),
-                    "sec-ch-ua-model": self.default_headers.get("sec-ch-ua-model"),
-                    "sec-ch-ua-platform": self.default_headers.get("sec-ch-ua-platform"),
-                    "sec-ch-ua-platform-version": self.default_headers.get("sec-ch-ua-platform-version"),
-                    "priority": self.default_headers.get("priority", "u=1, i"),
                 },
                 data=sen_req_body,
             )

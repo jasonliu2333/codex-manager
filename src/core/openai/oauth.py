@@ -155,26 +155,43 @@ def _post_form(
                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
 
-    try:
-        # 使用 curl_cffi 发送请求，支持代理和浏览器指纹
-        response = cffi_requests.post(
-            url,
-            data=data,
-            headers=headers,
-            timeout=timeout,
-            proxies=proxies,
-            impersonate="chrome"
-        )
-
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"token exchange failed: {response.status_code}: {response.text}"
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            # 使用 curl_cffi 发送请求，支持代理和浏览器指纹
+            response = cffi_requests.post(
+                url,
+                data=data,
+                headers=headers,
+                timeout=timeout,
+                proxies=proxies,
+                impersonate="chrome"
             )
 
-        return response.json()
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"token exchange failed: {response.status_code}: {response.text}"
+                )
 
-    except cffi_requests.RequestsError as e:
-        raise RuntimeError(f"token exchange failed: network error: {e}") from e
+            return response.json()
+
+        except cffi_requests.RequestsError as e:
+            last_error = e
+            text = str(e).lower()
+            retryable = any(marker in text for marker in (
+                "tls connect error",
+                "network error",
+                "operation timed out",
+                "connect aborted",
+                "recv failure",
+                "connection reset",
+            ))
+            if attempt < 3 and retryable:
+                time.sleep(min(attempt, 2))
+                continue
+            raise RuntimeError(f"token exchange failed: network error: {e}") from e
+
+    raise RuntimeError(f"token exchange failed: network error: {last_error}")
 
 
 @dataclass(frozen=True)

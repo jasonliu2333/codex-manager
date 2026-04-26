@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body, File, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import or_
 
 from ...config.constants import AccountStatus
 from ...config.settings import get_settings
@@ -38,6 +39,22 @@ router = APIRouter()
 recovery_batches: Dict[str, dict] = {}
 
 
+def _extra_data_flag_filter(column, key: str, value: str):
+    """兼容 JSON 序列化时有无空格的筛选条件。"""
+    return or_(
+        column.like(f'%"{key}":"{value}"%'),
+        column.like(f'%"{key}": "{value}"%'),
+    )
+
+
+def _extra_data_bool_filter(column, key: str, value: bool):
+    literal = "true" if value else "false"
+    return or_(
+        column.like(f'%"{key}":{literal}%'),
+        column.like(f'%"{key}": {literal}%'),
+    )
+
+
 def _get_proxy(request_proxy: Optional[str] = None) -> Optional[str]:
     """获取代理 URL，策略与注册流程一致：代理列表 → 动态代理 → 静态配置"""
     if request_proxy:
@@ -50,6 +67,70 @@ def _get_proxy(request_proxy: Optional[str] = None) -> Optional[str]:
     if proxy_url:
         return proxy_url
     return get_settings().proxy_url
+
+
+def _detect_deleted_or_deactivated_account(engine) -> Optional[str]:
+    """识别 OpenAI 返回的账号已删除/停用错误。"""
+    candidates = [
+        str(getattr(engine, "_last_otp_error_message", "") or ""),
+        str(getattr(engine, "_last_otp_error_code", "") or ""),
+    ]
+    logs = getattr(engine, "logs", None)
+    if isinstance(logs, list):
+        candidates.extend(str(item or "") for item in logs[-20:])
+    text = "\n".join(candidates).lower()
+    markers = [
+        "deleted or deactivated",
+        "do not have an account because it has been deleted or deactivated",
+    ]
+    if any(marker in text for marker in markers):
+        return "OpenAI 返回账号已被删除或停用"
+    return None
+
+
+def _mark_account_deleted_or_deactivated(db, account: Account, reason: str, proxy_used: Optional[str] = None) -> None:
+    extra = dict(account.extra_data or {})
+    extra["openai_account_state"] = "deleted_or_deactivated"
+    extra["openai_account_state_reason"] = reason
+    extra["openai_account_state_marked_at"] = datetime.utcnow().isoformat()
+    crud.update_account(
+        db,
+        account.id,
+        status=AccountStatus.BANNED.value,
+        proxy_used=proxy_used or account.proxy_used,
+        extra_data=extra,
+    )
+
+
+def _detect_mfa_required_account(engine) -> Optional[str]:
+    error_message = str(getattr(engine, "_last_mfa_error_message", "") or "").strip()
+    if error_message:
+        low = error_message.lower()
+        if "未配置 mfa 密钥" in low or "未配置 mfa" in low:
+            return "OAuth 补录遇到 MFA challenge，且当前账号未配置 MFA 密钥"
+        return f"OAuth 补录遇到 MFA challenge：{error_message}"
+
+    logs = getattr(engine, "logs", None)
+    if isinstance(logs, list):
+        recent = "\n".join(str(item or "") for item in logs[-20:]).lower()
+        if "mfa 自动验证失败" in recent or "mfa 密钥不可用" in recent:
+            return "OAuth 补录遇到 MFA challenge，需要 MFA 二次验证"
+
+    return None
+
+
+def _mark_account_mfa_required(db, account: Account, reason: str, proxy_used: Optional[str] = None) -> None:
+    extra = dict(account.extra_data or {})
+    extra["openai_auth_state"] = "mfa_required"
+    extra["openai_auth_state_reason"] = reason
+    extra["openai_auth_state_marked_at"] = datetime.utcnow().isoformat()
+    crud.update_account(
+        db,
+        account.id,
+        status=AccountStatus.FAILED.value,
+        proxy_used=proxy_used or account.proxy_used,
+        extra_data=extra,
+    )
 
 
 # ============== Pydantic Models ==============
@@ -72,6 +153,8 @@ class AccountResponse(BaseModel):
     cpa_uploaded: bool = False
     cpa_uploaded_at: Optional[str] = None
     cookies: Optional[str] = None
+    extra_data: Optional[dict] = None
+    mfa_secret: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -90,6 +173,7 @@ class AccountUpdateRequest(BaseModel):
     status: Optional[str] = None
     metadata: Optional[dict] = None
     cookies: Optional[str] = None  # 完整 cookie 字符串，用于支付请求
+    mfa_secret: Optional[str] = None  # MFA TOTP 密钥；空字符串表示清空
 
 
 class BatchDeleteRequest(BaseModel):
@@ -122,7 +206,23 @@ def resolve_account_ids(
         return ids
     query = db.query(Account.id)
     if status_filter:
-        query = query.filter(Account.status == status_filter)
+        if status_filter == "deleted_or_deactivated":
+            query = query.filter(
+                Account.extra_data.is_not(None),
+                _extra_data_flag_filter(Account.extra_data, "openai_account_state", "deleted_or_deactivated")
+            )
+        elif status_filter == "oauth_recovery_required":
+            query = query.filter(
+                Account.extra_data.is_not(None),
+                _extra_data_bool_filter(Account.extra_data, "oauth_recovery_required", True)
+            )
+        elif status_filter == "mfa_required":
+            query = query.filter(
+                Account.extra_data.is_not(None),
+                _extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required")
+            )
+        else:
+            query = query.filter(Account.status == status_filter)
     if email_service_filter:
         query = query.filter(Account.email_service == email_service_filter)
     if search_filter:
@@ -133,8 +233,12 @@ def resolve_account_ids(
     return [row[0] for row in query.all()]
 
 
-def account_to_response(account: Account) -> AccountResponse:
+def account_to_response(account: Account, include_mfa_secret: bool = False) -> AccountResponse:
     """转换 Account 模型为响应模型"""
+    extra_data = dict(account.extra_data or {})
+    mfa_secret = str(extra_data.get("mfa_totp_secret") or "").strip()
+    response_extra = dict(extra_data)
+    response_extra.pop("mfa_totp_secret", None)
     return AccountResponse(
         id=account.id,
         email=account.email,
@@ -152,6 +256,8 @@ def account_to_response(account: Account) -> AccountResponse:
         cpa_uploaded=account.cpa_uploaded or False,
         cpa_uploaded_at=account.cpa_uploaded_at.isoformat() if account.cpa_uploaded_at else None,
         cookies=account.cookies,
+        extra_data=response_extra,
+        mfa_secret=mfa_secret if include_mfa_secret else None,
         created_at=account.created_at.isoformat() if account.created_at else None,
         updated_at=account.updated_at.isoformat() if account.updated_at else None,
     )
@@ -179,7 +285,23 @@ async def list_accounts(
 
         # 状态筛选
         if status:
-            query = query.filter(Account.status == status)
+            if status == "deleted_or_deactivated":
+                query = query.filter(
+                    Account.extra_data.is_not(None),
+                    _extra_data_flag_filter(Account.extra_data, "openai_account_state", "deleted_or_deactivated")
+                )
+            elif status == "oauth_recovery_required":
+                query = query.filter(
+                    Account.extra_data.is_not(None),
+                    _extra_data_bool_filter(Account.extra_data, "oauth_recovery_required", True)
+                )
+            elif status == "mfa_required":
+                query = query.filter(
+                    Account.extra_data.is_not(None),
+                    _extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required")
+                )
+            else:
+                query = query.filter(Account.status == status)
 
         # 邮箱服务筛选
         if email_service:
@@ -230,7 +352,7 @@ async def get_account(account_id: int):
         account = crud.get_account_by_id(db, account_id)
         if not account:
             raise HTTPException(status_code=404, detail="账号不存在")
-        return account_to_response(account)
+        return account_to_response(account, include_mfa_secret=True)
 
 
 @router.get("/{account_id}/tokens")
@@ -265,17 +387,24 @@ async def update_account(account_id: int, request: AccountUpdateRequest):
                 raise HTTPException(status_code=400, detail="无效的状态值")
             update_data["status"] = request.status
 
+        extra = dict(account.extra_data or {})
         if request.metadata:
-            current_metadata = account.metadata or {}
-            current_metadata.update(request.metadata)
-            update_data["metadata"] = current_metadata
+            extra.update(request.metadata)
+        if request.mfa_secret is not None:
+            secret = str(request.mfa_secret or "").strip()
+            if secret:
+                extra["mfa_totp_secret"] = secret
+            else:
+                extra.pop("mfa_totp_secret", None)
+        if request.metadata is not None or request.mfa_secret is not None:
+            update_data["extra_data"] = extra
 
         if request.cookies is not None:
             # 留空则清空，非空则更新
             update_data["cookies"] = request.cookies or None
 
         account = crud.update_account(db, account_id, **update_data)
-        return account_to_response(account)
+        return account_to_response(account, include_mfa_secret=True)
 
 
 @router.get("/{account_id}/cookies")
@@ -864,6 +993,42 @@ def _get_recovery_proxy(request_proxy: Optional[str] = None, log_callback=None) 
     return fallback_proxy
 
 
+def _is_proxy_connect_aborted(error: Exception | str) -> bool:
+    text = str(error or "").lower()
+    return "proxy connect aborted" in text or "curl: (56)" in text and "connect aborted" in text
+
+
+def _is_retryable_oauth_network_failure(text: Exception | str) -> bool:
+    body = str(text or "").lower()
+    return any(marker in body for marker in (
+        "proxy connect aborted",
+        "curl: (56)",
+        "curl: (35)",
+        "tls connect error",
+        "token exchange failed: network error",
+        "operation timed out",
+        "connection reset",
+    ))
+
+
+def _has_available_proxy_source(request_proxy: Optional[str] = None) -> bool:
+    if request_proxy:
+        return True
+    settings = get_settings()
+    if settings.proxy_dynamic_enabled and settings.proxy_dynamic_api_url:
+        return True
+    if settings.proxy_url:
+        return True
+    try:
+        with get_db() as db:
+            proxy = crud.get_random_proxy(db)
+            if proxy and proxy.proxy_url:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _find_mailbox_service_for_account(db, account: Account) -> Optional[EmailServiceModel]:
     """根据账号邮箱匹配可用于补录的邮箱服务配置。"""
     supported_types = {"outlook", "imap_mail", "tempmail", "temp_mail", "freemail", "moe_mail"}
@@ -988,27 +1153,82 @@ def _run_sync_recover_oauth_task(
             if not email_service_model:
                 raise ValueError("未找到匹配的邮箱配置，无法收取登录验证码")
 
-            actual_proxy = _get_recovery_proxy(proxy, log_callback=callback)
             email_service = EmailServiceFactory.create(
                 EmailServiceType(email_service_model.service_type),
                 email_service_model.config,
                 email_service_model.name,
             )
-
-            engine = RegistrationEngine(
-                email_service=email_service,
-                proxy_url=actual_proxy,
-                callback_logger=callback,
-                task_uuid=task_uuid,
-            )
             recovery_email_info = _prepare_recovery_email_info(db, account, email_service, callback)
-            if recovery_email_info:
-                engine.email_info = recovery_email_info
-                callback(f"{full_prefix}[系统] 已注入邮箱凭据标识: {recovery_email_info['service_id']}")
-            callback(f"{full_prefix}[系统] 将使用全新登录会话，不复用注册阶段 session/cookie/device_id")
-            token_info = engine.recover_oauth_tokens(account.email, account.password)
+            settings = get_settings()
+            max_proxy_retries = 3 if _has_available_proxy_source(proxy) else 1
+            token_info = None
+            actual_proxy = None
+            last_recover_error: Optional[Exception] = None
+            engine = None
+            for proxy_attempt in range(1, max_proxy_retries + 1):
+                actual_proxy = _get_recovery_proxy(proxy, log_callback=callback)
+                engine = RegistrationEngine(
+                    email_service=email_service,
+                    proxy_url=actual_proxy,
+                    callback_logger=callback,
+                    task_uuid=task_uuid,
+                )
+                engine.account_extra_data = dict(account.extra_data or {})
+                engine.mfa_secret = str((account.extra_data or {}).get("mfa_totp_secret") or "").strip()
+                if recovery_email_info:
+                    engine.email_info = recovery_email_info
+                    callback(f"{full_prefix}[系统] 已注入邮箱凭据标识: {recovery_email_info['service_id']}")
+                callback(f"{full_prefix}[系统] 将使用全新登录会话，不复用注册阶段 session/cookie/device_id")
+                try:
+                    token_info = engine.recover_oauth_tokens(account.email, account.password)
+                    last_recover_error = None
+                    if not token_info:
+                        recent_logs = "\n".join(str(x or "") for x in getattr(engine, "logs", [])[-20:])
+                        if _is_retryable_oauth_network_failure(recent_logs):
+                            retry_callback = getattr(engine, "retry_last_oauth_callback_token_exchange", None)
+                            if callable(retry_callback):
+                                callback(f"{full_prefix}[系统] 检测到 OAuth 最终换 token 阶段失败，先仅重试 token exchange")
+                                retry_proxy = actual_proxy
+                                if proxy_attempt < max_proxy_retries and not proxy:
+                                    retry_proxy = _get_recovery_proxy(proxy, log_callback=callback)
+                                token_info = retry_callback(retry_proxy)
+                            if token_info:
+                                last_recover_error = None
+                                break
+                            if proxy_attempt < max_proxy_retries:
+                                callback(f"{full_prefix}[系统] OAuth 最终换 token 阶段仍失败，自动更换/重试代理重跑 ({proxy_attempt}/{max_proxy_retries})")
+                                continue
+                    break
+                except Exception as exc:
+                    last_recover_error = exc
+                    if proxy_attempt < max_proxy_retries and _is_retryable_oauth_network_failure(exc):
+                        callback(f"{full_prefix}[系统] 当前代理网络/TLS 异常，自动更换/重试代理 ({proxy_attempt}/{max_proxy_retries})")
+                        continue
+                    raise
+            if token_info is None and last_recover_error is not None:
+                raise last_recover_error
             if not token_info:
+                deleted_reason = _detect_deleted_or_deactivated_account(engine)
+                mfa_reason = _detect_mfa_required_account(engine)
+                if deleted_reason:
+                    _mark_account_deleted_or_deactivated(db, account, deleted_reason, proxy_used=actual_proxy)
+                    callback(f"{full_prefix}[系统] 已将账号标记为封禁：{deleted_reason}")
+                elif mfa_reason:
+                    _mark_account_mfa_required(db, account, mfa_reason, proxy_used=actual_proxy)
+                    callback(f"{full_prefix}[系统] 已将账号标记为需要 MFA：{mfa_reason}")
+                    raise RuntimeError("补录失败：该账号需要 MFA 二次验证，请在账号详情中填写 MFA 密钥后重试")
                 raise RuntimeError("补录失败：未获取到 OAuth Token")
+
+            extra = dict(account.extra_data or {})
+            for key in (
+                "oauth_recovery_required", "oauth_recovery_required_reason", "oauth_recovery_required_marked_at",
+                "token_validation_state", "token_validation_reason", "token_validation_marked_at",
+                "openai_auth_state", "openai_auth_state_reason", "openai_auth_state_marked_at",
+            ):
+                extra.pop(key, None)
+            if str(extra.get("openai_account_state") or "").strip().lower() == "forbidden_or_banned":
+                for key in ("openai_account_state", "openai_account_state_reason", "openai_account_state_marked_at"):
+                    extra.pop(key, None)
 
             update_data = {
                 "access_token": token_info.get("access_token"),
@@ -1020,6 +1240,7 @@ def _run_sync_recover_oauth_task(
                 "last_refresh": datetime.utcnow(),
                 "status": AccountStatus.ACTIVE.value,
                 "proxy_used": actual_proxy,
+                "extra_data": extra,
             }
             expires_at = token_info.get("expires_at")
             if expires_at:

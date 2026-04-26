@@ -1,0 +1,19 @@
+{
+  "id": "topic_1849054",
+  "name": "topic_1849054 流程",
+  "version": "2026-03-30",
+  "description": "基于 topic_1849054 目录代码：支持 direct_auth 或 chatgpt_web 入口，完成注册后通过 consent + /oauth/token 换取 Codex Token，失败可回退 OAuth 登录。",
+  "steps": [
+    "入口（direct_auth）：GET https://auth.openai.com/oauth/authorize (PKCE + screen_hint=signup)",
+    "入口（chatgpt_web）：GET https://chatgpt.com/ -> GET https://chatgpt.com/api/auth/csrf -> POST https://chatgpt.com/api/auth/signin/openai -> GET auth_url",
+    "POST https://auth.openai.com/api/accounts/authorize/continue (screen_hint=signup)",
+    "POST https://auth.openai.com/api/accounts/user/register",
+    "GET https://auth.openai.com/api/accounts/email-otp/send",
+    "GET https://auth.openai.com/email-verification",
+    "POST https://auth.openai.com/api/accounts/email-otp/validate (normal 或 sentinel fallback)",
+    "POST https://auth.openai.com/api/accounts/create_account",
+    "GET https://auth.openai.com/sign-in-with-chatgpt/codex/consent (必要时 workspace/org select)",
+    "POST https://auth.openai.com/oauth/token (grant_type=authorization_code, code_verifier)",
+    "失败回退：OAuth 登录 + OTP -> consent -> /oauth/token"
+  ]
+}

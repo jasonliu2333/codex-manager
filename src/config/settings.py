@@ -4,6 +4,7 @@
 """
 
 import os
+import json
 from typing import Optional, Dict, Any, Type, List
 from enum import Enum
 from pydantic import BaseModel, field_validator
@@ -25,6 +26,7 @@ class SettingCategory(str, Enum):
     CUSTOM_DOMAIN = "moe_mail"
     SECURITY = "security"
     CPA = "cpa"
+    SMS = "sms"
 
 
 @dataclass
@@ -194,6 +196,123 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.OPENAI,
         description="OpenAI 注册授权 Passkey 能力位"
     ),
+    "openai_add_phone_send_url": SettingDefinition(
+        db_key="openai.add_phone.send_url",
+        default_value="https://auth.openai.com/api/accounts/add-phone/send",
+        category=SettingCategory.OPENAI,
+        description="OpenAI add-phone 提交手机号接口"
+    ),
+    "openai_phone_otp_validate_url": SettingDefinition(
+        db_key="openai.phone_otp.validate_url",
+        default_value="https://auth.openai.com/api/accounts/phone-otp/validate",
+        category=SettingCategory.OPENAI,
+        description="OpenAI 手机短信验证码校验接口"
+    ),
+    "openai_phone_otp_resend_url": SettingDefinition(
+        db_key="openai.phone_otp.resend_url",
+        default_value="https://auth.openai.com/api/accounts/phone-otp/resend",
+        category=SettingCategory.OPENAI,
+        description="OpenAI 手机短信验证码重发接口"
+    ),
+
+    # HeroSMS 接码平台配置
+    "herosms_enabled": SettingDefinition(
+        db_key="herosms.enabled",
+        default_value=False,
+        category=SettingCategory.SMS,
+        description="是否启用 HeroSMS 处理 add-phone"
+    ),
+    "herosms_api_key": SettingDefinition(
+        db_key="herosms.api_key",
+        default_value="",
+        category=SettingCategory.SMS,
+        description="HeroSMS API Key",
+        is_secret=True
+    ),
+    "herosms_service": SettingDefinition(
+        db_key="herosms.service",
+        default_value="dr",
+        category=SettingCategory.SMS,
+        description="HeroSMS 服务代码"
+    ),
+    "herosms_country": SettingDefinition(
+        db_key="herosms.country",
+        default_value=187,
+        category=SettingCategory.SMS,
+        description="HeroSMS 国家代码"
+    ),
+    "herosms_max_price": SettingDefinition(
+        db_key="herosms.max_price",
+        default_value=-1,
+        category=SettingCategory.SMS,
+        description="HeroSMS 最大单价，-1 表示不限制"
+    ),
+    "herosms_proxy": SettingDefinition(
+        db_key="herosms.proxy",
+        default_value="",
+        category=SettingCategory.SMS,
+        description="HeroSMS 专用代理，留空复用注册代理"
+    ),
+    "herosms_timeout": SettingDefinition(
+        db_key="herosms.timeout",
+        default_value=30,
+        category=SettingCategory.SMS,
+        description="HeroSMS API 超时（秒）"
+    ),
+    "herosms_verify_timeout": SettingDefinition(
+        db_key="herosms.verify_timeout",
+        default_value=180,
+        category=SettingCategory.SMS,
+        description="短信验证码等待超时（秒）"
+    ),
+    "herosms_poll_interval": SettingDefinition(
+        db_key="herosms.poll_interval",
+        default_value=3,
+        category=SettingCategory.SMS,
+        description="短信验证码轮询间隔（秒）"
+    ),
+    "herosms_lowest_price_first": SettingDefinition(
+        db_key="herosms.lowest_price_first",
+        default_value=True,
+        category=SettingCategory.SMS,
+        description="是否优先按所选国家最低价格档取号"
+    ),
+    "herosms_max_number_attempts": SettingDefinition(
+        db_key="herosms.max_number_attempts",
+        default_value=1,
+        category=SettingCategory.SMS,
+        description="短信超时后最多尝试多少个号码"
+    ),
+    "herosms_target_number_index": SettingDefinition(
+        db_key="herosms.target_number_index",
+        default_value=1,
+        category=SettingCategory.SMS,
+        description="从第几个取到的号码开始实际用于验证"
+    ),
+    "herosms_price_relax_enabled": SettingDefinition(
+        db_key="herosms.price_relax_enabled",
+        default_value=True,
+        category=SettingCategory.SMS,
+        description="最低价无号时是否自动放宽价格档"
+    ),
+    "herosms_price_relax_max_multiplier": SettingDefinition(
+        db_key="herosms.price_relax_max_multiplier",
+        default_value=5,
+        category=SettingCategory.SMS,
+        description="自动放宽价格档的最大倍数"
+    ),
+    "herosms_reuse_enabled": SettingDefinition(
+        db_key="herosms.reuse_enabled",
+        default_value=False,
+        category=SettingCategory.SMS,
+        description="是否复用已成功接码的 HeroSMS 号码"
+    ),
+    "herosms_reuse_max_uses": SettingDefinition(
+        db_key="herosms.reuse_max_uses",
+        default_value=2,
+        category=SettingCategory.SMS,
+        description="同一个 HeroSMS 号码最多用于几个账号"
+    ),
 
     # 代理配置
     "proxy_enabled": SettingDefinition(
@@ -283,6 +402,12 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         default_value=12,
         category=SettingCategory.REGISTRATION,
         description="默认密码长度"
+    ),
+    "registration_flow_template": SettingDefinition(
+        db_key="registration.flow_template",
+        default_value="default",
+        category=SettingCategory.REGISTRATION,
+        description="注册流程模板"
     ),
     "registration_sleep_min": SettingDefinition(
         db_key="registration.sleep_min",
@@ -443,6 +568,18 @@ SETTING_TYPES: Dict[str, Type] = {
     "proxy_enabled": bool,
     "proxy_port": int,
     "proxy_dynamic_enabled": bool,
+    "herosms_enabled": bool,
+    "herosms_country": int,
+    "herosms_timeout": int,
+    "herosms_verify_timeout": int,
+    "herosms_poll_interval": int,
+    "herosms_lowest_price_first": bool,
+    "herosms_max_number_attempts": int,
+    "herosms_target_number_index": int,
+    "herosms_price_relax_enabled": bool,
+    "herosms_price_relax_max_multiplier": int,
+    "herosms_reuse_enabled": bool,
+    "herosms_reuse_max_uses": int,
     "registration_max_retries": int,
     "registration_timeout": int,
     "registration_default_password_length": int,
@@ -462,6 +599,13 @@ SETTING_TYPES: Dict[str, Type] = {
 
 # 需要作为 SecretStr 处理的字段
 SECRET_FIELDS = {name for name, defn in SETTING_DEFINITIONS.items() if defn.is_secret}
+DYNAMIC_PROXY_KEYS = {
+    "proxy_dynamic_enabled",
+    "proxy_dynamic_api_url",
+    "proxy_dynamic_api_key",
+    "proxy_dynamic_api_key_header",
+    "proxy_dynamic_result_field",
+}
 
 
 def _convert_value(attr_name: str, value: str) -> Any:
@@ -534,6 +678,46 @@ def _value_to_string(value: Any) -> str:
         return str(value)
 
 
+def _get_proxy_backup_path() -> str:
+    env_url = os.environ.get("APP_DATABASE_URL") or os.environ.get("DATABASE_URL") or ""
+    db_url = env_url or SETTING_DEFINITIONS["database_url"].default_value
+    db_path = ""
+    if isinstance(db_url, str):
+        if db_url.startswith("sqlite:///"):
+            db_path = db_url[len("sqlite:///"):]
+        elif db_url and (os.path.isabs(db_url) or ":/" in db_url or ":\\" in db_url):
+            db_path = db_url
+    storage_dir = os.path.dirname(db_path) if db_path else "data"
+    return os.path.join(storage_dir, "proxy_dynamic.json")
+
+
+def _load_dynamic_proxy_backup_raw() -> Dict[str, Any]:
+    path = _get_proxy_backup_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_dynamic_proxy_backup(**kwargs) -> None:
+    updates = {k: _value_to_string(v) for k, v in kwargs.items() if k in DYNAMIC_PROXY_KEYS}
+    if not updates:
+        return
+    data = _load_dynamic_proxy_backup_raw()
+    data.update(updates)
+    path = _get_proxy_backup_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def init_default_settings() -> None:
     """
     初始化数据库中的默认设置
@@ -573,14 +757,22 @@ def _load_settings_from_db() -> Dict[str, Any]:
         from ..database.crud import get_setting
 
         settings_dict = {}
+        missing_dynamic = set()
+        default_dynamic = set()
         with get_db() as db:
             for attr_name, defn in SETTING_DEFINITIONS.items():
                 db_setting = get_setting(db, defn.db_key)
                 if db_setting:
                     settings_dict[attr_name] = _convert_value(attr_name, db_setting.value)
+                    if attr_name in DYNAMIC_PROXY_KEYS:
+                        default_str = _value_to_string(defn.default_value)
+                        if str(db_setting.value or "") == default_str:
+                            default_dynamic.add(attr_name)
                 else:
                     # 数据库中没有此设置，使用默认值
                     settings_dict[attr_name] = _convert_value(attr_name, _value_to_string(defn.default_value))
+                    if attr_name in DYNAMIC_PROXY_KEYS:
+                        missing_dynamic.add(attr_name)
             env_url = os.environ.get("APP_DATABASE_URL") or os.environ.get("DATABASE_URL")
             if env_url:
                 settings_dict["database_url"] = _normalize_database_url(env_url)
@@ -596,6 +788,17 @@ def _load_settings_from_db() -> Dict[str, Any]:
             env_password = os.environ.get("APP_ACCESS_PASSWORD")
             if env_password:
                 settings_dict["webui_access_password"] = env_password
+        # 尝试从备份恢复动态代理设置（备份优先，防止重启丢失）
+        backup = _load_dynamic_proxy_backup_raw()
+        if backup:
+            restore_updates = {}
+            for key in DYNAMIC_PROXY_KEYS:
+                if key in backup:
+                    restored = _convert_value(key, backup[key])
+                    settings_dict[key] = restored
+                    restore_updates[key] = restored
+            if restore_updates:
+                _save_settings_to_db(**restore_updates)
         return settings_dict
     except Exception as e:
         if "未初始化" not in str(e):
@@ -680,6 +883,27 @@ class Settings(BaseModel):
     openai_register_screen_hint: str = "login_or_signup"
     openai_register_prompt: str = "login"
     openai_register_passkey_capabilities: str = "1111"
+    openai_add_phone_send_url: str = "https://auth.openai.com/api/accounts/add-phone/send"
+    openai_phone_otp_validate_url: str = "https://auth.openai.com/api/accounts/phone-otp/validate"
+    openai_phone_otp_resend_url: str = "https://auth.openai.com/api/accounts/phone-otp/resend"
+
+    # HeroSMS 接码平台配置
+    herosms_enabled: bool = False
+    herosms_api_key: SecretStr = SecretStr("")
+    herosms_service: str = "dr"
+    herosms_country: int = 187
+    herosms_max_price: float = -1
+    herosms_proxy: str = ""
+    herosms_timeout: int = 30
+    herosms_verify_timeout: int = 180
+    herosms_poll_interval: int = 3
+    herosms_lowest_price_first: bool = True
+    herosms_max_number_attempts: int = 1
+    herosms_target_number_index: int = 1
+    herosms_price_relax_enabled: bool = True
+    herosms_price_relax_max_multiplier: int = 5
+    herosms_reuse_enabled: bool = False
+    herosms_reuse_max_uses: int = 2
 
     # 代理配置
     proxy_enabled: bool = False
@@ -717,6 +941,7 @@ class Settings(BaseModel):
     registration_max_retries: int = 3
     registration_timeout: int = 120
     registration_default_password_length: int = 12
+    registration_flow_template: str = "default"
     registration_sleep_min: int = 5
     registration_sleep_max: int = 30
 
@@ -790,6 +1015,7 @@ def update_settings(**kwargs) -> Settings:
 
     # 保存到数据库
     _save_settings_to_db(**kwargs)
+    _save_dynamic_proxy_backup(**kwargs)
 
     return _settings
 

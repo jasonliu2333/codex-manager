@@ -1,0 +1,18 @@
+{
+  "id": "topic_1840923",
+  "name": "topic_1840923 流程",
+  "version": "2026-03-30",
+  "description": "基于 topic_1840923 注册流程：注册完成后优先复用 session 直接取 ChatGPT Session/AccessToken，失败再回退 OAuth 补全。",
+  "steps": [
+    "GET https://chatgpt.com/",
+    "GET https://chatgpt.com/api/auth/csrf",
+    "POST https://chatgpt.com/api/auth/signin/openai",
+    "GET https://auth.openai.com/api/accounts/authorize",
+    "POST https://auth.openai.com/api/accounts/user/register",
+    "GET https://auth.openai.com/api/accounts/email-otp/send",
+    "POST https://auth.openai.com/api/accounts/email-otp/validate",
+    "POST https://auth.openai.com/api/accounts/create_account",
+    "优先复用 session -> GET https://chatgpt.com/api/auth/session",
+    "回退 OAuth（app_EMoam...）-> /oauth/token"
+  ]
+}

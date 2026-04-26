@@ -41,12 +41,40 @@
                 <button class="tab-btn" data-tab="upload">☁️ 上传</button>
                 <button class="tab-btn" data-tab="outlook">📮 Outlook配置</button>
                 <button class="tab-btn" data-tab="registration">⚙️ 注册配置</button>
+                <button class="tab-btn" data-tab="herosms">📱 SMS接码</button>
                 <button class="tab-btn" data-tab="email-code">📧 验证码配置</button>
                 <button class="tab-btn" data-tab="database">💾 数据库</button>
             </div>
 
             <!-- 代理设置 -->
             <div class="tab-content active" id="proxy-tab">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>运行时诊断</h3>
+                        <span class="hint">用于确认页面当前读取的是数据库还是缓存，以及当前实际数据库路径</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <span class="label">配置来源</span>
+                                <span class="value" id="proxy-diagnostics-source">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="label">已保存动态代理 Key</span>
+                                <span class="value" id="proxy-diagnostics-dynamic-key">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="label">已保存静态代理密码</span>
+                                <span class="value" id="proxy-diagnostics-static-password">-</span>
+                            </div>
+                            <div class="info-item" style="grid-column: span 2;">
+                                <span class="label">数据库路径</span>
+                                <span class="value" id="proxy-diagnostics-db-path" style="word-break: break-all;">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 动态代理配置 -->
                 <div class="card" style="margin-top: var(--spacing-lg);">
                     <div class="card-header">
@@ -475,6 +503,13 @@
 
                             <div class="form-row">
                                 <div class="form-group">
+                                    <label for="registration-flow-template">注册流程模板</label>
+                                    <select id="registration-flow-template" name="flow_template">
+                                        <option value="default">默认流程</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
                                     <label for="sleep-min">最小等待时间 (秒)</label>
                                     <input type="number" id="sleep-min" name="sleep_min" value="5" min="1" max="60">
                                 </div>
@@ -487,6 +522,131 @@
 
                             <div class="form-actions">
                                 <button type="submit" class="btn btn-primary">💾 保存设置</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HeroSMS 接码配置 -->
+            <div class="tab-content" id="herosms-tab">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>HeroSMS 接码配置</h3>
+                        <span class="hint">用于 OAuth 流程遇到 add-phone 时自动取号、收短信并完成手机验证</span>
+                    </div>
+                    <div class="card-body">
+                        <form id="herosms-settings-form">
+                            <div class="form-group">
+                                <label style="display:flex;align-items:center;gap:8px;">
+                                    <input type="checkbox" id="herosms-enabled" name="enabled">
+                                    启用 SMS 接码处理 add-phone
+                                </label>
+                                <p class="hint">关闭后，遇到 add-phone 只记录日志并跳过，不会调用 HeroSMS。</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="herosms-api-key">HeroSMS API Key</label>
+                                <input type="password" id="herosms-api-key" name="api_key" placeholder="已配置则留空保持不变" autocomplete="new-password">
+                                <small id="herosms-api-key-status" style="color: var(--text-muted);">当前已保存 API Key：否</small>
+                                <div class="hint" style="margin-top: 6px;">密码框不回显真实 Key；留空表示保持数据库中已保存的 Key 不变。</div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="herosms-service">服务代码</label>
+                                    <input type="text" id="herosms-service" name="service" value="dr">
+                                    <span class="hint">默认 <code>dr</code>，按 HeroSMS 平台服务代码填写。</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="herosms-country">国家代码</label>
+                                    <div class="search-select" id="herosms-country-select">
+                                        <input type="text" id="herosms-country-search" placeholder="搜索国家名称或代码，例如 菲律宾 / Philippines / 4" autocomplete="off">
+                                        <div class="search-select-menu" id="herosms-country-menu"></div>
+                                    </div>
+                                    <input type="number" id="herosms-country" name="country" value="187" min="1">
+                                    <span class="hint">上方可搜索选择国家；下方保存实际 HeroSMS 国家代码。</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="herosms-max-price">最大单价</label>
+                                    <input type="text" id="herosms-max-price" name="max_price" value="-1">
+                                    <span class="hint">填 <code>-1</code> 表示不限制。</span>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="herosms-proxy">HeroSMS 专用代理（可选）</label>
+                                <input type="text" id="herosms-proxy" name="proxy" placeholder="留空则复用注册/补录代理">
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="herosms-timeout">API 超时 (秒)</label>
+                                    <input type="number" id="herosms-timeout" name="timeout" value="30" min="5" max="120">
+                                </div>
+                                <div class="form-group">
+                                    <label for="herosms-verify-timeout">短信等待超时 (秒)</label>
+                                    <input type="number" id="herosms-verify-timeout" name="verify_timeout" value="180" min="30" max="600">
+                                </div>
+                                <div class="form-group">
+                                    <label for="herosms-poll-interval">轮询间隔 (秒)</label>
+                                    <input type="number" id="herosms-poll-interval" name="poll_interval" value="3" min="1" max="30">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label style="display:flex;align-items:center;gap:8px;">
+                                        <input type="checkbox" id="herosms-lowest-price-first" name="lowest_price_first" checked>
+                                        按所选国家最低价格档优先取号
+                                    </label>
+                                    <span class="hint">会先查询 HeroSMS 价格表，再按最低可见价格作为 `maxPrice` 取号。</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="herosms-max-number-attempts">最大换号次数</label>
+                                    <input type="number" id="herosms-max-number-attempts" name="max_number_attempts" value="1" min="1" max="20">
+                                    <span class="hint">短信超时后，最多尝试几个不同号码。</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="herosms-target-number-index">使用第 N 个号码</label>
+                                    <input type="number" id="herosms-target-number-index" name="target_number_index" value="1" min="1" max="20">
+                                    <span class="hint">例如填 2：跳过第 1 个取到的号码，从第 2 个号码开始实际验证。</span>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label style="display:flex;align-items:center;gap:8px;">
+                                        <input type="checkbox" id="herosms-price-relax-enabled" name="price_relax_enabled" checked>
+                                        最低价无号时自动放宽价格档
+                                    </label>
+                                    <span class="hint">当最低价取号返回 `NO_NUMBERS` 时，自动逐步提高价格上限。</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="herosms-price-relax-max-multiplier">价格放宽最大倍数</label>
+                                    <input type="number" id="herosms-price-relax-max-multiplier" name="price_relax_max_multiplier" value="5" min="1" max="20">
+                                    <span class="hint">例如最低价 0.05，倍数 5，则最多放宽到 0.25；之后再回退到不限制价格。</span>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label style="display:flex;align-items:center;gap:8px;">
+                                        <input type="checkbox" id="herosms-reuse-enabled" name="reuse_enabled">
+                                        成功号码复用
+                                    </label>
+                                    <span class="hint">一个号码接码成功后不立即结束 activation，后续账号优先继续用该号码；遇到错误或达到上限后废弃/结束。</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="herosms-reuse-max-uses">单号码最多使用账号数</label>
+                                    <input type="number" id="herosms-reuse-max-uses" name="reuse_max_uses" value="2" min="1" max="5">
+                                    <span class="hint">建议 2-3。HeroSMS activation 通常有时间窗口，复用需要连续补录。</span>
+                                </div>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">💾 保存设置</button>
+                                <button type="button" class="btn btn-secondary" id="test-herosms-btn">🔌 测试 HeroSMS 连接</button>
                             </div>
                         </form>
                     </div>

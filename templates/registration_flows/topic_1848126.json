@@ -1,0 +1,17 @@
+{
+  "id": "topic_1848126",
+  "name": "topic_1848126 流程",
+  "version": "2026-03-30",
+  "description": "基于 chatgpt_register20260330.py：先走 chatgpt.com NextAuth，再进入 auth.openai.com 注册与 OAuth。",
+  "steps": [
+    "GET https://chatgpt.com/",
+    "GET https://chatgpt.com/api/auth/csrf",
+    "POST https://chatgpt.com/api/auth/signin/openai",
+    "GET https://auth.openai.com/api/accounts/authorize",
+    "POST https://auth.openai.com/api/accounts/user/register",
+    "GET https://auth.openai.com/api/accounts/email-otp/send",
+    "POST https://auth.openai.com/api/accounts/email-otp/validate",
+    "POST https://auth.openai.com/api/accounts/create_account",
+    "注册后 OAuth（app_EMoam...）-> /oauth/token"
+  ]
+}

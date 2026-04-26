@@ -96,18 +96,37 @@ const elements = {
     autoUploadTm: document.getElementById('auto-upload-tm'),
     tmServiceSelectGroup: document.getElementById('tm-service-select-group'),
     tmServiceSelect: document.getElementById('tm-service-select'),
+    regFlowTemplate: document.getElementById('reg-flow-template'),
 };
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     initEventListeners();
     loadAvailableServices();
+    loadRegistrationFlowTemplates();
     loadRecentAccounts();
     startAccountsPolling();
     initVisibilityReconnect();
     restoreActiveTask();
     initAutoUploadOptions();
 });
+
+async function loadRegistrationFlowTemplates() {
+    const select = elements.regFlowTemplate;
+    if (!select) return;
+    try {
+        const data = await api.get('/settings/registration');
+        const templates = data.templates || [];
+        if (templates.length > 0) {
+            select.innerHTML = templates.map(tpl =>
+                `<option value="${tpl.id}">${escapeHtml(tpl.name || tpl.id)}</option>`
+            ).join('');
+        }
+        select.value = data.flow_template || 'default';
+    } catch (error) {
+        console.error('加载注册流程模板失败:', error);
+    }
+}
 
 // 初始化注册后自动操作选项（CPA / Sub2API / TM）
 async function initAutoUploadOptions() {
@@ -586,6 +605,7 @@ async function handleStartRegistration(e) {
     // 构建请求数据（代理从设置中自动获取）
     const requestData = {
         email_service_type: emailServiceType,
+        flow_template: elements.regFlowTemplate ? elements.regFlowTemplate.value : undefined,
         auto_upload_cpa: elements.autoUploadCpa ? elements.autoUploadCpa.checked : false,
         cpa_service_ids: elements.autoUploadCpa && elements.autoUploadCpa.checked ? getSelectedServiceIds(elements.cpaServiceSelect) : [],
         auto_upload_sub2api: elements.autoUploadSub2api ? elements.autoUploadSub2api.checked : false,

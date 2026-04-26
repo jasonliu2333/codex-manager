@@ -357,6 +357,53 @@ body {
     border-top: 1px solid var(--border-light);
 }
 
+.search-select {
+    position: relative;
+}
+
+.search-select-menu {
+    display: none;
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 4px);
+    max-height: 260px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    z-index: 300;
+}
+
+.search-select-menu.active {
+    display: block;
+}
+
+.search-select-item {
+    padding: 9px 12px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-light);
+}
+
+.search-select-item:last-child {
+    border-bottom: none;
+}
+
+.search-select-item:hover,
+.search-select-item.active {
+    background: var(--primary-light);
+    color: var(--primary-color);
+}
+
+.search-select-item .muted {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    margin-left: 6px;
+}
+
 /* Checkbox 样式优化 */
 .form-group input[type="checkbox"] {
     width: auto;
