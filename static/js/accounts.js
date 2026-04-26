@@ -625,11 +625,11 @@ function updateBatchButtons() {
     elements.exportBtn.disabled = count === 0;
 
     elements.batchDeleteBtn.textContent = count > 0 ? `🗑️ 删除 (${count})` : '🗑️ 批量删除';
-    elements.batchRefreshBtn.textContent = count > 0 ? `🔄 刷新 (${count})` : '🔄 刷新Token';
-    elements.batchValidateBtn.textContent = count > 0 ? `✅ 验证 (${count})` : '✅ 验证Token';
+    elements.batchRefreshBtn.textContent = count > 0 ? `🔄 刷新 (${count})` : '🔄 刷新 Token';
+    elements.batchValidateBtn.textContent = count > 0 ? `✅ 验证 (${count})` : '✅ 验证 Token';
     elements.batchUploadBtn.textContent = count > 0 ? `☁️ 上传 (${count})` : '☁️ 上传';
     elements.batchCheckSubBtn.textContent = count > 0 ? `🔍 检测 (${count})` : '🔍 检测订阅';
-    elements.batchRecoverBtn.textContent = count > 0 ? `🔐 补录 (${count})` : '🔐 补录OAuth';
+    elements.batchRecoverBtn.textContent = count > 0 ? `🔐 补录 (${count})` : '🔐 补录 OAuth';
 }
 
 // 刷新单个账号Token
@@ -640,7 +640,7 @@ async function refreshToken(id) {
     }
     refreshingAccountIds.add(id);
 
-    openRecoveryLogModal(`账号 ${id} 刷新 Token`);
+    openRecoveryLogModal(`刷新 Token 日志 · 账号 ${id}`);
     appendRecoveryLog('[系统] 正在创建刷新任务...');
 
     try {
@@ -703,7 +703,7 @@ function watchRefreshTask(taskUuid) {
     recoveryStatusTimer = setInterval(async () => {
         try {
             const task = await api.get(`/accounts/refresh/task/${taskUuid}`);
-            elements.recoveryLogStatus.textContent = `任务状态: ${task.status}`;
+            elements.recoveryLogStatus.textContent = `当前状态: ${task.status}`;
             if (task.status === 'completed') {
                 appendRecoveryLog('[系统] 刷新任务完成');
                 cleanupRecoveryWatchers();
@@ -733,7 +733,7 @@ function watchValidateTask(taskUuid) {
     recoveryStatusTimer = setInterval(async () => {
         try {
             const task = await api.get(`/accounts/validate/task/${taskUuid}`);
-            elements.recoveryLogStatus.textContent = `任务状态: ${task.status}`;
+            elements.recoveryLogStatus.textContent = `当前状态: ${task.status}`;
             if (task.status === 'completed') {
                 appendRecoveryLog('[系统] 验证任务完成');
                 cleanupRecoveryWatchers();
@@ -761,7 +761,7 @@ function watchSubscriptionTask(taskUuid) {
     recoveryStatusTimer = setInterval(async () => {
         try {
             const task = await api.get(`/payment/accounts/check-subscription/task/${taskUuid}`);
-            elements.recoveryLogStatus.textContent = `任务状态: ${task.status}`;
+            elements.recoveryLogStatus.textContent = `当前状态: ${task.status}`;
             if (task.status === 'completed') {
                 appendRecoveryLog('[系统] 订阅检测任务完成');
                 cleanupRecoveryWatchers();
@@ -788,7 +788,7 @@ function watchRecoveryTask(taskUuid) {
     recoveryStatusTimer = setInterval(async () => {
         try {
             const task = await api.get(`/accounts/recover-oauth/task/${taskUuid}`);
-            elements.recoveryLogStatus.textContent = `任务状态: ${task.status}`;
+            elements.recoveryLogStatus.textContent = `当前状态: ${task.status}`;
             if (task.status === 'completed') {
                 appendRecoveryLog('[系统] 补录任务完成');
                 cleanupRecoveryWatchers();
@@ -815,7 +815,7 @@ function watchRecoveryBatch(batchId) {
     recoveryStatusTimer = setInterval(async () => {
         try {
             const batch = await api.get(`/accounts/recover-oauth/batch/${batchId}`);
-            elements.recoveryLogStatus.textContent = `批量状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             if (batch.finished) {
                 appendRecoveryLog('[系统] 批量补录任务已结束');
                 cleanupRecoveryWatchers();
@@ -836,7 +836,7 @@ function watchValidateBatch(batchId) {
     recoveryStatusTimer = setInterval(async () => {
         try {
             const batch = await api.get(`/accounts/batch-validate/${batchId}`);
-            elements.recoveryLogStatus.textContent = `批量验证: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             if (batch.finished) {
                 appendRecoveryLog('[系统] 批量验证任务已结束');
                 cleanupRecoveryWatchers();
@@ -858,7 +858,7 @@ function watchSubscriptionBatch(batchId) {
     recoveryStatusTimer = setInterval(async () => {
         try {
             const batch = await api.get(`/payment/accounts/batch-check-subscription/${batchId}`);
-            elements.recoveryLogStatus.textContent = `批量订阅检测: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             if (batch.finished) {
                 appendRecoveryLog('[系统] 批量订阅检测任务已结束');
                 cleanupRecoveryWatchers();
@@ -879,7 +879,7 @@ function watchRefreshBatch(batchId) {
     recoveryStatusTimer = setInterval(async () => {
         try {
             const batch = await api.get(`/accounts/batch-refresh/${batchId}`);
-            elements.recoveryLogStatus.textContent = `批量刷新: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             if (batch.finished) {
                 appendRecoveryLog('[系统] 批量刷新任务已结束');
                 cleanupRecoveryWatchers();
@@ -899,7 +899,7 @@ async function recoverOAuth(id) {
     const confirmed = await confirm('将使用全新登录会话再次发送验证码邮件并补录 ak/rk，是否继续？');
     if (!confirmed) return;
 
-    openRecoveryLogModal(`账号 ${id} OAuth 补录`);
+    openRecoveryLogModal(`OAuth 补录日志 · 账号 ${id}`);
     appendRecoveryLog('[系统] 正在创建补录任务...');
 
     try {
@@ -921,7 +921,7 @@ async function handleBatchRefresh() {
     const confirmed = await confirm(`确定要刷新选中的 ${count} 个账号的Token吗？`);
     if (!confirmed) return;
 
-    openRecoveryLogModal(`批量刷新 Token (${count})`);
+    openRecoveryLogModal(`批量刷新 Token 日志 (${count})`);
     appendRecoveryLog('[系统] 正在创建批量刷新任务...');
 
     elements.batchRefreshBtn.disabled = true;
@@ -946,7 +946,7 @@ async function handleBatchRecoverOAuth() {
     const confirmed = await confirm(`确定要为选中的 ${count} 个账号批量补录 OAuth 吗？`);
     if (!confirmed) return;
 
-    openRecoveryLogModal(`批量补录 OAuth (${count})`);
+    openRecoveryLogModal(`批量 OAuth 补录日志 (${count})`);
     appendRecoveryLog('[系统] 正在创建批量补录任务...');
 
     elements.batchRecoverBtn.disabled = true;
@@ -974,7 +974,7 @@ async function handleBatchValidate() {
 
     isBatchValidating = true;
     const count = getEffectiveCount();
-    openRecoveryLogModal(`批量验证 Token (${count})`);
+    openRecoveryLogModal(`批量验证 Token 日志 (${count})`);
     appendRecoveryLog('[系统] 正在创建批量验证任务...');
 
     elements.batchValidateBtn.disabled = true;
@@ -1518,7 +1518,7 @@ async function handleBatchUploadCpa() {
 
 // 手动标记订阅类型
 async function validateToken(id) {
-    openRecoveryLogModal(`账号 ${id} 验证 Token`);
+    openRecoveryLogModal(`验证 Token 日志 · 账号 ${id}`);
     appendRecoveryLog('[系统] 正在创建验证任务...');
     try {
         const result = await api.post(`/accounts/${id}/validate`, {}, { timeoutMs: 120000 });
@@ -1532,7 +1532,7 @@ async function validateToken(id) {
 }
 
 async function checkSubscription(id) {
-    openRecoveryLogModal(`账号 ${id} 检测订阅`);
+    openRecoveryLogModal(`订阅检测日志 · 账号 ${id}`);
     appendRecoveryLog('[系统] 正在创建订阅检测任务...');
     try {
         const result = await api.post(`/payment/accounts/${id}/check-subscription`, {}, { timeoutMs: 120000 });
@@ -1570,7 +1570,7 @@ async function handleBatchCheckSubscription() {
     const confirmed = await confirm(`确定要检测选中的 ${count} 个账号的订阅状态吗？`);
     if (!confirmed) return;
 
-    openRecoveryLogModal(`批量检测订阅 (${count})`);
+    openRecoveryLogModal(`批量订阅检测日志 (${count})`);
     appendRecoveryLog('[系统] 正在创建批量订阅检测任务...');
 
     elements.batchCheckSubBtn.disabled = true;
