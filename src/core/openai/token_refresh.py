@@ -92,10 +92,18 @@ def _should_mark_oauth_recovery_required(error_message: str) -> bool:
 
 def _mark_account_deleted_or_deactivated(db, account: Account, reason: str) -> None:
     extra = dict(account.extra_data or {})
-    extra["openai_account_state"] = "deleted_or_deactivated"
+    extra["openai_account_state"] = "forbidden_or_banned"
     extra["openai_account_state_reason"] = reason
     extra["openai_account_state_marked_at"] = datetime.utcnow().isoformat()
-    extra["oauth_recovery_required"] = False
+    for key in (
+        "oauth_recovery_required",
+        "oauth_recovery_required_reason",
+        "oauth_recovery_required_marked_at",
+        "openai_auth_state",
+        "openai_auth_state_reason",
+        "openai_auth_state_marked_at",
+    ):
+        extra.pop(key, None)
     crud.update_account(db, account.id, status="banned", extra_data=extra)
 
 
@@ -104,11 +112,25 @@ def _mark_account_forbidden_or_banned(db, account: Account, reason: str) -> None
     extra["openai_account_state"] = "forbidden_or_banned"
     extra["openai_account_state_reason"] = reason
     extra["openai_account_state_marked_at"] = datetime.utcnow().isoformat()
+    for key in (
+        "oauth_recovery_required",
+        "oauth_recovery_required_reason",
+        "oauth_recovery_required_marked_at",
+        "openai_auth_state",
+        "openai_auth_state_reason",
+        "openai_auth_state_marked_at",
+    ):
+        extra.pop(key, None)
     crud.update_account(db, account.id, status="banned", extra_data=extra)
 
 
 def _mark_oauth_recovery_required(db, account: Account, reason: str) -> None:
     extra = dict(account.extra_data or {})
+    if account.status == "banned" or str(extra.get("openai_account_state") or "").strip().lower() in {
+        "forbidden_or_banned",
+        "deleted_or_deactivated",
+    }:
+        return
     extra["oauth_recovery_required"] = True
     extra["oauth_recovery_required_reason"] = reason
     extra["oauth_recovery_required_marked_at"] = datetime.utcnow().isoformat()

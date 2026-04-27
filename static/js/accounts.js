@@ -407,10 +407,10 @@ function renderAccounts(accounts) {
                     ${['forbidden_or_banned', 'deleted_or_deactivated'].includes(account.extra_data?.openai_account_state)
                         ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_account_state_reason || 'OpenAI 已明确返回账号不可用/已删除/已停用')}">封禁</span>`
                         : ''}
-                    ${account.extra_data?.openai_auth_state === 'mfa_required'
+                    ${account.extra_data?.openai_auth_state === 'mfa_required' && !['forbidden_or_banned', 'deleted_or_deactivated'].includes(account.extra_data?.openai_account_state)
                         ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_auth_state_reason || '该账号需要 MFA 二次验证')}">需要MFA</span>`
                         : ''}
-                    ${account.extra_data?.oauth_recovery_required
+                    ${account.extra_data?.oauth_recovery_required && !['forbidden_or_banned', 'deleted_or_deactivated'].includes(account.extra_data?.openai_account_state)
                         ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.oauth_recovery_required_reason || 'refresh_token 已失效，需要补录 OAuth')}">需要补录</span>`
                         : ''}
                     ${account.extra_data?.token_validation_state === 'access_token_invalid_or_expired'
@@ -506,14 +506,11 @@ function renderAccounts(accounts) {
 }
 
 function getDerivedAccountStatus(account) {
-    if (account?.extra_data?.openai_account_state === 'deleted_or_deactivated') {
+    if (['forbidden_or_banned', 'deleted_or_deactivated'].includes(account?.extra_data?.openai_account_state)) {
         return { key: 'banned', text: '封禁', css: 'failed' };
     }
     if (account?.extra_data?.openai_auth_state === 'mfa_required') {
         return { key: 'mfa_required', text: '需要MFA', css: 'failed' };
-    }
-    if (account?.extra_data?.openai_account_state === 'forbidden_or_banned') {
-        return { key: 'banned', text: '封禁', css: 'failed' };
     }
     if (account?.extra_data?.oauth_recovery_required) {
         return { key: 'oauth_recovery_required', text: '需要补录', css: 'warning' };
@@ -533,6 +530,9 @@ function renderAccountStatusBadge(account) {
 }
 
 function renderTokenStatusBadge(account) {
+    if (['forbidden_or_banned', 'deleted_or_deactivated'].includes(account.extra_data?.openai_account_state)) {
+        return '<span class="badge pending" title="账号已被 OpenAI 明确标记为不可用，不能继续补录">不可用</span>';
+    }
     if (!account.has_tokens) {
         return '<span class="badge pending" title="缺少 access_token 或 refresh_token">缺失</span>';
     }
@@ -1099,13 +1099,10 @@ async function viewAccount(id) {
                     <span class="label">状态</span>
                     <span class="value">
                         ${renderAccountStatusBadge(account)}
-                        ${['forbidden_or_banned', 'deleted_or_deactivated'].includes(openaiState)
-                            ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(openaiStateReason || 'OpenAI 已明确返回账号不可用/已删除/已停用')}">封禁</span>`
-                            : ''}
                         ${openaiAuthState === 'mfa_required'
                             ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(openaiAuthReason || '该账号需要 MFA 二次验证')}">需要MFA</span>`
                             : ''}
-                        ${oauthRecoveryRequired
+                        ${oauthRecoveryRequired && !['forbidden_or_banned', 'deleted_or_deactivated'].includes(openaiState)
                             ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(oauthRecoveryReason || 'refresh_token 已失效，需要补录 OAuth')}">需要补录</span>`
                             : ''}
                         ${tokenValidationState === 'access_token_invalid_or_expired'

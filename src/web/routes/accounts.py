@@ -106,6 +106,15 @@ def _mark_account_deleted_or_deactivated(db, account: Account, reason: str, prox
     extra["openai_account_state"] = "forbidden_or_banned"
     extra["openai_account_state_reason"] = reason
     extra["openai_account_state_marked_at"] = datetime.utcnow().isoformat()
+    for key in (
+        "oauth_recovery_required",
+        "oauth_recovery_required_reason",
+        "oauth_recovery_required_marked_at",
+        "openai_auth_state",
+        "openai_auth_state_reason",
+        "openai_auth_state_marked_at",
+    ):
+        extra.pop(key, None)
     crud.update_account(
         db,
         account.id,
