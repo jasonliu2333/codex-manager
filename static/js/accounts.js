@@ -40,9 +40,14 @@ const elements = {
     importBtn: document.getElementById('import-btn'),
     importFileInput: document.getElementById('import-file-input'),
     selectAll: document.getElementById('select-all'),
+    pageSizeSelect: document.getElementById('page-size-select'),
+    pageSizeSelectBottom: document.getElementById('page-size-select-bottom'),
     prevPage: document.getElementById('prev-page'),
+    prevPageTop: document.getElementById('prev-page-top'),
     nextPage: document.getElementById('next-page'),
+    nextPageTop: document.getElementById('next-page-top'),
     pageInfo: document.getElementById('page-info'),
+    pageInfoTop: document.getElementById('page-info-top'),
     detailModal: document.getElementById('detail-modal'),
     modalBody: document.getElementById('modal-body'),
     closeModal: document.getElementById('close-modal'),
@@ -151,19 +156,39 @@ function initEventListeners() {
     });
 
     // 分页
-    elements.prevPage.addEventListener('click', () => {
-        if (currentPage > 1 && !isLoading) {
-            currentPage--;
-            loadAccounts();
-        }
+    [elements.prevPage, elements.prevPageTop].filter(Boolean).forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (currentPage > 1 && !isLoading) {
+                currentPage--;
+                loadAccounts();
+            }
+        });
     });
 
-    elements.nextPage.addEventListener('click', () => {
-        const totalPages = Math.ceil(totalAccounts / pageSize);
-        if (currentPage < totalPages && !isLoading) {
-            currentPage++;
+    [elements.nextPage, elements.nextPageTop].filter(Boolean).forEach(btn => {
+        btn.addEventListener('click', () => {
+            const totalPages = Math.ceil(totalAccounts / pageSize);
+            if (currentPage < totalPages && !isLoading) {
+                currentPage++;
+                loadAccounts();
+            }
+        });
+    });
+
+    [elements.pageSizeSelect, elements.pageSizeSelectBottom].filter(Boolean).forEach(select => {
+        select.addEventListener('change', () => {
+            const newValue = parseInt(select.value, 10) || 20;
+            pageSize = newValue;
+            if (elements.pageSizeSelect && elements.pageSizeSelect.value !== String(newValue)) {
+                elements.pageSizeSelect.value = String(newValue);
+            }
+            if (elements.pageSizeSelectBottom && elements.pageSizeSelectBottom.value !== String(newValue)) {
+                elements.pageSizeSelectBottom.value = String(newValue);
+            }
+            currentPage = 1;
+            resetSelectAllPages();
             loadAccounts();
-        }
+        });
     });
 
     // 导出
@@ -544,10 +569,20 @@ function togglePassword(element, password) {
 function updatePagination() {
     const totalPages = Math.max(1, Math.ceil(totalAccounts / pageSize));
 
-    elements.prevPage.disabled = currentPage <= 1;
-    elements.nextPage.disabled = currentPage >= totalPages;
-
-    elements.pageInfo.textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页`;
+    [elements.prevPage, elements.prevPageTop].filter(Boolean).forEach(btn => {
+        btn.disabled = currentPage <= 1;
+    });
+    [elements.nextPage, elements.nextPageTop].filter(Boolean).forEach(btn => {
+        btn.disabled = currentPage >= totalPages;
+    });
+    [elements.pageInfo, elements.pageInfoTop].filter(Boolean).forEach(label => {
+        label.textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页`;
+    });
+    [elements.pageSizeSelect, elements.pageSizeSelectBottom].filter(Boolean).forEach(select => {
+        if (select.value !== String(pageSize)) {
+            select.value = String(pageSize);
+        }
+    });
 }
 
 // 重置全选所有页状态

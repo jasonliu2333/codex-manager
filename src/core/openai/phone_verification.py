@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from ...config.settings import get_settings
@@ -15,6 +15,7 @@ from ..herosms_client import HeroSMSActivation, HeroSMSClient, HeroSMSConfig
 
 
 HEROSMS_REUSE_POOL_KEY = "herosms.reuse_pool"
+HEROSMS_ACTIVATION_WINDOW_SECONDS = 20 * 60
 _REUSE_POOL_LOCK = threading.RLock()
 
 
@@ -98,6 +99,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
         reused_activation = False
         previous_codes: set[str] = set()
         try:
+            _cleanup_reuse_pool(client)
             reuse_entry = _claim_reusable_activation(cfg.service, cfg.country, reuse_max_uses) if reuse_enabled else None
             if reuse_entry:
                 activation = HeroSMSActivation(
@@ -109,9 +111,16 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 )
                 reused_activation = True
                 previous_codes = {str(code).strip() for code in reuse_entry.get("used_codes", []) if str(code).strip()}
+                previous_texts = {
+                    str(text).strip()
+                    for text in reuse_entry.get("used_texts", [])
+                    if str(text).strip()
+                }
+                activation_expires_at = str(reuse_entry.get("expires_at") or "")
                 engine._log(
                     f"add-phone: 复用已成功号码 {activation.phone_number} "
-                    f"(activation={activation.activation_id}, used={reuse_entry.get('uses', 0)}/{reuse_max_uses})"
+                    f"(activation={activation.activation_id}, used={reuse_entry.get('uses', 0)}/{reuse_max_uses}, "
+                    f"expires_at={activation_expires_at or '-'})"
                 )
             else:
                 price_candidates = _build_price_candidates(
@@ -139,6 +148,12 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 if activation is None and last_request_error:
                     raise last_request_error
                 engine._log(f"add-phone: 取号成功 {activation.phone_number} (activation={activation.activation_id})")
+                _register_new_activation(
+                    activation,
+                    service=cfg.service,
+                    country=cfg.country,
+                    max_uses=reuse_max_uses,
+                )
 
                 if number_attempt < target_number_index:
                     engine._log(f"add-phone: 当前为第 {number_attempt} 个号码，配置要求从第 {target_number_index} 个号码开始使用，跳过当前号码", "warning")
@@ -164,6 +179,8 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             )
             if send_resp is None or send_resp.status_code not in (200, 201, 204):
                 body = (getattr(send_resp, "text", "") or "")[:300] if send_resp is not None else ""
+                if _is_phone_max_usage_error(send_resp, body):
+                    raise RuntimeError(f"手机号已达最大绑定次数，需更换号码: {body}")
                 raise RuntimeError(f"提交手机号失败: {getattr(send_resp, 'status_code', 'NO_RESPONSE')} {body}")
 
             if not reused_activation:
@@ -186,12 +203,15 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             timeout = int(runtime.get("verify_timeout", 180) or 180)
             poll_interval = int(runtime.get("poll_interval", 3) or 3)
             engine._log(f"add-phone: 等待短信验证码，最多 {timeout} 秒")
+            request_started_at = _utc_now()
             code = client.wait_for_code(
                 activation.activation_id,
                 timeout=timeout,
                 poll_interval=poll_interval,
                 resend_business_code=resend_business_code,
                 exclude_codes=previous_codes,
+                exclude_texts=previous_texts if reused_activation else None,
+                request_started_at=request_started_at,
                 trace_callback=lambda message: engine._log(f"add-phone: HeroSMS 状态: {message}", "debug"),
             )
             if not code:
@@ -218,6 +238,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     country=cfg.country,
                     max_uses=reuse_max_uses,
                     code=code,
+                    request_started_at=request_started_at,
                     reused=reused_activation,
                 )
                 if should_finish:
@@ -241,10 +262,23 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             engine._log(f"add-phone: 手机验证失败: {exc}", "error")
             if activation:
                 if reused_activation:
+                    try:
+                        client.cancel_activation(activation.activation_id)
+                    except Exception:
+                        try:
+                            client.finish_activation(activation.activation_id)
+                        except Exception:
+                            pass
                     _discard_reusable_activation(activation.activation_id, last_error)
                     engine._log(f"add-phone: 复用号码 {activation.phone_number} 已因错误废弃", "warning")
                 else:
                     client.cancel_activation(activation.activation_id)
+            if _should_retry_with_new_number(last_error) and number_attempt < max_number_attempts:
+                engine._log(
+                    f"add-phone: 检测到当前号码不可继续使用（{_summarize_retry_reason(last_error)}），自动切换到下一个号码重试",
+                    "warning",
+                )
+                continue
             if "等待短信验证码超时" in last_error and number_attempt < max_number_attempts:
                 engine._log(f"add-phone: 第 {number_attempt} 个号码短信超时，自动切换到下一个号码重试", "warning")
                 continue
@@ -446,6 +480,12 @@ def _claim_reusable_activation(service: str, country: int, max_uses: int) -> Opt
                 continue
             if str(item.get("service")) != str(service) or int(item.get("country") or 0) != int(country):
                 continue
+            if _activation_window_expired(item):
+                item["state"] = "expired"
+                item["in_use"] = False
+                item["updated_at"] = now
+                changed = True
+                continue
             if int(item.get("uses") or 0) >= max_uses:
                 item["state"] = "exhausted"
                 changed = True
@@ -463,6 +503,43 @@ def _claim_reusable_activation(service: str, country: int, max_uses: int) -> Opt
     return None
 
 
+def _register_new_activation(
+    activation: HeroSMSActivation,
+    *,
+    service: str,
+    country: int,
+    max_uses: int,
+) -> None:
+    now = _utc_now()
+    expires_at = _utc_after_seconds(HEROSMS_ACTIVATION_WINDOW_SECONDS)
+    with _REUSE_POOL_LOCK:
+        pool = _load_reuse_pool()
+        item = next((x for x in pool if str(x.get("activation_id")) == str(activation.activation_id)), None)
+        if item is None:
+            item = {"activation_id": str(activation.activation_id)}
+            pool.append(item)
+        item.update({
+            "phone_number": activation.phone_number,
+            "raw_number": activation.raw_number,
+            "country_phone_code": activation.country_phone_code,
+            "activation_cost": activation.activation_cost,
+            "service": service,
+            "country": country,
+            "uses": int(item.get("uses") or 0),
+            "max_uses": max_uses,
+            "used_codes": item.get("used_codes", []),
+            "used_texts": item.get("used_texts", []),
+            "state": "active",
+            "in_use": False,
+            "reserved_at": "",
+            "created_at": str(item.get("created_at") or now),
+            "activation_started_at": str(item.get("activation_started_at") or now),
+            "expires_at": str(item.get("expires_at") or expires_at),
+            "updated_at": now,
+        })
+        _save_reuse_pool(pool[-50:])
+
+
 def _record_activation_success(
     activation: HeroSMSActivation,
     *,
@@ -470,6 +547,7 @@ def _record_activation_success(
     country: int,
     max_uses: int,
     code: str,
+    request_started_at: str,
     reused: bool,
 ) -> bool:
     """记录号码成功使用次数。返回 True 表示应结束 HeroSMS activation。"""
@@ -505,13 +583,17 @@ def _record_activation_success(
             "uses": int(item.get("uses") or 0) + 1,
             "max_uses": max_uses,
             "used_codes": used_codes[-10:],
+            "used_texts": _append_unique_text(item.get("used_texts", []), code),
             "last_code": code,
+            "first_code_received_at": str(item.get("first_code_received_at") or now),
+            "last_code_received_at": now,
+            "last_request_started_at": request_started_at,
             "last_reused": reused,
             "in_use": False,
             "reserved_at": "",
             "updated_at": now,
         })
-        if int(item["uses"]) >= max_uses:
+        if int(item["uses"]) >= max_uses or _activation_window_expired(item):
             item["state"] = "exhausted"
             should_finish = True
         else:
@@ -535,6 +617,53 @@ def _discard_reusable_activation(activation_id: str, reason: str) -> None:
         _save_reuse_pool(pool)
 
 
+def _cleanup_reuse_pool(client: Optional[HeroSMSClient] = None) -> None:
+    now = _utc_now()
+    changed = False
+    to_cancel: list[str] = []
+    with _REUSE_POOL_LOCK:
+        pool = _load_reuse_pool()
+        for item in pool:
+            state = str(item.get("state") or "")
+            activation_id = str(item.get("activation_id") or "")
+            if not activation_id:
+                continue
+            if state == "active" and _activation_window_expired(item):
+                item["state"] = "expired"
+                item["in_use"] = False
+                item["updated_at"] = now
+                changed = True
+                to_cancel.append(activation_id)
+                continue
+            if state in {"failed", "expired", "exhausted"} and item.get("cancelled_at") in (None, ""):
+                to_cancel.append(activation_id)
+        if changed:
+            _save_reuse_pool(pool)
+    if client:
+        for activation_id in to_cancel:
+            try:
+                client.cancel_activation(activation_id)
+            except Exception:
+                try:
+                    client.finish_activation(activation_id)
+                except Exception:
+                    pass
+            finally:
+                _mark_activation_cancelled(activation_id)
+
+
+def _mark_activation_cancelled(activation_id: str) -> None:
+    with _REUSE_POOL_LOCK:
+        pool = _load_reuse_pool()
+        for item in pool:
+            if str(item.get("activation_id")) == str(activation_id):
+                item["cancelled_at"] = _utc_now()
+                item["in_use"] = False
+                item["updated_at"] = _utc_now()
+                break
+        _save_reuse_pool(pool)
+
+
 def _reservation_is_stale(reserved_at: str) -> bool:
     try:
         dt = datetime.fromisoformat(reserved_at.replace("Z", "+00:00"))
@@ -545,3 +674,63 @@ def _reservation_is_stale(reserved_at: str) -> bool:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _utc_after_seconds(seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+def _activation_window_expired(item: dict) -> bool:
+    expires_at = str(item.get("expires_at") or "")
+    if expires_at:
+        try:
+            return datetime.now(timezone.utc) >= datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except Exception:
+            pass
+    created_at = str(item.get("activation_started_at") or item.get("created_at") or "")
+    try:
+        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - dt).total_seconds() >= HEROSMS_ACTIVATION_WINDOW_SECONDS
+    except Exception:
+        return True
+
+
+def _append_unique_text(existing: Any, code: str) -> list[str]:
+    values = [str(x).strip() for x in (existing or []) if str(x).strip()]
+    if code and code not in values:
+        values.append(code)
+    return values[-10:]
+
+
+def _is_phone_max_usage_error(response: Any, body: str) -> bool:
+    text = (body or "").lower()
+    if "phone_max_usage_exceeded" in text:
+        return True
+    if "maximum number of accounts" in text:
+        return True
+    try:
+        data = response.json() if response is not None else {}
+        error = data.get("error") if isinstance(data, dict) else {}
+        code = str((error or {}).get("code") or "").lower()
+        message = str((error or {}).get("message") or "").lower()
+        return code == "phone_max_usage_exceeded" or "maximum number of accounts" in message
+    except Exception:
+        return False
+
+
+def _should_retry_with_new_number(error_text: str) -> bool:
+    text = (error_text or "").lower()
+    markers = [
+        "手机号已达最大绑定次数",
+        "phone_max_usage_exceeded",
+        "maximum number of accounts",
+        "phone number is already linked",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def _summarize_retry_reason(error_text: str) -> str:
+    text = (error_text or "").lower()
+    if "phone_max_usage_exceeded" in text or "maximum number of accounts" in text:
+        return "号码已达最大绑定次数"
+    return "当前号码不可用"

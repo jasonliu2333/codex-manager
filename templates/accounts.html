@@ -173,6 +173,25 @@
             <!-- 账号列表 -->
             <div class="card">
                 <div class="card-body" style="padding: 0;">
+                    <div class="pagination pagination-top" id="pagination-top" style="padding: 12px 16px; border-bottom: 1px solid var(--border-color); justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                            <label for="page-size-select" style="color: var(--text-secondary); font-size: 0.9rem;">每页显示</label>
+                            <select id="page-size-select" class="form-select" style="width:auto; min-width:90px;">
+                                <option value="20" selected>20 条</option>
+                                <option value="50">50 条</option>
+                                <option value="100">100 条</option>
+                            </select>
+                            <span id="page-info-top">第 1 页 / 共 1 页</span>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <button class="btn btn-secondary btn-sm page-nav-btn" id="prev-page-top" disabled>
+                                ← 上一页
+                            </button>
+                            <button class="btn btn-secondary btn-sm page-nav-btn" id="next-page-top">
+                                下一页 →
+                            </button>
+                        </div>
+                    </div>
                     <div class="table-container">
                         <table class="data-table">
                             <thead>
@@ -205,14 +224,24 @@
                     </div>
 
                     <!-- 分页 -->
-                    <div class="pagination" id="pagination">
-                        <button class="btn btn-secondary btn-sm" id="prev-page" disabled>
+                    <div class="pagination" id="pagination" style="justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                            <label for="page-size-select-bottom" style="color: var(--text-secondary); font-size: 0.9rem;">每页显示</label>
+                            <select id="page-size-select-bottom" class="form-select" style="width:auto; min-width:90px;">
+                                <option value="20" selected>20 条</option>
+                                <option value="50">50 条</option>
+                                <option value="100">100 条</option>
+                            </select>
+                            <span id="page-info">第 1 页 / 共 1 页</span>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                        <button class="btn btn-secondary btn-sm page-nav-btn" id="prev-page" disabled>
                             ← 上一页
                         </button>
-                        <span id="page-info">第 1 页 / 共 1 页</span>
-                        <button class="btn btn-secondary btn-sm" id="next-page">
+                        <button class="btn btn-secondary btn-sm page-nav-btn" id="next-page">
                             下一页 →
                         </button>
+                        </div>
                     </div>
                 </div>
             </div>

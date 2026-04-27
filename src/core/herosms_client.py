@@ -219,12 +219,15 @@ class HeroSMSClient:
         poll_interval: int = 3,
         resend_business_code: Optional[Callable[[], None]] = None,
         exclude_codes: Optional[set[str]] = None,
+        exclude_texts: Optional[set[str]] = None,
+        request_started_at: Optional[str] = None,
         trace_callback: Optional[Callable[[str], None]] = None,
     ) -> Optional[str]:
         deadline = time.time() + timeout
         last_herosms_resend = time.time()
         business_resent = False
         exclude_codes = {str(code).strip() for code in (exclude_codes or set()) if str(code).strip()}
+        exclude_texts = {str(text).strip() for text in (exclude_texts or set()) if str(text).strip()}
         last_trace = ""
 
         while time.time() < deadline:
@@ -238,6 +241,15 @@ class HeroSMSClient:
                             last_trace = trace
                     if result.get("status") == "ok":
                         code = str(result.get("code") or "").strip()
+                        sms_text = str(result.get("sms_text") or "").strip()
+                        if code and code in exclude_codes:
+                            if trace_callback:
+                                trace_callback(f"{getter.__name__}: 检测到旧验证码 {code}，已跳过")
+                            continue
+                        if sms_text and sms_text in exclude_texts:
+                            if trace_callback:
+                                trace_callback(f"{getter.__name__}: 检测到旧短信正文，已跳过")
+                            continue
                         if code and code not in exclude_codes:
                             return code
                     if result.get("status") == "cancel":
@@ -252,6 +264,14 @@ class HeroSMSClient:
                         code = str(item.get("smsCode") or "").strip() or extract_sms_code(sms_text)
                         if trace_callback and (code or sms_text):
                             trace_callback(f"getActiveActivations: code={code or '-'} text={sms_text[:120]}")
+                        if code and code in exclude_codes:
+                            if trace_callback:
+                                trace_callback(f"getActiveActivations: 检测到旧验证码 {code}，已跳过")
+                            break
+                        if sms_text and sms_text.strip() in exclude_texts:
+                            if trace_callback:
+                                trace_callback("getActiveActivations: 检测到旧短信正文，已跳过")
+                            break
                         if code and code not in exclude_codes:
                             return code
                         break
