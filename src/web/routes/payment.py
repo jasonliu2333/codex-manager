@@ -116,6 +116,9 @@ async def run_batch_check_subscription(batch_id: str, account_ids: List[int], re
     async def worker(index: int, account_id: int):
         async with semaphore:
             prefix = f"[任务{index}]"
+            if task_manager.is_batch_cancelled(batch_id):
+                task_manager.add_batch_log(batch_id, f"{prefix} 已取消，跳过账号 ID={account_id}")
+                return
             task_manager.add_batch_log(batch_id, f"{prefix} 开始检测订阅 ID={account_id}")
             try:
                 await loop.run_in_executor(task_manager.executor, _run_sync_check_subscription_task, f"batch-{batch_id}-{index}", account_id, request_proxy)
@@ -132,10 +135,16 @@ async def run_batch_check_subscription(batch_id: str, account_ids: List[int], re
                 task_manager.update_batch_status(batch_id, completed=subscription_batches[batch_id]["completed"], success=subscription_batches[batch_id]["success"], failed=subscription_batches[batch_id]["failed"], current_index=subscription_batches[batch_id]["completed"])
 
     await asyncio.gather(*(worker(i, aid) for i, aid in enumerate(account_ids, start=1)))
-    subscription_batches[batch_id]["status"] = "completed"
-    subscription_batches[batch_id]["finished"] = True
-    task_manager.update_batch_status(batch_id, status="completed", finished=True)
-    task_manager.add_batch_log(batch_id, f"[系统] 批量订阅检测结束，成功 {subscription_batches[batch_id]['success']}，失败 {subscription_batches[batch_id]['failed']}")
+    if task_manager.is_batch_cancelled(batch_id):
+        subscription_batches[batch_id]["status"] = "cancelled"
+        subscription_batches[batch_id]["finished"] = True
+        task_manager.update_batch_status(batch_id, status="cancelled", finished=True)
+        task_manager.add_batch_log(batch_id, "[系统] 批量订阅检测已取消")
+    else:
+        subscription_batches[batch_id]["status"] = "completed"
+        subscription_batches[batch_id]["finished"] = True
+        task_manager.update_batch_status(batch_id, status="completed", finished=True)
+        task_manager.add_batch_log(batch_id, f"[系统] 批量订阅检测结束，成功 {subscription_batches[batch_id]['success']}，失败 {subscription_batches[batch_id]['failed']}")
 
 
 # ============== 支付链接生成 ==============
@@ -203,6 +212,15 @@ def open_browser_incognito(request: OpenIncognitoRequest):
 
 
 # ============== 订阅状态 ==============
+
+@router.post("/accounts/batch-check-subscription/{batch_id}/cancel")
+def cancel_batch_check_subscription(batch_id: str):
+    batch = subscription_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    task_manager.cancel_batch(batch_id)
+    return {"success": True, "message": "批量订阅检测任务已请求取消"}
+
 
 @router.get("/accounts/batch-check-subscription/{batch_id}")
 def get_batch_check_subscription(batch_id: str):

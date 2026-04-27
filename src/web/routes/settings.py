@@ -227,6 +227,50 @@ def _build_proxy_runtime_diagnostics() -> dict:
     }
 
 
+def _build_proxy_test_mapping(proxy_url: str, *, include_https: bool) -> dict:
+    proxies = {"http": proxy_url}
+    if include_https:
+        proxies["https"] = proxy_url
+    return proxies
+
+
+def _test_proxy_http_basic(proxy_url: str) -> dict:
+    import time
+    from curl_cffi import requests as cffi_requests
+
+    start = time.time()
+    resp = cffi_requests.get(
+        "http://api.ipify.org?format=json",
+        proxies=_build_proxy_test_mapping(proxy_url, include_https=False),
+        timeout=10,
+        impersonate="chrome110",
+    )
+    elapsed = round((time.time() - start) * 1000)
+    if resp.status_code != 200:
+        return {"success": False, "message": f"HTTP 代理测试失败: HTTP {resp.status_code}"}
+    ip = ""
+    try:
+        ip = resp.json().get("ip", "")
+    except Exception:
+        pass
+    return {"success": True, "ip": ip, "response_time": elapsed, "message": f"HTTP 代理可用，出口 IP: {ip or 'unknown'}，响应时间: {elapsed}ms"}
+
+
+def _test_proxy_https_openai(proxy_url: str) -> dict:
+    from curl_cffi import requests as cffi_requests
+    try:
+        resp = cffi_requests.get(
+            "https://auth.openai.com/",
+            proxies=_build_proxy_test_mapping(proxy_url, include_https=True),
+            timeout=10,
+            impersonate="chrome110",
+            allow_redirects=False,
+        )
+        return {"success": True, "status_code": resp.status_code, "message": f"HTTPS CONNECT 可用（auth.openai.com 返回 {resp.status_code}）"}
+    except Exception as exc:
+        return {"success": False, "message": f"HTTPS CONNECT 不可用: {exc}"}
+
+
 # ============== Pydantic Models ==============
 
 class SettingItem(BaseModel):
@@ -387,24 +431,21 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
     if not proxy_url:
         return {"success": False, "message": "动态代理 API 返回为空或请求失败"}
 
-    # 用获取到的代理测试连通性
-    import time
-    from curl_cffi import requests as cffi_requests
+    # 先按服务商文档测试 HTTP 代理基础可用性，再额外测试是否适合 OpenAI HTTPS。
     try:
-        proxies = {"http": proxy_url, "https": proxy_url}
-        start = time.time()
-        resp = cffi_requests.get(
-            "https://api.ipify.org?format=json",
-            proxies=proxies,
-            timeout=10,
-            impersonate="chrome110"
-        )
-        elapsed = round((time.time() - start) * 1000)
-        if resp.status_code == 200:
-            ip = resp.json().get("ip", "")
-            return {"success": True, "proxy_url": proxy_url, "ip": ip, "response_time": elapsed,
-                    "message": f"动态代理可用，出口 IP: {ip}，响应时间: {elapsed}ms"}
-        return {"success": False, "proxy_url": proxy_url, "message": f"代理连接失败: HTTP {resp.status_code}"}
+        basic = _test_proxy_http_basic(proxy_url)
+        if not basic.get("success"):
+            return {"success": False, "proxy_url": proxy_url, "message": basic.get("message", "HTTP 代理测试失败")}
+        https_test = _test_proxy_https_openai(proxy_url)
+        return {
+            "success": True,
+            "proxy_url": proxy_url,
+            "ip": basic.get("ip", ""),
+            "response_time": basic.get("response_time"),
+            "https_openai_ok": bool(https_test.get("success")),
+            "https_openai_message": https_test.get("message", ""),
+            "message": basic.get("message", "动态代理 HTTP 可用"),
+        }
     except Exception as e:
         return {"success": False, "proxy_url": proxy_url, "message": f"代理连接失败: {e}"}
 
@@ -933,38 +974,19 @@ async def test_proxy_item(proxy_id: int):
             raise HTTPException(status_code=404, detail="代理不存在")
 
         proxy_url = proxy.proxy_url
-        test_url = "https://api.ipify.org?format=json"
-        start_time = time.time()
-
         try:
-            proxies = {
-                "http": proxy_url,
-                "https": proxy_url
+            basic = _test_proxy_http_basic(proxy_url)
+            if not basic.get("success"):
+                return {"success": False, "message": basic.get("message", "HTTP 代理测试失败")}
+            https_test = _test_proxy_https_openai(proxy_url)
+            return {
+                "success": True,
+                "ip": basic.get("ip", ""),
+                "response_time": basic.get("response_time"),
+                "https_openai_ok": bool(https_test.get("success")),
+                "https_openai_message": https_test.get("message", ""),
+                "message": basic.get("message", "代理连接成功")
             }
-
-            response = cffi_requests.get(
-                test_url,
-                proxies=proxies,
-                timeout=3,
-                impersonate="chrome110"
-            )
-
-            elapsed_time = time.time() - start_time
-
-            if response.status_code == 200:
-                ip_info = response.json()
-                return {
-                    "success": True,
-                    "ip": ip_info.get("ip", ""),
-                    "response_time": round(elapsed_time * 1000),
-                    "message": f"代理连接成功，出口 IP: {ip_info.get('ip', 'unknown')}"
-                }
-            else:
-                return {
-                    "success": False,
-                    "message": f"代理返回错误状态码: {response.status_code}"
-                }
-
         except Exception as e:
             return {
                 "success": False,
@@ -984,41 +1006,19 @@ async def test_all_proxies():
         results = []
         for proxy in proxies:
             proxy_url = proxy.proxy_url
-            test_url = "https://api.ipify.org?format=json"
-            start_time = time.time()
-
             try:
-                proxies_dict = {
-                    "http": proxy_url,
-                    "https": proxy_url
-                }
-
-                response = cffi_requests.get(
-                    test_url,
-                    proxies=proxies_dict,
-                    timeout=3,
-                    impersonate="chrome110"
-                )
-
-                elapsed_time = time.time() - start_time
-
-                if response.status_code == 200:
-                    ip_info = response.json()
-                    results.append({
-                        "id": proxy.id,
-                        "name": proxy.name,
-                        "success": True,
-                        "ip": ip_info.get("ip", ""),
-                        "response_time": round(elapsed_time * 1000)
-                    })
-                else:
-                    results.append({
-                        "id": proxy.id,
-                        "name": proxy.name,
-                        "success": False,
-                        "message": f"状态码: {response.status_code}"
-                    })
-
+                basic = _test_proxy_http_basic(proxy_url)
+                https_test = _test_proxy_https_openai(proxy_url) if basic.get("success") else {"success": False, "message": "未执行"}
+                results.append({
+                    "id": proxy.id,
+                    "name": proxy.name,
+                    "success": bool(basic.get("success")),
+                    "ip": basic.get("ip", ""),
+                    "response_time": basic.get("response_time"),
+                    "message": basic.get("message", ""),
+                    "https_openai_ok": bool(https_test.get("success")),
+                    "https_openai_message": https_test.get("message", ""),
+                })
             except Exception as e:
                 results.append({
                     "id": proxy.id,

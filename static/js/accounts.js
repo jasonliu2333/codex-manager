@@ -15,6 +15,7 @@ const refreshingAccountIds = new Set();
 let isBatchValidating = false;
 let recoverySocket = null;
 let recoveryStatusTimer = null;
+let currentBatchCancelEndpoint = null;
 
 // DOM 元素
 const elements = {
@@ -672,11 +673,26 @@ function cleanupRecoveryWatchers() {
     }
 }
 
-function openRecoveryLogModal(title = 'OAuth 补录日志') {
+function openRecoveryLogModal(title = '任务日志') {
     cleanupRecoveryWatchers();
+    currentBatchCancelEndpoint = null;
     elements.recoveryLogOutput.textContent = '';
     elements.recoveryLogStatus.textContent = title;
+    const cancelBtn = document.getElementById('recovery-log-cancel-btn');
+    if (cancelBtn) cancelBtn.style.display = 'none';
     elements.recoveryLogModal.classList.add('active');
+}
+
+async function cancelCurrentBatchTask() {
+    if (!currentBatchCancelEndpoint) return;
+    try {
+        await api.post(currentBatchCancelEndpoint, {});
+        appendRecoveryLog('[系统] 已发送取消请求，请等待当前进行中的子任务收尾...');
+        const cancelBtn = document.getElementById('recovery-log-cancel-btn');
+        if (cancelBtn) cancelBtn.disabled = true;
+    } catch (error) {
+        toast.error('取消任务失败: ' + error.message);
+    }
 }
 
 function closeRecoveryLogModal() {
@@ -817,7 +833,7 @@ function watchRecoveryBatch(batchId) {
             const batch = await api.get(`/accounts/recover-oauth/batch/${batchId}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             if (batch.finished) {
-                appendRecoveryLog('[系统] 批量补录任务已结束');
+                appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量补录任务已取消' : '[系统] 批量补录任务已结束');
                 cleanupRecoveryWatchers();
                 loadAccounts();
                 updateBatchButtons();
@@ -838,7 +854,7 @@ function watchValidateBatch(batchId) {
             const batch = await api.get(`/accounts/batch-validate/${batchId}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             if (batch.finished) {
-                appendRecoveryLog('[系统] 批量验证任务已结束');
+                appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量验证任务已取消' : '[系统] 批量验证任务已结束');
                 cleanupRecoveryWatchers();
                 isBatchValidating = false;
                 loadAccounts();
@@ -860,7 +876,7 @@ function watchSubscriptionBatch(batchId) {
             const batch = await api.get(`/payment/accounts/batch-check-subscription/${batchId}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             if (batch.finished) {
-                appendRecoveryLog('[系统] 批量订阅检测任务已结束');
+                appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量订阅检测任务已取消' : '[系统] 批量订阅检测任务已结束');
                 cleanupRecoveryWatchers();
                 loadAccounts();
                 updateBatchButtons();
@@ -881,7 +897,7 @@ function watchRefreshBatch(batchId) {
             const batch = await api.get(`/accounts/batch-refresh/${batchId}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             if (batch.finished) {
-                appendRecoveryLog('[系统] 批量刷新任务已结束');
+                appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量刷新任务已取消' : '[系统] 批量刷新任务已结束');
                 cleanupRecoveryWatchers();
                 loadAccounts();
                 updateBatchButtons();
@@ -930,6 +946,9 @@ async function handleBatchRefresh() {
     try {
         const result = await api.post('/accounts/batch-refresh', buildBatchPayload(), { timeoutMs: 120000 });
         appendRecoveryLog(`[系统] 批量刷新任务已创建: ${result.batch_id}`);
+        currentBatchCancelEndpoint = `/accounts/batch-refresh/${result.batch_id}/cancel`;
+        const cancelBtn = document.getElementById('recovery-log-cancel-btn');
+        if (cancelBtn) { cancelBtn.style.display = 'inline-flex'; cancelBtn.disabled = false; }
         watchRefreshBatch(result.batch_id);
     } catch (error) {
         appendRecoveryLog(`[失败] 创建批量刷新任务失败: ${error.message}`);
@@ -955,6 +974,9 @@ async function handleBatchRecoverOAuth() {
     try {
         const result = await api.post('/accounts/batch-recover-oauth', buildBatchPayload(), { timeoutMs: 120000 });
         appendRecoveryLog(`[系统] 批量补录任务已创建: ${result.batch_id}`);
+        currentBatchCancelEndpoint = `/accounts/recover-oauth/batch/${result.batch_id}/cancel`;
+        const cancelBtn = document.getElementById('recovery-log-cancel-btn');
+        if (cancelBtn) { cancelBtn.style.display = 'inline-flex'; cancelBtn.disabled = false; }
         watchRecoveryBatch(result.batch_id);
     } catch (error) {
         appendRecoveryLog(`[失败] 创建批量补录任务失败: ${error.message}`);
@@ -983,6 +1005,9 @@ async function handleBatchValidate() {
     try {
         const result = await api.post('/accounts/batch-validate', buildBatchPayload(), { timeoutMs: 120000 });
         appendRecoveryLog(`[系统] 批量验证任务已创建: ${result.batch_id}`);
+        currentBatchCancelEndpoint = `/accounts/batch-validate/${result.batch_id}/cancel`;
+        const cancelBtn = document.getElementById('recovery-log-cancel-btn');
+        if (cancelBtn) { cancelBtn.style.display = 'inline-flex'; cancelBtn.disabled = false; }
         watchValidateBatch(result.batch_id);
     } catch (error) {
         appendRecoveryLog(`[失败] 创建批量验证任务失败: ${error.message}`);
@@ -1579,6 +1604,9 @@ async function handleBatchCheckSubscription() {
     try {
         const result = await api.post('/payment/accounts/batch-check-subscription', buildBatchPayload(), { timeoutMs: 120000 });
         appendRecoveryLog(`[系统] 批量订阅检测任务已创建: ${result.batch_id}`);
+        currentBatchCancelEndpoint = `/payment/accounts/batch-check-subscription/${result.batch_id}/cancel`;
+        const cancelBtn = document.getElementById('recovery-log-cancel-btn');
+        if (cancelBtn) { cancelBtn.style.display = 'inline-flex'; cancelBtn.disabled = false; }
         watchSubscriptionBatch(result.batch_id);
     } catch (e) {
         appendRecoveryLog(`[失败] 创建批量订阅检测任务失败: ${e.message}`);

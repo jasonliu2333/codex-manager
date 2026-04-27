@@ -299,7 +299,7 @@
                 <button class="modal-close" id="close-recovery-log-modal">&times;</button>
             </div>
             <div class="modal-body">
-                <div id="recovery-log-status" style="margin-bottom: 12px; color: var(--text-muted); font-size: 0.9rem;">等待开始...</div>
+                <div style="margin-bottom: 12px; display:flex; align-items:center; justify-content:space-between; gap:12px;"><div id="recovery-log-status" style="color: var(--text-muted); font-size: 0.9rem;">等待开始...</div><button class="btn btn-danger btn-sm" id="recovery-log-cancel-btn" onclick="cancelCurrentBatchTask()" style="display:none;">取消任务</button></div>
                 <pre id="recovery-log-output" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; min-height: 320px; max-height: 60vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.82rem; line-height: 1.55;"></pre>
             </div>
         </div>

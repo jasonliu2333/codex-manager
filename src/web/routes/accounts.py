@@ -1350,6 +1350,9 @@ async def run_batch_recover_oauth(batch_id: str, task_account_pairs: List[dict],
     task_manager.add_batch_log(batch_id, f"[系统] 批量补录开始，共 {len(task_account_pairs)} 个账号")
 
     for index, item in enumerate(task_account_pairs, start=1):
+        if task_manager.is_batch_cancelled(batch_id):
+            task_manager.add_batch_log(batch_id, "[系统] 批量补录已取消")
+            break
         prefix = f"[任务{index}]"
         task_manager.add_batch_log(batch_id, f"{prefix} 启动补录: {item['email']}")
         await run_recover_oauth_task(
@@ -1381,13 +1384,19 @@ async def run_batch_recover_oauth(batch_id: str, task_account_pairs: List[dict],
             current_index=index,
         )
 
-    recovery_batches[batch_id]["status"] = "completed"
-    recovery_batches[batch_id]["finished"] = True
-    task_manager.update_batch_status(batch_id, status="completed", finished=True)
-    task_manager.add_batch_log(
-        batch_id,
-        f"[系统] 批量补录结束，成功 {recovery_batches[batch_id]['success']}，失败 {recovery_batches[batch_id]['failed']}",
-    )
+    if task_manager.is_batch_cancelled(batch_id):
+        recovery_batches[batch_id]["status"] = "cancelled"
+        recovery_batches[batch_id]["finished"] = True
+        task_manager.update_batch_status(batch_id, status="cancelled", finished=True)
+        task_manager.add_batch_log(batch_id, "[系统] 批量补录已取消")
+    else:
+        recovery_batches[batch_id]["status"] = "completed"
+        recovery_batches[batch_id]["finished"] = True
+        task_manager.update_batch_status(batch_id, status="completed", finished=True)
+        task_manager.add_batch_log(
+            batch_id,
+            f"[系统] 批量补录结束，成功 {recovery_batches[batch_id]['success']}，失败 {recovery_batches[batch_id]['failed']}",
+        )
 
 
 def _run_single_validate(account_id: int, proxy: Optional[str]):
@@ -1415,6 +1424,9 @@ async def run_batch_validate(batch_id: str, account_ids: List[int], request_prox
     async def worker(index: int, account_id: int):
         async with semaphore:
             prefix = f"[任务{index}]"
+            if task_manager.is_batch_cancelled(batch_id):
+                task_manager.add_batch_log(batch_id, f"{prefix} 已取消，跳过账号 ID={account_id}")
+                return
             task_manager.add_batch_log(batch_id, f"{prefix} 开始验证账号 ID={account_id}")
             try:
                 proxy = _get_proxy(request_proxy, purpose="validate")
@@ -1439,10 +1451,16 @@ async def run_batch_validate(batch_id: str, account_ids: List[int], request_prox
                 )
 
     await asyncio.gather(*(worker(i, aid) for i, aid in enumerate(account_ids, start=1)))
-    validate_batches[batch_id]["status"] = "completed"
-    validate_batches[batch_id]["finished"] = True
-    task_manager.update_batch_status(batch_id, status="completed", finished=True)
-    task_manager.add_batch_log(batch_id, f"[系统] 批量验证结束，成功 {validate_batches[batch_id]['success']}，失败 {validate_batches[batch_id]['failed']}")
+    if task_manager.is_batch_cancelled(batch_id):
+        validate_batches[batch_id]["status"] = "cancelled"
+        validate_batches[batch_id]["finished"] = True
+        task_manager.update_batch_status(batch_id, status="cancelled", finished=True)
+        task_manager.add_batch_log(batch_id, "[系统] 批量验证已取消")
+    else:
+        validate_batches[batch_id]["status"] = "completed"
+        validate_batches[batch_id]["finished"] = True
+        task_manager.update_batch_status(batch_id, status="completed", finished=True)
+        task_manager.add_batch_log(batch_id, f"[系统] 批量验证结束，成功 {validate_batches[batch_id]['success']}，失败 {validate_batches[batch_id]['failed']}")
 
 
 def _run_single_refresh(account_id: int, proxy: Optional[str]):
@@ -1537,6 +1555,9 @@ async def run_batch_refresh(batch_id: str, account_ids: List[int], request_proxy
     async def worker(index: int, account_id: int):
         async with semaphore:
             prefix = f"[任务{index}]"
+            if task_manager.is_batch_cancelled(batch_id):
+                task_manager.add_batch_log(batch_id, f"{prefix} 已取消，跳过账号 ID={account_id}")
+                return
             task_manager.add_batch_log(batch_id, f"{prefix} 开始刷新账号 ID={account_id}")
             try:
                 proxy = _get_proxy(request_proxy, purpose="refresh")
@@ -1563,10 +1584,16 @@ async def run_batch_refresh(batch_id: str, account_ids: List[int], request_proxy
                 )
 
     await asyncio.gather(*(worker(i, aid) for i, aid in enumerate(account_ids, start=1)))
-    refresh_batches[batch_id]["status"] = "completed"
-    refresh_batches[batch_id]["finished"] = True
-    task_manager.update_batch_status(batch_id, status="completed", finished=True)
-    task_manager.add_batch_log(batch_id, f"[系统] 批量刷新结束，成功 {refresh_batches[batch_id]['success']}，失败 {refresh_batches[batch_id]['failed']}")
+    if task_manager.is_batch_cancelled(batch_id):
+        refresh_batches[batch_id]["status"] = "cancelled"
+        refresh_batches[batch_id]["finished"] = True
+        task_manager.update_batch_status(batch_id, status="cancelled", finished=True)
+        task_manager.add_batch_log(batch_id, "[系统] 批量刷新已取消")
+    else:
+        refresh_batches[batch_id]["status"] = "completed"
+        refresh_batches[batch_id]["finished"] = True
+        task_manager.update_batch_status(batch_id, status="completed", finished=True)
+        task_manager.add_batch_log(batch_id, f"[系统] 批量刷新结束，成功 {refresh_batches[batch_id]['success']}，失败 {refresh_batches[batch_id]['failed']}")
 
 
 @router.post("/batch-refresh")
@@ -1597,6 +1624,33 @@ async def refresh_account_token(account_id: int, background_tasks: BackgroundTas
         "task_uuid": task_uuid,
         "status": "pending",
     }
+
+
+@router.post("/batch-refresh/{batch_id}/cancel")
+async def cancel_batch_refresh(batch_id: str):
+    batch = refresh_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    task_manager.cancel_batch(batch_id)
+    return {"success": True, "message": "批量刷新任务已请求取消"}
+
+
+@router.post("/batch-validate/{batch_id}/cancel")
+async def cancel_batch_validate(batch_id: str):
+    batch = validate_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    task_manager.cancel_batch(batch_id)
+    return {"success": True, "message": "批量验证任务已请求取消"}
+
+
+@router.post("/recover-oauth/batch/{batch_id}/cancel")
+async def cancel_batch_recover(batch_id: str):
+    batch = recovery_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    task_manager.cancel_batch(batch_id)
+    return {"success": True, "message": "批量补录任务已请求取消"}
 
 
 @router.get("/batch-refresh/{batch_id}")

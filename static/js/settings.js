@@ -677,7 +677,11 @@ async function handleTestHeroSMS() {
             proxy: document.getElementById('herosms-proxy').value.trim() || ''
         });
         if (result.success) {
-            toast.success(result.message);
+            const extra = result.https_openai_message
+                ? `
+OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
+                : '';
+            toast.success(`${result.message}${extra}`);
         } else {
             toast.error(result.message);
         }
@@ -1178,7 +1182,11 @@ async function testProxyItem(id) {
     try {
         const result = await api.post(`/settings/proxies/${id}/test`);
         if (result.success) {
-            toast.success(result.message);
+            const extra = result.https_openai_message
+                ? `
+OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
+                : '';
+            toast.success(`${result.message}${extra}`);
         } else {
             toast.error(result.message);
         }
@@ -1328,7 +1336,11 @@ async function handleTestDynamicProxy() {
             result_field: document.getElementById('dynamic-proxy-result-field').value.trim()
         });
         if (result.success) {
-            toast.success(result.message);
+            const extra = result.https_openai_message
+                ? `
+OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
+                : '';
+            toast.success(`${result.message}${extra}`);
         } else {
             toast.error(result.message);
         }
@@ -1454,7 +1466,11 @@ async function testTmServiceById(id) {
     try {
         const result = await api.post(`/tm-services/${id}/test`);
         if (result.success) {
-            toast.success(result.message);
+            const extra = result.https_openai_message
+                ? `
+OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
+                : '';
+            toast.success(`${result.message}${extra}`);
         } else {
             toast.error(result.message);
         }
@@ -1488,7 +1504,11 @@ async function handleTestTmService() {
             result = await api.post('/tm-services/test-connection', { api_url: apiUrl, api_key: apiKey });
         }
         if (result.success) {
-            toast.success(result.message);
+            const extra = result.https_openai_message
+                ? `
+OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
+                : '';
+            toast.success(`${result.message}${extra}`);
         } else {
             toast.error(result.message);
         }
@@ -1613,7 +1633,11 @@ async function testCpaServiceById(id) {
     try {
         const result = await api.post(`/cpa-services/${id}/test`);
         if (result.success) {
-            toast.success(result.message);
+            const extra = result.https_openai_message
+                ? `
+OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
+                : '';
+            toast.success(`${result.message}${extra}`);
         } else {
             toast.error(result.message);
         }
@@ -1649,7 +1673,11 @@ async function handleTestCpaService() {
             result = await api.post('/cpa-services/test-connection', { api_url: apiUrl, api_token: apiToken });
         }
         if (result.success) {
-            toast.success(result.message);
+            const extra = result.https_openai_message
+                ? `
+OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
+                : '';
+            toast.success(`${result.message}${extra}`);
         } else {
             toast.error(result.message);
         }
@@ -1775,7 +1803,11 @@ async function testSub2ApiServiceById(id) {
     try {
         const result = await api.post(`/sub2api-services/${id}/test`);
         if (result.success) {
-            toast.success(result.message);
+            const extra = result.https_openai_message
+                ? `
+OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
+                : '';
+            toast.success(`${result.message}${extra}`);
         } else {
             toast.error(result.message);
         }
@@ -1809,7 +1841,11 @@ async function handleTestSub2ApiService() {
             result = await api.post('/sub2api-services/test-connection', { api_url: apiUrl, api_key: apiKey });
         }
         if (result.success) {
-            toast.success(result.message);
+            const extra = result.https_openai_message
+                ? `
+OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
+                : '';
+            toast.success(`${result.message}${extra}`);
         } else {
             toast.error(result.message);
         }
