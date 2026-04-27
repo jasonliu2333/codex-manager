@@ -98,6 +98,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
         activation = None
         reused_activation = False
         previous_codes: set[str] = set()
+        previous_texts: set[str] = set()
         try:
             _cleanup_reuse_pool(client)
             reuse_entry = _claim_reusable_activation(cfg.service, cfg.country, reuse_max_uses) if reuse_enabled else None
@@ -122,6 +123,11 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     f"(activation={activation.activation_id}, used={reuse_entry.get('uses', 0)}/{reuse_max_uses}, "
                     f"expires_at={activation_expires_at or '-'})"
                 )
+                original_cost = reuse_entry.get("activation_cost")
+                if original_cost not in (None, "", "null"):
+                    engine._log(f"add-phone: 复用号码本次费用=0，原始激活费用={original_cost}")
+                else:
+                    engine._log("add-phone: 复用号码本次费用=0")
             else:
                 price_candidates = _build_price_candidates(
                     resolved_max_price,
@@ -132,11 +138,14 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 for idx, candidate_price in enumerate(price_candidates, start=1):
                     try:
                         price_label = "不限价" if candidate_price is None else str(candidate_price)
+                        balance_before = _safe_get_balance(client)
                         engine._log(
                             f"add-phone: 正在向 HeroSMS 取号 service={cfg.service}, country={cfg.country}, "
                             f"attempt={number_attempt}/{max_number_attempts}, price_try={idx}/{len(price_candidates)}, maxPrice={price_label}"
                         )
                         activation = client.request_number(max_price=candidate_price)
+                        balance_after = _safe_get_balance(client)
+                        _log_activation_cost(engine, activation, balance_before, balance_after)
                         break
                     except Exception as exc:
                         last_request_error = exc
@@ -700,6 +709,34 @@ def _append_unique_text(existing: Any, code: str) -> list[str]:
     if code and code not in values:
         values.append(code)
     return values[-10:]
+
+
+def _safe_get_balance(client: HeroSMSClient) -> Optional[float]:
+    try:
+        return client.get_balance()
+    except Exception:
+        return None
+
+
+def _log_activation_cost(
+    engine: Any,
+    activation: HeroSMSActivation,
+    balance_before: Optional[float],
+    balance_after: Optional[float],
+) -> None:
+    activation_cost = activation.activation_cost
+    charged = None
+    if balance_before is not None and balance_after is not None:
+        charged = round(balance_before - balance_after, 6)
+    parts = []
+    if charged is not None:
+        parts.append(f"余额扣费={charged}")
+    if activation_cost is not None:
+        parts.append(f"activationCost={activation_cost}")
+    if balance_before is not None and balance_after is not None:
+        parts.append(f"余额 {balance_before} -> {balance_after}")
+    if parts:
+        engine._log(f"add-phone: 取号费用信息: {', '.join(parts)}")
 
 
 def _is_phone_max_usage_error(response: Any, body: str) -> bool:
