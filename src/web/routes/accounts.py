@@ -103,7 +103,7 @@ def _detect_deleted_or_deactivated_account(engine) -> Optional[str]:
 
 def _mark_account_deleted_or_deactivated(db, account: Account, reason: str, proxy_used: Optional[str] = None) -> None:
     extra = dict(account.extra_data or {})
-    extra["openai_account_state"] = "deleted_or_deactivated"
+    extra["openai_account_state"] = "forbidden_or_banned"
     extra["openai_account_state_reason"] = reason
     extra["openai_account_state_marked_at"] = datetime.utcnow().isoformat()
     crud.update_account(
@@ -305,12 +305,7 @@ async def list_accounts(
 
         # 状态筛选
         if status:
-            if status == "deleted_or_deactivated":
-                query = query.filter(
-                    Account.extra_data.is_not(None),
-                    _extra_data_flag_filter(Account.extra_data, "openai_account_state", "deleted_or_deactivated")
-                )
-            elif status == "oauth_recovery_required":
+            if status == "oauth_recovery_required":
                 query = query.filter(
                     Account.extra_data.is_not(None),
                     _extra_data_bool_filter(Account.extra_data, "oauth_recovery_required", True)
@@ -325,7 +320,7 @@ async def list_accounts(
                 query = query.filter(
                     ~_extra_data_bool_filter(Account.extra_data, "oauth_recovery_required", True),
                     ~_extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required"),
-                    ~_extra_data_flag_filter(Account.extra_data, "openai_account_state", "deleted_or_deactivated"),
+                    ~_extra_data_flag_filter(Account.extra_data, "openai_account_state", "forbidden_or_banned"),
                 )
             else:
                 query = query.filter(Account.status == status)
@@ -1240,6 +1235,7 @@ def _run_sync_recover_oauth_task(
                 if deleted_reason:
                     _mark_account_deleted_or_deactivated(db, account, deleted_reason, proxy_used=actual_proxy)
                     callback(f"{full_prefix}[系统] 已将账号标记为封禁：{deleted_reason}")
+                    raise RuntimeError(f"补录失败：{deleted_reason}")
                 elif mfa_reason:
                     _mark_account_mfa_required(db, account, mfa_reason, proxy_used=actual_proxy)
                     callback(f"{full_prefix}[系统] 已将账号标记为需要 MFA：{mfa_reason}")

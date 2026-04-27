@@ -404,11 +404,8 @@ function renderAccounts(accounts) {
             <td>
                 <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;">
                     ${getStatusIcon(getDerivedAccountStatus(account)?.key === 'expired' ? 'expired' : (getDerivedAccountStatus(account) ? 'failed' : account.status))}
-                    ${account.extra_data?.openai_account_state === 'deleted_or_deactivated'
-                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_account_state_reason || 'OpenAI 标记为已删除/停用')}">已删除/停用</span>`
-                        : ''}
-                    ${account.extra_data?.openai_account_state === 'forbidden_or_banned'
-                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_account_state_reason || 'OpenAI 返回禁止访问/疑似封禁')}">疑似封禁</span>`
+                    ${['forbidden_or_banned', 'deleted_or_deactivated'].includes(account.extra_data?.openai_account_state)
+                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_account_state_reason || 'OpenAI 已明确返回账号不可用/已删除/已停用')}">封禁</span>`
                         : ''}
                     ${account.extra_data?.openai_auth_state === 'mfa_required'
                         ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_auth_state_reason || '该账号需要 MFA 二次验证')}">需要MFA</span>`
@@ -510,10 +507,13 @@ function renderAccounts(accounts) {
 
 function getDerivedAccountStatus(account) {
     if (account?.extra_data?.openai_account_state === 'deleted_or_deactivated') {
-        return { key: 'deleted_or_deactivated', text: '已删除/停用', css: 'failed' };
+        return { key: 'banned', text: '封禁', css: 'failed' };
     }
     if (account?.extra_data?.openai_auth_state === 'mfa_required') {
         return { key: 'mfa_required', text: '需要MFA', css: 'failed' };
+    }
+    if (account?.extra_data?.openai_account_state === 'forbidden_or_banned') {
+        return { key: 'banned', text: '封禁', css: 'failed' };
     }
     if (account?.extra_data?.oauth_recovery_required) {
         return { key: 'oauth_recovery_required', text: '需要补录', css: 'warning' };
@@ -1099,11 +1099,8 @@ async function viewAccount(id) {
                     <span class="label">状态</span>
                     <span class="value">
                         ${renderAccountStatusBadge(account)}
-                        ${openaiState === 'deleted_or_deactivated'
-                            ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(openaiStateReason || 'OpenAI 标记为已删除/停用')}">已删除/停用</span>`
-                            : ''}
-                        ${openaiState === 'forbidden_or_banned'
-                            ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(openaiStateReason || 'OpenAI 返回禁止访问/疑似封禁')}">疑似封禁</span>`
+                        ${['forbidden_or_banned', 'deleted_or_deactivated'].includes(openaiState)
+                            ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(openaiStateReason || 'OpenAI 已明确返回账号不可用/已删除/已停用')}">封禁</span>`
                             : ''}
                         ${openaiAuthState === 'mfa_required'
                             ? `<span class="badge pending" style="margin-left:8px;" title="${escapeHtml(openaiAuthReason || '该账号需要 MFA 二次验证')}">需要MFA</span>`
@@ -1142,11 +1139,11 @@ async function viewAccount(id) {
                         ${escapeHtml(account.client_id || '-')}
                     </span>
                 </div>
-                ${(openaiState === 'deleted_or_deactivated' || openaiState === 'forbidden_or_banned') ? `
+                ${['forbidden_or_banned', 'deleted_or_deactivated'].includes(openaiState) ? `
                 <div class="info-item" style="grid-column: span 2;">
                     <span class="label">OpenAI 标记</span>
                     <span class="value">
-                        ${openaiState === 'deleted_or_deactivated' ? '已删除/停用' : '疑似封禁/禁止访问'}
+                        封禁
                         ${openaiStateMarkedAt ? `<span style="color:var(--text-muted);font-size:0.8rem;">（标记时间：${format.date(openaiStateMarkedAt)}）</span>` : ''}
                     </span>
                 </div>
