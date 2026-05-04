@@ -365,11 +365,50 @@ def _post_json_with_payload_variants(engine: Any, url: str, headers: dict, paylo
         )
         last_resp = resp
         engine._log(f"{label} 状态({idx}/{len(payloads)}): {resp.status_code}")
+        body_preview = (getattr(resp, "text", "") or "")[:300]
+        if resp.status_code >= 400 and body_preview:
+            engine._log(f"{label} 响应({idx}/{len(payloads)}): {body_preview}", "debug")
         if resp.status_code in (200, 201, 204):
             return resp
         if resp.status_code not in (400, 422):
             return resp
+        if not _should_try_next_payload_variant(resp, payload):
+            return resp
     return last_resp
+
+
+def _should_try_next_payload_variant(response: Any, payload: dict) -> bool:
+    try:
+        data = response.json()
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    error = data.get("error")
+    if not isinstance(error, dict):
+        return False
+    code = str(error.get("code") or "").strip().lower()
+    param = str(error.get("param") or "").strip()
+    message = str(error.get("message") or "").strip().lower()
+
+    payload_keys = set(payload.keys())
+
+    if code == "missing_required_parameter":
+        if param == "phone_number" and "phone_number" not in payload_keys:
+            return True
+        if param in {"code", "otp", "verification_code"} and param not in payload_keys:
+            return True
+        return False
+
+    if "did you mean to provide" in message:
+        if "phone_number" in message and "phone_number" not in payload_keys:
+            return True
+        if any(name in message for name in ("code", "otp", "verification_code")):
+            provided_names = {"code", "otp", "verification_code"} & payload_keys
+            if provided_names:
+                return False
+
+    return False
 
 
 def _extract_continue_url(engine: Any, response: Any) -> Optional[str]:
