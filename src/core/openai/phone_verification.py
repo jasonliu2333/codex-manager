@@ -100,16 +100,33 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
     selected_operator = str(runtime.get("operator", "") or "").strip()
     provider_candidates = _build_provider_candidates(engine, client, cfg)
     resolved_max_price = cfg.max_price
+    min_price_floor = _positive_float_or_none(cfg.min_price)
+    max_price_cap = _positive_float_or_none(cfg.max_price)
+    engine._log(
+        "add-phone: 价格规则初始化: "
+        f"min_price={min_price_floor if min_price_floor is not None else '-'}, "
+        f"max_price={max_price_cap if max_price_cap is not None else '-'}, "
+        f"lowest_price_first={lowest_price_first}, "
+        f"price_relax_enabled={price_relax_enabled}, "
+        f"price_relax_max_multiplier={price_relax_max_multiplier}"
+    )
     if lowest_price_first:
         try:
             lowest_price = client.get_lowest_price(service=cfg.service, country=cfg.country)
             if lowest_price and lowest_price > 0:
-                resolved_max_price = lowest_price
-                engine._log(f"add-phone: 已启用最低价优先，本次使用 maxPrice={lowest_price}")
+                if min_price_floor and lowest_price < min_price_floor:
+                    resolved_max_price = min_price_floor
+                    engine._log(f"add-phone: 已启用最低价优先，但受 min_price={min_price_floor} 限制，本次使用 maxPrice={min_price_floor}")
+                else:
+                    resolved_max_price = lowest_price
+                    engine._log(f"add-phone: 已启用最低价优先，本次使用 maxPrice={lowest_price}")
             else:
                 engine._log("add-phone: 未解析到最低价格，回退到默认取号策略", "warning")
         except Exception as exc:
             engine._log(f"add-phone: 查询最低价格失败，回退到默认取号策略: {exc}", "warning")
+    if max_price_cap and resolved_max_price and resolved_max_price > max_price_cap:
+        resolved_max_price = max_price_cap
+        engine._log(f"add-phone: 受 max_price={max_price_cap} 限制，最终 maxPrice={max_price_cap}")
 
     last_error: Optional[str] = None
     for number_attempt in range(1, max_number_attempts + 1):
@@ -151,6 +168,10 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     resolved_max_price,
                     price_relax_enabled=price_relax_enabled,
                     price_relax_max_multiplier=price_relax_max_multiplier,
+                )
+                engine._log(
+                    "add-phone: 最终价格档列表: "
+                    + ", ".join("不限价" if value is None else str(value) for value in price_candidates)
                 )
                 last_request_error: Optional[Exception] = None
                 for idx, candidate_price in enumerate(price_candidates, start=1):
@@ -529,14 +550,14 @@ def _build_price_candidates(
         return [base_price]
 
     candidates: list[Optional[float]] = []
-    multipliers = [1, 2, 3, price_relax_max_multiplier]
+    max_multi = max(1, int(price_relax_max_multiplier or 1))
+    multipliers = list(range(1, max_multi + 1))
     seen = set()
     for multi in multipliers:
         value = round(base_price * multi, 4)
         if value > 0 and value not in seen:
             seen.add(value)
             candidates.append(value)
-    candidates.append(None)  # 最后回退到不限价
     return candidates
 
 
@@ -548,6 +569,28 @@ def _build_provider_candidates(engine: Any, client: object, cfg: SMSProviderConf
     try:
         provider_quotes = client.get_provider_price_options(cfg.service, cfg.country)
         provider_quotes = [item for item in provider_quotes if item.get("provider_id")]
+        min_price_floor = _positive_float_or_none(cfg.min_price)
+        max_price_cap = _positive_float_or_none(cfg.max_price)
+        if min_price_floor:
+            filtered_quotes = []
+            for item in provider_quotes:
+                try:
+                    price_value = item.get("price")
+                    if price_value is None or float(price_value) >= min_price_floor:
+                        filtered_quotes.append(item)
+                except Exception:
+                    continue
+            provider_quotes = filtered_quotes
+        if max_price_cap:
+            filtered_quotes = []
+            for item in provider_quotes:
+                try:
+                    price_value = item.get("price")
+                    if price_value is None or float(price_value) <= max_price_cap:
+                        filtered_quotes.append(item)
+                except Exception:
+                    continue
+            provider_quotes = filtered_quotes
         provider_quotes.sort(key=lambda x: (x.get("price") if x.get("price") is not None else 999999, -(x.get("count") or 0)))
         if provider_quotes:
             engine._log(
