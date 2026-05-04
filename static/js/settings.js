@@ -91,7 +91,7 @@ const smsProviderUiConfig = {
         apiKeyHint: 'HeroSMS 密码框不回显真实 Key；留空表示保持数据库中已保存的 HeroSMS Key 不变。',
         docsTitle: 'HeroSMS 配置说明',
         docsDesc: 'HeroSMS 主要使用数字国家码与服务代码，当前实现支持余额、国家、服务、价格、推荐国家、运营商与接码轮询。',
-        docsFields: '关键字段:service=服务代码，country=数字国家码，maxPrice=最大单价。',
+        docsFields: '关键字段:service=服务代码，country=数字国家码，min_price=下限，maxPrice=上限。系统会先按 min/max 形成允许区间，再在区间内应用最低价优先与价格放宽倍数。',
         docsLinks: '<a href="https://hero-sms.com/cn/api" target="_blank" rel="noreferrer">官方文档</a>',
         countryLabel: '国家代码',
         countryHint: '上方可搜索选择国家；下方保存实际 HeroSMS 国家代码。',
@@ -115,7 +115,7 @@ const smsProviderUiConfig = {
         apiKeyHint: 'SMSBower 密码框不回显真实 Key；留空表示保持数据库中已保存的 SMSBower Key 不变。',
         docsTitle: 'SMSBower 配置说明',
         docsDesc: 'SMSBower 客户端文档显示取号主接口为 getNumber，同时支持 JSON 扩展返回、Provider 报价与静态钱包接口。',
-        docsFields: '关键字段:service、country、maxPrice、providerIds、exceptProviderIds、phoneException、minPrice。',
+        docsFields: '关键字段:service、country、minPrice、maxPrice、providerIds、exceptProviderIds、phoneException。规则顺序为：先按 min/max 过滤 provider，再在允许区间里应用最低价优先与价格放宽倍数。',
         docsLinks: '<a href="https://smsbower.app/api/?page=client" target="_blank" rel="noreferrer">官方文档</a>',
         countryLabel: '国家代码',
         countryHint: '上方可搜索选择国家；下方保存实际 SMSBower 国家代码。',
@@ -139,7 +139,7 @@ const smsProviderUiConfig = {
         apiKeyHint: '5SIM 密码框不回显真实 Key；留空表示保持数据库中已保存的 5SIM Key 不变。',
         docsTitle: '5SIM 配置说明',
         docsDesc: '5SIM 用户接口使用 REST 路径，不使用数字国家码，而是使用国家 slug 与产品名。',
-        docsFields: '关键字段:country_key=国家 slug，service=产品名。可参考 5SIM 设置页固定格式：countries 页提供国家 slug，products 页提供产品名。',
+        docsFields: '关键字段:country_key=国家 slug，service=产品名，min_price=下限，maxPrice=上限。可参考 5SIM 设置页固定格式：countries 页提供国家 slug，products 页提供产品名。',
         docsLinks: '<a href="https://5sim.net/zh/docs#user" target="_blank" rel="noreferrer">官方文档</a> · <a href="https://5sim.net/zh/settings/countries" target="_blank" rel="noreferrer">国家格式</a> · <a href="https://5sim.net/zh/settings/products" target="_blank" rel="noreferrer">产品格式</a> · <a href="https://5sim.net/zh/settings/operators" target="_blank" rel="noreferrer">运营商页</a>',
         countryLabel: '国家代码',
         countryHint: '5SIM 不使用数字国家码，下方输入框仅保留兼容，不参与实际取号。',
@@ -311,6 +311,8 @@ function initEventListeners() {
     if (elements.dynamicProxyForm) {
         elements.dynamicProxyForm.addEventListener('submit', handleSaveDynamicProxy);
     }
+    document.getElementById('dynamic-proxy-mode')?.addEventListener('change', updateDynamicProxyModeUi);
+    document.getElementById('dynamic-proxy-provider')?.addEventListener('change', updateDynamicProxyModeUi);
     if (elements.testDynamicProxyBtn) {
         elements.testDynamicProxyBtn.addEventListener('click', handleTestDynamicProxy);
     }
@@ -433,9 +435,24 @@ async function loadSettings() {
 
         // 动态代理设置
         document.getElementById('dynamic-proxy-enabled').checked = data.proxy?.dynamic_enabled || false;
+        document.getElementById('dynamic-proxy-mode').value = data.proxy?.dynamic_mode || 'api';
+        document.getElementById('dynamic-proxy-provider').value = data.proxy?.dynamic_provider || 'generic';
         document.getElementById('dynamic-proxy-api-url').value = data.proxy?.dynamic_api_url || '';
         document.getElementById('dynamic-proxy-api-key-header').value = data.proxy?.dynamic_api_key_header || 'X-API-Key';
         document.getElementById('dynamic-proxy-result-field').value = data.proxy?.dynamic_result_field || '';
+        document.getElementById('dynamic-proxy-provider-appid').value = data.proxy?.dynamic_provider_appid || '';
+        document.getElementById('dynamic-proxy-seekproxy-trade-no').value = data.proxy?.dynamic_seekproxy_trade_no || '';
+        document.getElementById('dynamic-proxy-seekproxy-auth-type').value = data.proxy?.dynamic_seekproxy_auth_type || 2;
+        document.getElementById('dynamic-proxy-seekproxy-ip-count').value = data.proxy?.dynamic_seekproxy_ip_count || 1;
+        document.getElementById('dynamic-proxy-seekproxy-state').value = data.proxy?.dynamic_seekproxy_state || '';
+        document.getElementById('dynamic-proxy-seekproxy-city').value = data.proxy?.dynamic_seekproxy_city || '';
+        document.getElementById('dynamic-proxy-seekproxy-break-type').value = data.proxy?.dynamic_seekproxy_break_type || 1;
+        document.getElementById('dynamic-proxy-seekproxy-time').value = data.proxy?.dynamic_seekproxy_time || 5;
+        document.getElementById('dynamic-proxy-scheme').value = data.proxy?.dynamic_scheme || 'http';
+        document.getElementById('dynamic-proxy-host').value = data.proxy?.dynamic_host || 'proxy.haiwai-ip.com';
+        document.getElementById('dynamic-proxy-port').value = data.proxy?.dynamic_port || 1456;
+        document.getElementById('dynamic-proxy-username').value = data.proxy?.dynamic_username || '';
+        document.getElementById('dynamic-proxy-country').value = data.proxy?.dynamic_country || 'us';
         const refreshProxyToggle = document.getElementById('proxy-refresh-use-proxy');
         const validateProxyToggle = document.getElementById('proxy-validate-use-proxy');
         if (refreshProxyToggle) refreshProxyToggle.checked = !!data.proxy?.refresh_use_proxy;
@@ -450,6 +467,36 @@ async function loadSettings() {
         if (dynamicKeyStatus) {
             dynamicKeyStatus.textContent = data.proxy?.has_dynamic_api_key ? '已保存 API Key' : '未保存 API Key';
         }
+        const providerAppkeyInput = document.getElementById('dynamic-proxy-provider-appkey');
+        const providerAppkeyStatus = document.getElementById('dynamic-proxy-provider-appkey-status');
+        if (providerAppkeyInput) {
+            providerAppkeyInput.value = '';
+            providerAppkeyInput.dataset.hasKey = data.proxy?.has_dynamic_provider_appkey ? '1' : '0';
+            providerAppkeyInput.placeholder = data.proxy?.has_dynamic_provider_appkey ? '已配置，留空保持不变' : '请输入 AppKey';
+        }
+        if (providerAppkeyStatus) {
+            providerAppkeyStatus.textContent = data.proxy?.has_dynamic_provider_appkey ? '已保存 AppKey' : '未保存 AppKey';
+        }
+        const seekproxyKeyInput = document.getElementById('dynamic-proxy-seekproxy-key');
+        const seekproxyKeyStatus = document.getElementById('dynamic-proxy-seekproxy-key-status');
+        if (seekproxyKeyInput) {
+            seekproxyKeyInput.value = '';
+            seekproxyKeyInput.dataset.hasKey = data.proxy?.has_dynamic_seekproxy_key ? '1' : '0';
+            seekproxyKeyInput.placeholder = data.proxy?.has_dynamic_seekproxy_key ? '已配置，留空保持不变' : '请输入 SeekProxy key';
+        }
+        if (seekproxyKeyStatus) {
+            seekproxyKeyStatus.textContent = data.proxy?.has_dynamic_seekproxy_key ? '已保存 key' : '未保存 key';
+        }
+        const dynamicPasswordInput = document.getElementById('dynamic-proxy-password');
+        const dynamicPasswordStatus = document.getElementById('dynamic-proxy-password-status');
+        if (dynamicPasswordInput) {
+            dynamicPasswordInput.value = '';
+            dynamicPasswordInput.dataset.hasPassword = data.proxy?.has_dynamic_password ? '1' : '0';
+            dynamicPasswordInput.placeholder = data.proxy?.has_dynamic_password ? '已配置，留空保持不变' : '请输入代理密码';
+        }
+        if (dynamicPasswordStatus) {
+            dynamicPasswordStatus.textContent = data.proxy?.has_dynamic_password ? '已保存代理密码' : '未保存代理密码';
+        }
         const proxyDiagnostics = data.proxy?.diagnostics || {};
         const diagSource = document.getElementById('proxy-diagnostics-source');
         const diagDynamicKey = document.getElementById('proxy-diagnostics-dynamic-key');
@@ -459,6 +506,7 @@ async function loadSettings() {
         if (diagDynamicKey) diagDynamicKey.textContent = proxyDiagnostics.has_dynamic_api_key ? '是' : '否';
         if (diagStaticPassword) diagStaticPassword.textContent = proxyDiagnostics.has_static_proxy_password ? '是' : '否';
         if (diagDbPath) diagDbPath.textContent = proxyDiagnostics.database_path || proxyDiagnostics.database_url || '-';
+        updateDynamicProxyModeUi();
 
         // 注册配置
         document.getElementById('max-retries').value = data.registration?.max_retries || 3;
@@ -1729,10 +1777,28 @@ async function handleSaveProxyOperationSettings(e) {
     e.preventDefault();
     const payload = {
         enabled: document.getElementById('dynamic-proxy-enabled').checked,
+        mode: document.getElementById('dynamic-proxy-mode').value || 'api',
+        provider: document.getElementById('dynamic-proxy-provider').value || 'generic',
         api_url: document.getElementById('dynamic-proxy-api-url').value.trim(),
         api_key: null,
         api_key_header: document.getElementById('dynamic-proxy-api-key-header').value.trim() || 'X-API-Key',
         result_field: document.getElementById('dynamic-proxy-result-field').value.trim(),
+        provider_appid: document.getElementById('dynamic-proxy-provider-appid').value.trim(),
+        provider_appkey: null,
+        seekproxy_trade_no: document.getElementById('dynamic-proxy-seekproxy-trade-no').value.trim(),
+        seekproxy_key: null,
+        seekproxy_auth_type: parseInt(document.getElementById('dynamic-proxy-seekproxy-auth-type').value) || 2,
+        seekproxy_ip_count: parseInt(document.getElementById('dynamic-proxy-seekproxy-ip-count').value) || 1,
+        seekproxy_state: document.getElementById('dynamic-proxy-seekproxy-state').value.trim(),
+        seekproxy_city: document.getElementById('dynamic-proxy-seekproxy-city').value.trim(),
+        seekproxy_break_type: parseInt(document.getElementById('dynamic-proxy-seekproxy-break-type').value) || 1,
+        seekproxy_time: parseInt(document.getElementById('dynamic-proxy-seekproxy-time').value) || 5,
+        scheme: document.getElementById('dynamic-proxy-scheme').value || 'http',
+        host: document.getElementById('dynamic-proxy-host').value.trim(),
+        port: parseInt(document.getElementById('dynamic-proxy-port').value) || 1456,
+        username: document.getElementById('dynamic-proxy-username').value.trim(),
+        password: null,
+        country: document.getElementById('dynamic-proxy-country').value.trim() || 'us',
         refresh_use_proxy: !!document.getElementById('proxy-refresh-use-proxy')?.checked,
         validate_use_proxy: !!document.getElementById('proxy-validate-use-proxy')?.checked,
     };
@@ -1748,10 +1814,28 @@ async function handleSaveDynamicProxy(e) {
     e.preventDefault();
     const data = {
         enabled: document.getElementById('dynamic-proxy-enabled').checked,
+        mode: document.getElementById('dynamic-proxy-mode').value || 'api',
+        provider: document.getElementById('dynamic-proxy-provider').value || 'generic',
         api_url: document.getElementById('dynamic-proxy-api-url').value.trim(),
         api_key: document.getElementById('dynamic-proxy-api-key').value || null,
         api_key_header: document.getElementById('dynamic-proxy-api-key-header').value.trim() || 'X-API-Key',
         result_field: document.getElementById('dynamic-proxy-result-field').value.trim(),
+        provider_appid: document.getElementById('dynamic-proxy-provider-appid').value.trim(),
+        provider_appkey: document.getElementById('dynamic-proxy-provider-appkey').value || null,
+        seekproxy_trade_no: document.getElementById('dynamic-proxy-seekproxy-trade-no').value.trim(),
+        seekproxy_key: document.getElementById('dynamic-proxy-seekproxy-key').value || null,
+        seekproxy_auth_type: parseInt(document.getElementById('dynamic-proxy-seekproxy-auth-type').value) || 2,
+        seekproxy_ip_count: parseInt(document.getElementById('dynamic-proxy-seekproxy-ip-count').value) || 1,
+        seekproxy_state: document.getElementById('dynamic-proxy-seekproxy-state').value.trim(),
+        seekproxy_city: document.getElementById('dynamic-proxy-seekproxy-city').value.trim(),
+        seekproxy_break_type: parseInt(document.getElementById('dynamic-proxy-seekproxy-break-type').value) || 1,
+        seekproxy_time: parseInt(document.getElementById('dynamic-proxy-seekproxy-time').value) || 5,
+        scheme: document.getElementById('dynamic-proxy-scheme').value || 'http',
+        host: document.getElementById('dynamic-proxy-host').value.trim(),
+        port: parseInt(document.getElementById('dynamic-proxy-port').value) || 1456,
+        username: document.getElementById('dynamic-proxy-username').value.trim(),
+        password: document.getElementById('dynamic-proxy-password').value || null,
+        country: document.getElementById('dynamic-proxy-country').value.trim() || 'us',
         refresh_use_proxy: !!document.getElementById('proxy-refresh-use-proxy')?.checked,
         validate_use_proxy: !!document.getElementById('proxy-validate-use-proxy')?.checked
     };
@@ -1767,6 +1851,39 @@ async function handleSaveDynamicProxy(e) {
             dynamicKeyInput.placeholder = hasKey ? '已配置，留空保持不变' : '留空保持不变';
             if (dynamicKeyStatus) {
                 dynamicKeyStatus.textContent = hasKey ? '已保存 API Key' : '未保存 API Key';
+            }
+        }
+        const providerAppkeyInput = document.getElementById('dynamic-proxy-provider-appkey');
+        const providerAppkeyStatus = document.getElementById('dynamic-proxy-provider-appkey-status');
+        if (providerAppkeyInput) {
+            const hasProviderAppkey = Boolean(data.provider_appkey) || providerAppkeyInput.dataset.hasKey === '1';
+            providerAppkeyInput.value = '';
+            providerAppkeyInput.dataset.hasKey = hasProviderAppkey ? '1' : '0';
+            providerAppkeyInput.placeholder = hasProviderAppkey ? '已配置，留空保持不变' : '请输入 AppKey';
+            if (providerAppkeyStatus) {
+                providerAppkeyStatus.textContent = hasProviderAppkey ? '已保存 AppKey' : '未保存 AppKey';
+            }
+        }
+        const seekproxyKeyInput = document.getElementById('dynamic-proxy-seekproxy-key');
+        const seekproxyKeyStatus = document.getElementById('dynamic-proxy-seekproxy-key-status');
+        if (seekproxyKeyInput) {
+            const hasSeekproxyKey = Boolean(data.seekproxy_key) || seekproxyKeyInput.dataset.hasKey === '1';
+            seekproxyKeyInput.value = '';
+            seekproxyKeyInput.dataset.hasKey = hasSeekproxyKey ? '1' : '0';
+            seekproxyKeyInput.placeholder = hasSeekproxyKey ? '已配置，留空保持不变' : '请输入 SeekProxy key';
+            if (seekproxyKeyStatus) {
+                seekproxyKeyStatus.textContent = hasSeekproxyKey ? '已保存 key' : '未保存 key';
+            }
+        }
+        const dynamicPasswordInput = document.getElementById('dynamic-proxy-password');
+        const dynamicPasswordStatus = document.getElementById('dynamic-proxy-password-status');
+        if (dynamicPasswordInput) {
+            const hasPassword = Boolean(data.password) || dynamicPasswordInput.dataset.hasPassword === '1';
+            dynamicPasswordInput.value = '';
+            dynamicPasswordInput.dataset.hasPassword = hasPassword ? '1' : '0';
+            dynamicPasswordInput.placeholder = hasPassword ? '已配置，留空保持不变' : '请输入代理密码';
+            if (dynamicPasswordStatus) {
+                dynamicPasswordStatus.textContent = hasPassword ? '已保存代理密码' : '未保存代理密码';
             }
         }
     } catch (error) {
@@ -1785,19 +1902,39 @@ async function handleTestDynamicProxy() {
     btn.textContent = '测试中...';
     try {
         const result = await api.post('/settings/proxy/dynamic/test', {
+            mode: document.getElementById('dynamic-proxy-mode').value || 'api',
+            provider: document.getElementById('dynamic-proxy-provider').value || 'generic',
             api_url: apiUrl,
             api_key: document.getElementById('dynamic-proxy-api-key').value || null,
             api_key_header: document.getElementById('dynamic-proxy-api-key-header').value.trim() || 'X-API-Key',
-            result_field: document.getElementById('dynamic-proxy-result-field').value.trim()
+            result_field: document.getElementById('dynamic-proxy-result-field').value.trim(),
+            provider_appid: document.getElementById('dynamic-proxy-provider-appid').value.trim(),
+            provider_appkey: document.getElementById('dynamic-proxy-provider-appkey').value || null,
+            seekproxy_trade_no: document.getElementById('dynamic-proxy-seekproxy-trade-no').value.trim(),
+            seekproxy_key: document.getElementById('dynamic-proxy-seekproxy-key').value || null,
+            seekproxy_auth_type: parseInt(document.getElementById('dynamic-proxy-seekproxy-auth-type').value) || 2,
+            seekproxy_ip_count: parseInt(document.getElementById('dynamic-proxy-seekproxy-ip-count').value) || 1,
+            seekproxy_state: document.getElementById('dynamic-proxy-seekproxy-state').value.trim(),
+            seekproxy_city: document.getElementById('dynamic-proxy-seekproxy-city').value.trim(),
+            seekproxy_break_type: parseInt(document.getElementById('dynamic-proxy-seekproxy-break-type').value) || 1,
+            seekproxy_time: parseInt(document.getElementById('dynamic-proxy-seekproxy-time').value) || 5,
+            scheme: document.getElementById('dynamic-proxy-scheme').value || 'http',
+            host: document.getElementById('dynamic-proxy-host').value.trim(),
+            port: parseInt(document.getElementById('dynamic-proxy-port').value) || 1456,
+            username: document.getElementById('dynamic-proxy-username').value.trim(),
+            password: document.getElementById('dynamic-proxy-password').value || null,
+            country: document.getElementById('dynamic-proxy-country').value.trim() || 'us'
         });
         if (result.success) {
             const extra = result.https_openai_message
                 ? `
 OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
                 : '';
-            toast.success(`${result.message}${extra}`);
+            const white = result.whitelist_message ? `\n白名单: ${result.whitelist_message}` : '';
+            toast.success(`${result.message}${white}${extra}`);
         } else {
-            toast.error(result.message);
+            const white = result.whitelist_message ? `\n白名单: ${result.whitelist_message}` : '';
+            toast.error(`${result.message}${white}`);
         }
     } catch (error) {
         toast.error('测试失败: ' + error.message);
@@ -1805,6 +1942,30 @@ OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.http
         btn.disabled = false;
         btn.textContent = '🔌 测试动态代理';
     }
+}
+
+function updateDynamicProxyModeUi() {
+    const mode = document.getElementById('dynamic-proxy-mode')?.value || 'api';
+    const provider = document.getElementById('dynamic-proxy-provider')?.value || 'generic';
+    const apiIds = [
+        'dynamic-proxy-api-mode-group',
+        'dynamic-proxy-provider-auth-group',
+        'dynamic-proxy-api-key-group',
+        'dynamic-proxy-api-key-header-group',
+        'dynamic-proxy-result-field-group',
+    ];
+    apiIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = mode === 'api' ? '' : 'none';
+    });
+    const providerGroup = document.getElementById('dynamic-proxy-provider-group');
+    if (providerGroup) providerGroup.style.display = mode === 'api' ? '' : 'none';
+    const seekproxyGroup = document.getElementById('dynamic-proxy-seekproxy-group');
+    if (seekproxyGroup) seekproxyGroup.style.display = mode === 'api' && provider === 'seekproxy' ? '' : 'none';
+    const haiwaidailiGroup = document.getElementById('dynamic-proxy-provider-auth-group');
+    if (haiwaidailiGroup) haiwaidailiGroup.style.display = mode === 'api' && provider === 'haiwaidaili' ? '' : 'none';
+    const accountGroup = document.getElementById('dynamic-proxy-account-mode-group');
+    if (accountGroup) accountGroup.style.display = mode === 'account' ? '' : 'none';
 }
 
 // ============== Team Manager 服务管理 ==============

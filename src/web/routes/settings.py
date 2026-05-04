@@ -207,6 +207,26 @@ def _get_saved_dynamic_proxy_api_key() -> str:
     return ""
 
 
+def _get_saved_dynamic_proxy_password() -> str:
+    """优先从数据库直接读取动态代理账密模式密码。"""
+    try:
+        with get_db() as db:
+            setting = crud.get_setting(db, "proxy.dynamic_password")
+            value = str(setting.value or "").strip() if setting else ""
+            if value:
+                return value
+    except Exception:
+        pass
+    try:
+        settings = get_settings()
+        secret = getattr(settings, "proxy_dynamic_password", None)
+        if secret:
+            return secret.get_secret_value().strip() if hasattr(secret, "get_secret_value") else str(secret).strip()
+    except Exception:
+        pass
+    return ""
+
+
 def _load_proxy_settings_from_db() -> dict:
     """
     代理设置直接从数据库读取，避免页面显示依赖内存缓存。
@@ -220,9 +240,27 @@ def _load_proxy_settings_from_db() -> dict:
         "username": getattr(settings, "proxy_username", None),
         "has_password": bool(getattr(settings, "proxy_password", None)),
         "dynamic_enabled": bool(getattr(settings, "proxy_dynamic_enabled", False)),
+        "dynamic_mode": str(getattr(settings, "proxy_dynamic_mode", "api") or "api"),
+        "dynamic_provider": str(getattr(settings, "proxy_dynamic_provider", "generic") or "generic"),
         "dynamic_api_url": str(getattr(settings, "proxy_dynamic_api_url", "") or ""),
         "dynamic_api_key_header": str(getattr(settings, "proxy_dynamic_api_key_header", "X-API-Key") or "X-API-Key"),
         "dynamic_result_field": str(getattr(settings, "proxy_dynamic_result_field", "") or ""),
+        "dynamic_provider_appid": str(getattr(settings, "proxy_dynamic_provider_appid", "") or ""),
+        "has_dynamic_provider_appkey": bool(getattr(settings, "proxy_dynamic_provider_appkey", None)),
+        "dynamic_seekproxy_trade_no": str(getattr(settings, "proxy_dynamic_seekproxy_trade_no", "") or ""),
+        "has_dynamic_seekproxy_key": bool(getattr(settings, "proxy_dynamic_seekproxy_key", None)),
+        "dynamic_seekproxy_auth_type": int(getattr(settings, "proxy_dynamic_seekproxy_auth_type", 2) or 2),
+        "dynamic_seekproxy_ip_count": int(getattr(settings, "proxy_dynamic_seekproxy_ip_count", 1) or 1),
+        "dynamic_seekproxy_state": str(getattr(settings, "proxy_dynamic_seekproxy_state", "") or ""),
+        "dynamic_seekproxy_city": str(getattr(settings, "proxy_dynamic_seekproxy_city", "") or ""),
+        "dynamic_seekproxy_break_type": int(getattr(settings, "proxy_dynamic_seekproxy_break_type", 1) or 1),
+        "dynamic_seekproxy_time": int(getattr(settings, "proxy_dynamic_seekproxy_time", 5) or 5),
+        "dynamic_scheme": str(getattr(settings, "proxy_dynamic_scheme", "http") or "http"),
+        "dynamic_host": str(getattr(settings, "proxy_dynamic_host", "proxy.haiwai-ip.com") or "proxy.haiwai-ip.com"),
+        "dynamic_port": int(getattr(settings, "proxy_dynamic_port", 1456) or 1456),
+        "dynamic_username": str(getattr(settings, "proxy_dynamic_username", "") or ""),
+        "has_dynamic_password": bool(getattr(settings, "proxy_dynamic_password", None)),
+        "dynamic_country": str(getattr(settings, "proxy_dynamic_country", "us") or "us"),
         "refresh_use_proxy": bool(getattr(settings, "proxy_refresh_use_proxy", False)),
         "validate_use_proxy": bool(getattr(settings, "proxy_validate_use_proxy", False)),
         "has_dynamic_api_key": bool(_get_saved_dynamic_proxy_api_key()),
@@ -234,9 +272,24 @@ def _load_proxy_settings_from_db() -> dict:
         "port": ("proxy.port", lambda v: _parse_int(v, defaults["port"])),
         "username": ("proxy.username", lambda v: str(v).strip() or None),
         "dynamic_enabled": ("proxy.dynamic_enabled", lambda v: _parse_bool(v, defaults["dynamic_enabled"])),
+        "dynamic_mode": ("proxy.dynamic_mode", lambda v: str(v).strip() or defaults["dynamic_mode"]),
+        "dynamic_provider": ("proxy.dynamic_provider", lambda v: str(v).strip() or defaults["dynamic_provider"]),
         "dynamic_api_url": ("proxy.dynamic_api_url", lambda v: str(v).strip()),
         "dynamic_api_key_header": ("proxy.dynamic_api_key_header", lambda v: str(v).strip() or defaults["dynamic_api_key_header"]),
         "dynamic_result_field": ("proxy.dynamic_result_field", lambda v: str(v).strip()),
+        "dynamic_provider_appid": ("proxy.dynamic_provider_appid", lambda v: str(v).strip()),
+        "dynamic_seekproxy_trade_no": ("proxy.dynamic_seekproxy_trade_no", lambda v: str(v).strip()),
+        "dynamic_seekproxy_auth_type": ("proxy.dynamic_seekproxy_auth_type", lambda v: _parse_int(v, defaults["dynamic_seekproxy_auth_type"])),
+        "dynamic_seekproxy_ip_count": ("proxy.dynamic_seekproxy_ip_count", lambda v: _parse_int(v, defaults["dynamic_seekproxy_ip_count"])),
+        "dynamic_seekproxy_state": ("proxy.dynamic_seekproxy_state", lambda v: str(v).strip()),
+        "dynamic_seekproxy_city": ("proxy.dynamic_seekproxy_city", lambda v: str(v).strip()),
+        "dynamic_seekproxy_break_type": ("proxy.dynamic_seekproxy_break_type", lambda v: _parse_int(v, defaults["dynamic_seekproxy_break_type"])),
+        "dynamic_seekproxy_time": ("proxy.dynamic_seekproxy_time", lambda v: _parse_int(v, defaults["dynamic_seekproxy_time"])),
+        "dynamic_scheme": ("proxy.dynamic_scheme", lambda v: str(v).strip() or defaults["dynamic_scheme"]),
+        "dynamic_host": ("proxy.dynamic_host", lambda v: str(v).strip() or defaults["dynamic_host"]),
+        "dynamic_port": ("proxy.dynamic_port", lambda v: _parse_int(v, defaults["dynamic_port"])),
+        "dynamic_username": ("proxy.dynamic_username", lambda v: str(v).strip()),
+        "dynamic_country": ("proxy.dynamic_country", lambda v: str(v).strip() or defaults["dynamic_country"]),
         "refresh_use_proxy": ("proxy.refresh_use_proxy", lambda v: _parse_bool(v, defaults["refresh_use_proxy"])),
         "validate_use_proxy": ("proxy.validate_use_proxy", lambda v: _parse_bool(v, defaults["validate_use_proxy"])),
     }
@@ -248,6 +301,12 @@ def _load_proxy_settings_from_db() -> dict:
                     defaults[field] = parser(setting.value)
             password_setting = crud.get_setting(db, "proxy.password")
             defaults["has_password"] = bool(str(password_setting.value or "").strip()) if password_setting else defaults["has_password"]
+            dynamic_password_setting = crud.get_setting(db, "proxy.dynamic_password")
+            defaults["has_dynamic_password"] = bool(str(dynamic_password_setting.value or "").strip()) if dynamic_password_setting else defaults["has_dynamic_password"]
+            dynamic_provider_appkey_setting = crud.get_setting(db, "proxy.dynamic_provider_appkey")
+            defaults["has_dynamic_provider_appkey"] = bool(str(dynamic_provider_appkey_setting.value or "").strip()) if dynamic_provider_appkey_setting else defaults["has_dynamic_provider_appkey"]
+            dynamic_seekproxy_key_setting = crud.get_setting(db, "proxy.dynamic_seekproxy_key")
+            defaults["has_dynamic_seekproxy_key"] = bool(str(dynamic_seekproxy_key_setting.value or "").strip()) if dynamic_seekproxy_key_setting else defaults["has_dynamic_seekproxy_key"]
     except Exception as exc:
         logger.warning("直接读取代理设置失败，回退到缓存配置: %s", exc)
     return defaults
@@ -411,9 +470,27 @@ async def get_dynamic_proxy_settings():
     proxy_settings = _load_proxy_settings_from_db()
     return {
         "enabled": proxy_settings["dynamic_enabled"],
+        "mode": proxy_settings["dynamic_mode"],
+        "provider": proxy_settings["dynamic_provider"],
         "api_url": proxy_settings["dynamic_api_url"],
         "api_key_header": proxy_settings["dynamic_api_key_header"],
         "result_field": proxy_settings["dynamic_result_field"],
+        "provider_appid": proxy_settings["dynamic_provider_appid"],
+        "has_provider_appkey": proxy_settings["has_dynamic_provider_appkey"],
+        "seekproxy_trade_no": proxy_settings["dynamic_seekproxy_trade_no"],
+        "has_seekproxy_key": proxy_settings["has_dynamic_seekproxy_key"],
+        "seekproxy_auth_type": proxy_settings["dynamic_seekproxy_auth_type"],
+        "seekproxy_ip_count": proxy_settings["dynamic_seekproxy_ip_count"],
+        "seekproxy_state": proxy_settings["dynamic_seekproxy_state"],
+        "seekproxy_city": proxy_settings["dynamic_seekproxy_city"],
+        "seekproxy_break_type": proxy_settings["dynamic_seekproxy_break_type"],
+        "seekproxy_time": proxy_settings["dynamic_seekproxy_time"],
+        "scheme": proxy_settings["dynamic_scheme"],
+        "host": proxy_settings["dynamic_host"],
+        "port": proxy_settings["dynamic_port"],
+        "username": proxy_settings["dynamic_username"],
+        "has_password": proxy_settings["has_dynamic_password"],
+        "country": proxy_settings["dynamic_country"],
         "refresh_use_proxy": proxy_settings["refresh_use_proxy"],
         "validate_use_proxy": proxy_settings["validate_use_proxy"],
         "has_api_key": proxy_settings["has_dynamic_api_key"],
@@ -424,10 +501,28 @@ async def get_dynamic_proxy_settings():
 class DynamicProxySettings(BaseModel):
     """动态代理设置"""
     enabled: bool = False
+    mode: str = "api"
+    provider: str = "generic"
     api_url: str = ""
     api_key: Optional[str] = None
     api_key_header: str = "X-API-Key"
     result_field: str = ""
+    provider_appid: str = ""
+    provider_appkey: Optional[str] = None
+    seekproxy_trade_no: str = ""
+    seekproxy_key: Optional[str] = None
+    seekproxy_auth_type: int = 2
+    seekproxy_ip_count: int = 1
+    seekproxy_state: str = ""
+    seekproxy_city: str = ""
+    seekproxy_break_type: int = 1
+    seekproxy_time: int = 5
+    scheme: str = "http"
+    host: str = "proxy.haiwai-ip.com"
+    port: int = 1456
+    username: str = ""
+    password: Optional[str] = None
+    country: str = "us"
     refresh_use_proxy: bool = False
     validate_use_proxy: bool = False
 
@@ -437,14 +532,35 @@ async def update_dynamic_proxy_settings(request: DynamicProxySettings):
     """更新动态代理设置"""
     update_dict = {
         "proxy_dynamic_enabled": request.enabled,
+        "proxy_dynamic_mode": str(request.mode or "api").strip() or "api",
+        "proxy_dynamic_provider": str(request.provider or "generic").strip() or "generic",
         "proxy_dynamic_api_url": request.api_url,
         "proxy_dynamic_api_key_header": request.api_key_header,
         "proxy_dynamic_result_field": request.result_field,
+        "proxy_dynamic_provider_appid": request.provider_appid.strip(),
+        "proxy_dynamic_seekproxy_trade_no": request.seekproxy_trade_no.strip(),
+        "proxy_dynamic_seekproxy_auth_type": request.seekproxy_auth_type,
+        "proxy_dynamic_seekproxy_ip_count": request.seekproxy_ip_count,
+        "proxy_dynamic_seekproxy_state": request.seekproxy_state.strip(),
+        "proxy_dynamic_seekproxy_city": request.seekproxy_city.strip(),
+        "proxy_dynamic_seekproxy_break_type": request.seekproxy_break_type,
+        "proxy_dynamic_seekproxy_time": request.seekproxy_time,
+        "proxy_dynamic_scheme": str(request.scheme or "http").strip() or "http",
+        "proxy_dynamic_host": request.host.strip(),
+        "proxy_dynamic_port": request.port,
+        "proxy_dynamic_username": request.username.strip(),
+        "proxy_dynamic_country": request.country.strip() or "us",
         "proxy_refresh_use_proxy": request.refresh_use_proxy,
         "proxy_validate_use_proxy": request.validate_use_proxy,
     }
     if request.api_key is not None:
         update_dict["proxy_dynamic_api_key"] = request.api_key
+    if request.provider_appkey is not None:
+        update_dict["proxy_dynamic_provider_appkey"] = request.provider_appkey
+    if request.seekproxy_key is not None:
+        update_dict["proxy_dynamic_seekproxy_key"] = request.seekproxy_key
+    if request.password is not None:
+        update_dict["proxy_dynamic_password"] = request.password
 
     update_settings(**update_dict)
     return {"success": True, "message": "动态代理设置已更新"}
@@ -453,31 +569,90 @@ async def update_dynamic_proxy_settings(request: DynamicProxySettings):
 @router.post("/proxy/dynamic/test")
 async def test_dynamic_proxy(request: DynamicProxySettings):
     """测试动态代理 API"""
-    from ...core.dynamic_proxy import fetch_dynamic_proxy
-
-    if not request.api_url:
-        raise HTTPException(status_code=400, detail="请填写动态代理 API 地址")
-
-    # 若未传入 api_key，使用已保存的
-    api_key = request.api_key or ""
-    if not api_key:
-        api_key = _get_saved_dynamic_proxy_api_key()
-
-    proxy_url = fetch_dynamic_proxy(
-        api_url=request.api_url,
-        api_key=api_key,
-        api_key_header=request.api_key_header,
-        result_field=request.result_field,
+    from ...core.dynamic_proxy import (
+        fetch_dynamic_proxy,
+        build_account_proxy_url,
+        ensure_haiwaidaili_whitelist,
+        build_seekproxy_api_url,
     )
 
+    mode = str(request.mode or "api").strip().lower() or "api"
+    if mode == "account":
+        password = (request.password or "").strip()
+        if not password:
+            password = _get_saved_dynamic_proxy_password()
+        proxy_url = build_account_proxy_url(
+            scheme=request.scheme,
+            host=request.host,
+            port=request.port,
+            username=request.username,
+            password=password,
+            country=request.country,
+        )
+        if not proxy_url:
+            raise HTTPException(status_code=400, detail="请填写完整的账密代理主机、端口、用户名、密码")
+    else:
+        provider = str(request.provider or "generic").strip().lower() or "generic"
+        api_url = request.api_url
+        if provider == "seekproxy":
+            seekproxy_key = (request.seekproxy_key or "").strip()
+            if not seekproxy_key:
+                settings = get_settings()
+                secret = getattr(settings, "proxy_dynamic_seekproxy_key", None)
+                if secret:
+                    seekproxy_key = secret.get_secret_value().strip() if hasattr(secret, "get_secret_value") else str(secret).strip()
+            if not request.seekproxy_trade_no.strip() or not seekproxy_key:
+                raise HTTPException(status_code=400, detail="请填写完整的 SeekProxy trade_no 和 key")
+            api_url = build_seekproxy_api_url(
+                trade_no=request.seekproxy_trade_no,
+                key=seekproxy_key,
+                auth_type=request.seekproxy_auth_type,
+                ip_count=request.seekproxy_ip_count,
+                country=request.country,
+                state=request.seekproxy_state,
+                city=request.seekproxy_city,
+                fmt=1,
+                break_type=request.seekproxy_break_type,
+                hold_time=request.seekproxy_time,
+            )
+        elif provider != "seekproxy" and not request.api_url:
+            raise HTTPException(status_code=400, detail="请填写动态代理 API 地址")
+
+        provider_appid = (request.provider_appid or "").strip()
+        provider_appkey = (request.provider_appkey or "").strip()
+        if not provider_appkey:
+            settings = get_settings()
+            secret = getattr(settings, "proxy_dynamic_provider_appkey", None)
+            if secret:
+                provider_appkey = secret.get_secret_value().strip() if hasattr(secret, "get_secret_value") else str(secret).strip()
+        whitelist_message = ""
+        if provider == "haiwaidaili" and provider_appid and provider_appkey:
+            ok, whitelist_message = ensure_haiwaidaili_whitelist(provider_appid, provider_appkey)
+            if not ok:
+                return {"success": False, "message": whitelist_message}
+
+        # 若未传入 api_key，使用已保存的
+        api_key = request.api_key or ""
+        if not api_key:
+            api_key = _get_saved_dynamic_proxy_api_key()
+
+        proxy_url = fetch_dynamic_proxy(
+            api_url=api_url,
+            api_key=api_key,
+            api_key_header=request.api_key_header,
+            result_field=request.result_field,
+            provider=provider,
+            default_scheme=request.scheme,
+        )
+
     if not proxy_url:
-        return {"success": False, "message": "动态代理 API 返回为空或请求失败"}
+        return {"success": False, "message": "动态代理返回为空或请求失败"}
 
     # 先按服务商文档测试 HTTP 代理基础可用性，再额外测试是否适合 OpenAI HTTPS。
     try:
         basic = _test_proxy_http_basic(proxy_url)
         if not basic.get("success"):
-            return {"success": False, "proxy_url": proxy_url, "message": basic.get("message", "HTTP 代理测试失败")}
+            return {"success": False, "proxy_url": proxy_url, "message": basic.get("message", "HTTP 代理测试失败"), "whitelist_message": locals().get("whitelist_message", "")}
         https_test = _test_proxy_https_openai(proxy_url)
         return {
             "success": True,
@@ -487,6 +662,7 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
             "https_openai_ok": bool(https_test.get("success")),
             "https_openai_message": https_test.get("message", ""),
             "message": basic.get("message", "动态代理 HTTP 可用"),
+            "whitelist_message": locals().get("whitelist_message", ""),
         }
     except Exception as e:
         return {"success": False, "proxy_url": proxy_url, "message": f"代理连接失败: {e}"}
@@ -816,6 +992,16 @@ def _validate_sms_settings_request(request: SMSSettings) -> str:
         raise HTTPException(status_code=400, detail="价格放宽最大倍数必须在 1-20 之间")
     if request.reuse_max_uses < 1 or request.reuse_max_uses > 5:
         raise HTTPException(status_code=400, detail="号码复用次数必须在 1-5 之间")
+    try:
+        min_price = float(str(request.min_price).strip())
+    except Exception:
+        min_price = -1
+    try:
+        max_price = float(str(request.max_price).strip())
+    except Exception:
+        max_price = -1
+    if min_price > 0 and max_price > 0 and min_price > max_price:
+        raise HTTPException(status_code=400, detail="最小价格不能大于最大单价")
     return provider_name
 
 

@@ -439,6 +439,18 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.PROXY,
         description="是否启用动态代理"
     ),
+    "proxy_dynamic_mode": SettingDefinition(
+        db_key="proxy.dynamic_mode",
+        default_value="api",
+        category=SettingCategory.PROXY,
+        description="动态代理模式（api/account）"
+    ),
+    "proxy_dynamic_provider": SettingDefinition(
+        db_key="proxy.dynamic_provider",
+        default_value="generic",
+        category=SettingCategory.PROXY,
+        description="动态代理 API 提供商（generic/haiwaidaili/seekproxy）"
+    ),
     "proxy_dynamic_api_url": SettingDefinition(
         db_key="proxy.dynamic_api_url",
         default_value="",
@@ -463,6 +475,105 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         default_value="",
         category=SettingCategory.PROXY,
         description="从 JSON 响应中提取代理 URL 的字段路径（留空则使用响应原文）"
+    ),
+    "proxy_dynamic_provider_appid": SettingDefinition(
+        db_key="proxy.dynamic_provider_appid",
+        default_value="",
+        category=SettingCategory.PROXY,
+        description="动态代理供应商 AppId（用于白名单接口）"
+    ),
+    "proxy_dynamic_provider_appkey": SettingDefinition(
+        db_key="proxy.dynamic_provider_appkey",
+        default_value="",
+        category=SettingCategory.PROXY,
+        description="动态代理供应商 AppKey（用于白名单接口）",
+        is_secret=True
+    ),
+    "proxy_dynamic_seekproxy_trade_no": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_trade_no",
+        default_value="",
+        category=SettingCategory.PROXY,
+        description="SeekProxy trade_no"
+    ),
+    "proxy_dynamic_seekproxy_key": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_key",
+        default_value="",
+        category=SettingCategory.PROXY,
+        description="SeekProxy key",
+        is_secret=True
+    ),
+    "proxy_dynamic_seekproxy_auth_type": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_auth_type",
+        default_value=2,
+        category=SettingCategory.PROXY,
+        description="SeekProxy auth_type"
+    ),
+    "proxy_dynamic_seekproxy_ip_count": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_ip_count",
+        default_value=1,
+        category=SettingCategory.PROXY,
+        description="SeekProxy ip_count"
+    ),
+    "proxy_dynamic_seekproxy_state": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_state",
+        default_value="",
+        category=SettingCategory.PROXY,
+        description="SeekProxy state"
+    ),
+    "proxy_dynamic_seekproxy_city": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_city",
+        default_value="",
+        category=SettingCategory.PROXY,
+        description="SeekProxy city"
+    ),
+    "proxy_dynamic_seekproxy_break_type": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_break_type",
+        default_value=1,
+        category=SettingCategory.PROXY,
+        description="SeekProxy break_type"
+    ),
+    "proxy_dynamic_seekproxy_time": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_time",
+        default_value=5,
+        category=SettingCategory.PROXY,
+        description="SeekProxy time"
+    ),
+    "proxy_dynamic_scheme": SettingDefinition(
+        db_key="proxy.dynamic_scheme",
+        default_value="http",
+        category=SettingCategory.PROXY,
+        description="动态代理协议（http/socks5）"
+    ),
+    "proxy_dynamic_host": SettingDefinition(
+        db_key="proxy.dynamic_host",
+        default_value="proxy.haiwai-ip.com",
+        category=SettingCategory.PROXY,
+        description="账密代理主机"
+    ),
+    "proxy_dynamic_port": SettingDefinition(
+        db_key="proxy.dynamic_port",
+        default_value=1456,
+        category=SettingCategory.PROXY,
+        description="账密代理端口"
+    ),
+    "proxy_dynamic_username": SettingDefinition(
+        db_key="proxy.dynamic_username",
+        default_value="",
+        category=SettingCategory.PROXY,
+        description="账密代理用户名"
+    ),
+    "proxy_dynamic_password": SettingDefinition(
+        db_key="proxy.dynamic_password",
+        default_value="",
+        category=SettingCategory.PROXY,
+        description="账密代理密码",
+        is_secret=True
+    ),
+    "proxy_dynamic_country": SettingDefinition(
+        db_key="proxy.dynamic_country",
+        default_value="us",
+        category=SettingCategory.PROXY,
+        description="账密代理国家代码"
     ),
     "proxy_refresh_use_proxy": SettingDefinition(
         db_key="proxy.refresh_use_proxy",
@@ -661,8 +772,17 @@ SETTING_TYPES: Dict[str, Type] = {
     "proxy_enabled": bool,
     "proxy_port": int,
     "proxy_dynamic_enabled": bool,
+    "proxy_dynamic_mode": str,
+    "proxy_dynamic_provider": str,
     "proxy_refresh_use_proxy": bool,
     "proxy_validate_use_proxy": bool,
+    "proxy_dynamic_scheme": str,
+    "proxy_dynamic_port": int,
+    "proxy_dynamic_provider_appid": str,
+    "proxy_dynamic_seekproxy_auth_type": int,
+    "proxy_dynamic_seekproxy_ip_count": int,
+    "proxy_dynamic_seekproxy_break_type": int,
+    "proxy_dynamic_seekproxy_time": int,
     "sms_provider": str,
     "sms_operator": str,
     "sms_provider_ids": str,
@@ -707,10 +827,28 @@ SETTING_TYPES: Dict[str, Type] = {
 SECRET_FIELDS = {name for name, defn in SETTING_DEFINITIONS.items() if defn.is_secret}
 DYNAMIC_PROXY_KEYS = {
     "proxy_dynamic_enabled",
+    "proxy_dynamic_mode",
+    "proxy_dynamic_provider",
     "proxy_dynamic_api_url",
     "proxy_dynamic_api_key",
     "proxy_dynamic_api_key_header",
     "proxy_dynamic_result_field",
+    "proxy_dynamic_provider_appid",
+    "proxy_dynamic_provider_appkey",
+    "proxy_dynamic_seekproxy_trade_no",
+    "proxy_dynamic_seekproxy_key",
+    "proxy_dynamic_seekproxy_auth_type",
+    "proxy_dynamic_seekproxy_ip_count",
+    "proxy_dynamic_seekproxy_state",
+    "proxy_dynamic_seekproxy_city",
+    "proxy_dynamic_seekproxy_break_type",
+    "proxy_dynamic_seekproxy_time",
+    "proxy_dynamic_scheme",
+    "proxy_dynamic_host",
+    "proxy_dynamic_port",
+    "proxy_dynamic_username",
+    "proxy_dynamic_password",
+    "proxy_dynamic_country",
 }
 SMS_PROVIDER_LABELS = {
     "herosms": "HeroSMS",
@@ -1068,12 +1206,30 @@ class Settings(BaseModel):
     proxy_username: Optional[str] = None
     proxy_password: Optional[SecretStr] = None
     proxy_dynamic_enabled: bool = False
+    proxy_dynamic_mode: str = "api"
+    proxy_dynamic_provider: str = "generic"
     proxy_dynamic_api_url: str = ""
     proxy_refresh_use_proxy: bool = False
     proxy_validate_use_proxy: bool = False
     proxy_dynamic_api_key: Optional[SecretStr] = None
     proxy_dynamic_api_key_header: str = "X-API-Key"
     proxy_dynamic_result_field: str = ""
+    proxy_dynamic_provider_appid: str = ""
+    proxy_dynamic_provider_appkey: Optional[SecretStr] = None
+    proxy_dynamic_seekproxy_trade_no: str = ""
+    proxy_dynamic_seekproxy_key: Optional[SecretStr] = None
+    proxy_dynamic_seekproxy_auth_type: int = 2
+    proxy_dynamic_seekproxy_ip_count: int = 1
+    proxy_dynamic_seekproxy_state: str = ""
+    proxy_dynamic_seekproxy_city: str = ""
+    proxy_dynamic_seekproxy_break_type: int = 1
+    proxy_dynamic_seekproxy_time: int = 5
+    proxy_dynamic_scheme: str = "http"
+    proxy_dynamic_host: str = "proxy.haiwai-ip.com"
+    proxy_dynamic_port: int = 1456
+    proxy_dynamic_username: str = ""
+    proxy_dynamic_password: Optional[SecretStr] = None
+    proxy_dynamic_country: str = "us"
 
     @property
     def proxy_url(self) -> Optional[str]:
