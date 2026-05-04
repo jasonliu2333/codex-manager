@@ -105,6 +105,10 @@ def _load_herosms_settings_from_db() -> dict:
     defaults = {
         "provider": str(getattr(settings, "sms_provider", "herosms") or "herosms"),
         "operator": str(getattr(settings, "sms_operator", "") or ""),
+        "provider_ids": str(getattr(settings, "sms_provider_ids", "") or ""),
+        "except_provider_ids": str(getattr(settings, "sms_except_provider_ids", "") or ""),
+        "phone_exception": str(getattr(settings, "sms_phone_exception", "") or ""),
+        "min_price": float(getattr(settings, "sms_min_price", -1) or -1),
         "enabled": bool(getattr(settings, "herosms_enabled", False)),
         "has_api_key": bool(_get_saved_herosms_api_key()),
         "service": str(getattr(settings, "herosms_service", "dr") or "dr"),
@@ -125,6 +129,10 @@ def _load_herosms_settings_from_db() -> dict:
     db_key_map = {
         "provider": ("sms.provider", lambda v: str(v).strip() or defaults["provider"]),
         "operator": ("sms.operator", lambda v: str(v or "").strip()),
+        "provider_ids": ("sms.provider_ids", lambda v: str(v or "").strip()),
+        "except_provider_ids": ("sms.except_provider_ids", lambda v: str(v or "").strip()),
+        "phone_exception": ("sms.phone_exception", lambda v: str(v or "").strip()),
+        "min_price": ("sms.min_price", lambda v: _parse_float(v, defaults["min_price"])),
         "enabled": ("herosms.enabled", lambda v: _parse_bool(v, defaults["enabled"])),
         "service": ("herosms.service", lambda v: str(v).strip() or defaults["service"]),
         "country": ("herosms.country", lambda v: _parse_int(v, defaults["country"])),
@@ -653,6 +661,10 @@ class SMSSettings(BaseModel):
     """短信接码平台设置"""
     provider: str = "herosms"
     operator: str = ""
+    provider_ids: str = ""
+    except_provider_ids: str = ""
+    phone_exception: str = ""
+    min_price: str = "-1"
     enabled: bool = False
     api_key: Optional[str] = None
     service: str = "dr"
@@ -772,6 +784,10 @@ async def update_herosms_settings(request: SMSSettings):
     update_dict = {
         "sms_provider": request.provider.strip() or "herosms",
         "sms_operator": request.operator.strip(),
+        "sms_provider_ids": request.provider_ids.strip(),
+        "sms_except_provider_ids": request.except_provider_ids.strip(),
+        "sms_phone_exception": request.phone_exception.strip(),
+        "sms_min_price": request.min_price,
         "herosms_enabled": request.enabled,
         "herosms_service": request.service,
         "herosms_country": request.country,
@@ -896,8 +912,12 @@ def _build_sms_provider_from_settings(api_key: str = "", proxy: Optional[str] = 
         service=str(getattr(settings, "herosms_service", "dr") or "dr"),
         country=int(getattr(settings, "herosms_country", 187) or 187),
         max_price=float(getattr(settings, "herosms_max_price", -1) or -1),
+        min_price=float(getattr(settings, "sms_min_price", -1) or -1),
         proxy=proxy or ((getattr(settings, "herosms_proxy", "") or "").strip() or None),
         timeout=int(getattr(settings, "herosms_timeout", 30) or 30),
+        provider_ids=str(getattr(settings, "sms_provider_ids", "") or ""),
+        except_provider_ids=str(getattr(settings, "sms_except_provider_ids", "") or ""),
+        phone_exception=str(getattr(settings, "sms_phone_exception", "") or ""),
     ))
 
 
@@ -910,6 +930,17 @@ async def get_sms_top_countries(service: Optional[str] = None):
     except Exception as e:
         logger.warning("获取短信平台推荐国家失败: %s", e)
         raise HTTPException(status_code=502, detail=f"获取推荐国家失败: {e}")
+
+
+@router.get("/sms/services")
+async def get_sms_services():
+    try:
+        provider = _build_sms_provider_from_settings()
+        services = provider.get_services()
+        return {"provider": get_settings().sms_provider, "items": services}
+    except Exception as e:
+        logger.warning("获取短信平台服务列表失败: %s", e)
+        raise HTTPException(status_code=502, detail=f"获取服务列表失败: {e}")
 
 
 @router.get("/sms/operators")
@@ -936,6 +967,32 @@ async def get_sms_operator_quotes(country: int, service: Optional[str] = None):
     except Exception as e:
         logger.warning("获取短信平台运营商报价失败: %s", e)
         raise HTTPException(status_code=502, detail=f"获取运营商报价失败: {e}")
+
+
+@router.get("/sms/provider-quotes")
+async def get_sms_provider_quotes(country: int, service: Optional[str] = None):
+    if country <= 0:
+        raise HTTPException(status_code=400, detail="国家代码必须大于 0")
+    try:
+        provider = _build_sms_provider_from_settings()
+        quotes = provider.get_provider_price_options(service=service or None, country=country)
+        return {"provider": get_settings().sms_provider, "country": country, "service": service or "", "items": quotes}
+    except Exception as e:
+        logger.warning("获取短信平台 provider 级报价失败: %s", e)
+        raise HTTPException(status_code=502, detail=f"获取 provider 报价失败: {e}")
+
+
+@router.get("/sms/static-wallet")
+async def get_sms_static_wallet(coin: str, network: str):
+    try:
+        provider = _build_sms_provider_from_settings()
+        wallet = provider.get_static_wallet(coin=coin, network=network)
+        return {"provider": get_settings().sms_provider, "coin": coin, "network": network, "wallet": wallet}
+    except NotImplementedError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as e:
+        logger.warning("获取短信平台静态钱包失败: %s", e)
+        raise HTTPException(status_code=502, detail=f"获取静态钱包失败: {e}")
 
 
 # ============== 代理列表 CRUD ==============

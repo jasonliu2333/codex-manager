@@ -38,6 +38,19 @@ class HeroSMSProvider(BaseSMSProvider):
         raw = self.client.get_countries()
         return self.parse_countries_response(raw)
 
+    def get_services(self) -> list[dict]:
+        raw = self.client.get_services()
+        services = []
+        if isinstance(raw, list):
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                services.append({
+                    "code": str(item.get("code") or item.get("service") or "").strip(),
+                    "name": str(item.get("name") or item.get("title") or "").strip(),
+                })
+        return services
+
     def request_number(
         self,
         service: Optional[str] = None,
@@ -146,6 +159,13 @@ class HeroSMSProvider(BaseSMSProvider):
                     "error": str(exc),
                 })
         return options
+
+    def get_provider_price_options(self, service: Optional[str], country: int) -> list[dict]:
+        # HeroSMS 当前文档/现有实现没有 provider 级价格明细接口，返回空列表。
+        return []
+
+    def get_static_wallet(self, coin: str, network: str) -> dict:
+        raise NotImplementedError("HeroSMS 当前未实现静态钱包接口")
 
     def set_status(self, activation_id: str, status: int) -> str:
         return self.client.set_status(activation_id, status)

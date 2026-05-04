@@ -14,6 +14,9 @@ class SMSActivation:
     raw_number: str
     country_phone_code: str = ""
     activation_cost: Optional[float] = None
+    activation_time: Optional[str] = None
+    activation_operator: Optional[str] = None
+    can_get_another_sms: Optional[bool] = None
 
 
 @dataclass(slots=True)
@@ -23,8 +26,12 @@ class SMSProviderConfig:
     service: str = "dr"
     country: int = 187
     max_price: Optional[float] = None
+    min_price: Optional[float] = None
     proxy: Optional[str] = None
     timeout: int = 30
+    provider_ids: str = ""
+    except_provider_ids: str = ""
+    phone_exception: str = ""
 
 
 class SMSProviderError(RuntimeError):
@@ -60,12 +67,20 @@ class BaseSMSProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_services(self) -> list[dict]:
+        raise NotImplementedError
+
+    @abstractmethod
     def request_number(
         self,
         service: Optional[str] = None,
         country: Optional[int] = None,
         max_price: Optional[float] = None,
         operator: Optional[str] = None,
+        provider_ids: Optional[str] = None,
+        except_provider_ids: Optional[str] = None,
+        phone_exception: Optional[str] = None,
+        min_price: Optional[float] = None,
     ) -> SMSActivation:
         raise NotImplementedError
 
@@ -87,6 +102,14 @@ class BaseSMSProvider(ABC):
 
     @abstractmethod
     def get_operator_quote_options(self, service: Optional[str], country: int) -> list[dict]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_provider_price_options(self, service: Optional[str], country: int) -> list[dict]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_static_wallet(self, coin: str, network: str) -> dict:
         raise NotImplementedError
 
     @abstractmethod
@@ -129,12 +152,15 @@ class PlaceholderSMSProvider(BaseSMSProvider):
 
     get_balance = _not_impl
     get_countries = _not_impl
+    get_services = _not_impl
     request_number = _not_impl
     get_lowest_price = _not_impl
     list_country_prices = _not_impl
     get_top_countries_by_service = _not_impl
     get_operators = _not_impl
     get_operator_quote_options = _not_impl
+    get_provider_price_options = _not_impl
+    get_static_wallet = _not_impl
     set_status = _not_impl
     request_resend_sms = _not_impl
     finish_activation = _not_impl

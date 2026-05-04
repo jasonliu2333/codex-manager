@@ -621,8 +621,11 @@
                             <div class="form-group">
                                 <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
                                     <button type="button" class="btn btn-secondary btn-sm" id="sms-top-countries-btn">🌍 查询推荐国家</button>
+                                    <button type="button" class="btn btn-secondary btn-sm" id="sms-services-btn">🧩 查询服务列表</button>
                                     <button type="button" class="btn btn-secondary btn-sm" id="sms-operators-btn">📶 查询运营商</button>
                                     <button type="button" class="btn btn-secondary btn-sm" id="sms-operator-quotes-btn">💲 查询运营商报价</button>
+                                    <button type="button" class="btn btn-secondary btn-sm" id="sms-provider-quotes-btn">🏷️ 查询 Provider 报价</button>
+                                    <button type="button" class="btn btn-secondary btn-sm" id="sms-wallet-btn">💰 查询静态钱包</button>
                                 </div>
                                 <div id="sms-provider-inspector" style="background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:8px;padding:10px 12px;min-height:64px;color:var(--text-secondary);font-size:0.85rem;">
                                     可用来查看当前短信平台的推荐国家、运营商和运营商报价。
@@ -632,6 +635,30 @@
                             <div class="form-group">
                                 <label for="herosms-proxy">短信平台专用代理（可选）</label>
                                 <input type="text" id="herosms-proxy" name="proxy" placeholder="留空则复用注册/补录代理">
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="sms-provider-ids">供应商 ID 列表（可选）</label>
+                                    <input type="text" id="sms-provider-ids" name="provider_ids" placeholder="例如 1,2,3">
+                                    <span class="hint">SMSBower 支持，逗号分隔多个 providerIds。</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="sms-except-provider-ids">排除的供应商 ID（可选）</label>
+                                    <input type="text" id="sms-except-provider-ids" name="except_provider_ids" placeholder="例如 4,5">
+                                    <span class="hint">SMSBower 支持，逗号分隔多个 exceptProviderIds。</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="sms-min-price">最小价格（可选）</label>
+                                    <input type="text" id="sms-min-price" name="min_price" value="-1">
+                                    <span class="hint">SMSBower 支持 `minPrice`；填 <code>-1</code> 表示不限制。</span>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="sms-phone-exception">号码前缀排除（可选）</label>
+                                <input type="text" id="sms-phone-exception" name="phone_exception" placeholder="例如 7918,7900111">
+                                <span class="hint">SMSBower 支持 `phoneException`，用于排除号码前缀。</span>
                             </div>
 
                             <div class="form-row">

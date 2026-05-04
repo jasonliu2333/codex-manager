@@ -227,6 +227,30 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.SMS,
         description="短信平台可选运营商"
     ),
+    "sms_provider_ids": SettingDefinition(
+        db_key="sms.provider_ids",
+        default_value="",
+        category=SettingCategory.SMS,
+        description="短信平台供应商 ID 列表（逗号分隔）"
+    ),
+    "sms_except_provider_ids": SettingDefinition(
+        db_key="sms.except_provider_ids",
+        default_value="",
+        category=SettingCategory.SMS,
+        description="短信平台排除的供应商 ID 列表（逗号分隔）"
+    ),
+    "sms_phone_exception": SettingDefinition(
+        db_key="sms.phone_exception",
+        default_value="",
+        category=SettingCategory.SMS,
+        description="短信平台号码前缀排除规则"
+    ),
+    "sms_min_price": SettingDefinition(
+        db_key="sms.min_price",
+        default_value=-1,
+        category=SettingCategory.SMS,
+        description="短信平台最小取号价格，-1 表示不限制"
+    ),
 
     # HeroSMS 接码平台配置
     "herosms_enabled": SettingDefinition(
@@ -597,6 +621,10 @@ SETTING_TYPES: Dict[str, Type] = {
     "proxy_validate_use_proxy": bool,
     "sms_provider": str,
     "sms_operator": str,
+    "sms_provider_ids": str,
+    "sms_except_provider_ids": str,
+    "sms_phone_exception": str,
+    "sms_min_price": float,
     "herosms_enabled": bool,
     "herosms_country": int,
     "herosms_timeout": int,
@@ -919,6 +947,10 @@ class Settings(BaseModel):
     # 短信平台配置
     sms_provider: str = "herosms"
     sms_operator: str = ""
+    sms_provider_ids: str = ""
+    sms_except_provider_ids: str = ""
+    sms_phone_exception: str = ""
+    sms_min_price: float = -1
 
     # HeroSMS 接码平台配置
     herosms_enabled: bool = False

@@ -71,8 +71,12 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
         service=runtime.get("service", "dr") or "dr",
         country=int(runtime.get("country", 187) or 187),
         max_price=_positive_float_or_none(runtime.get("max_price", -1)),
+        min_price=_positive_float_or_none(runtime.get("min_price", -1)),
         proxy=(runtime.get("proxy", "") or getattr(engine, "proxy_url", None) or None),
         timeout=int(runtime.get("timeout", 30) or 30),
+        provider_ids=str(runtime.get("provider_ids", "") or ""),
+        except_provider_ids=str(runtime.get("except_provider_ids", "") or ""),
+        phone_exception=str(runtime.get("phone_exception", "") or ""),
     )
     client = get_sms_provider(cfg)
     max_number_attempts = max(1, int(runtime.get("max_number_attempts", 1) or 1))
@@ -83,6 +87,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
     reuse_enabled = bool(runtime.get("reuse_enabled", False))
     reuse_max_uses = max(1, int(runtime.get("reuse_max_uses", 1) or 1))
     selected_operator = str(runtime.get("operator", "") or "").strip()
+    provider_candidates = _build_provider_candidates(engine, client, cfg)
     resolved_max_price = cfg.max_price
     if lowest_price_first:
         try:
@@ -138,24 +143,42 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 )
                 last_request_error: Optional[Exception] = None
                 for idx, candidate_price in enumerate(price_candidates, start=1):
-                    try:
-                        price_label = "不限价" if candidate_price is None else str(candidate_price)
-                        balance_before = _safe_get_balance(client)
-                        engine._log(
-                            f"add-phone: 正在向 HeroSMS 取号 service={cfg.service}, country={cfg.country}, "
-                            f"attempt={number_attempt}/{max_number_attempts}, price_try={idx}/{len(price_candidates)}, maxPrice={price_label}"
-                        )
-                        activation = client.request_number(max_price=candidate_price, operator=selected_operator or None)
-                        balance_after = _safe_get_balance(client)
-                        _log_activation_cost(engine, activation, balance_before, balance_after)
+                    provider_try_plan = _build_provider_try_plan(provider_candidates, candidate_price, cfg)
+                    for provider_try_index, provider_choice in enumerate(provider_try_plan, start=1):
+                        try:
+                            price_label = "不限价" if candidate_price is None else str(candidate_price)
+                            provider_label = provider_choice.get("provider_ids") or "自动"
+                            provider_meta = ""
+                            if provider_choice.get("price") is not None or provider_choice.get("count") is not None:
+                                provider_meta = f", provider_quote={provider_choice.get('price')}, provider_count={provider_choice.get('count')}"
+                            balance_before = _safe_get_balance(client)
+                            engine._log(
+                                f"add-phone: 正在向短信平台取号 service={cfg.service}, country={cfg.country}, "
+                                f"attempt={number_attempt}/{max_number_attempts}, price_try={idx}/{len(price_candidates)}, "
+                                f"provider_try={provider_try_index}/{len(provider_try_plan)}, maxPrice={price_label}, providerIds={provider_label}{provider_meta}"
+                            )
+                            activation = _request_number_with_provider_options(
+                                client,
+                                candidate_price=candidate_price,
+                                selected_operator=selected_operator,
+                                cfg=cfg,
+                                provider_ids=provider_choice.get("provider_ids"),
+                            )
+                            balance_after = _safe_get_balance(client)
+                            _log_activation_cost(engine, activation, balance_before, balance_after)
+                            break
+                        except Exception as exc:
+                            last_request_error = exc
+                            err_text = str(exc)
+                            if "NO_NUMBERS" in err_text and provider_try_index < len(provider_try_plan):
+                                engine._log(f"add-phone: 当前 provider 无号，自动切换下一个 provider 重试: {err_text}", "warning")
+                                continue
+                            if "NO_NUMBERS" in err_text and idx < len(price_candidates) and provider_try_index == len(provider_try_plan):
+                                engine._log(f"add-phone: 当前价格档无号，自动放宽价格继续尝试: {err_text}", "warning")
+                                break
+                            raise
+                    if activation is not None:
                         break
-                    except Exception as exc:
-                        last_request_error = exc
-                        err_text = str(exc)
-                        if "NO_NUMBERS" in err_text and idx < len(price_candidates):
-                            engine._log(f"add-phone: 当前价格档无号，自动放宽价格继续尝试: {err_text}", "warning")
-                            continue
-                        raise
                 if activation is None and last_request_error:
                     raise last_request_error
                 engine._log(f"add-phone: 取号成功 {activation.phone_number} (activation={activation.activation_id})")
@@ -370,6 +393,10 @@ def _load_herosms_runtime_settings() -> dict:
     data = {
         "provider": getattr(settings, "sms_provider", "herosms") or "herosms",
         "operator": getattr(settings, "sms_operator", "") or "",
+        "provider_ids": getattr(settings, "sms_provider_ids", "") or "",
+        "except_provider_ids": getattr(settings, "sms_except_provider_ids", "") or "",
+        "phone_exception": getattr(settings, "sms_phone_exception", "") or "",
+        "min_price": getattr(settings, "sms_min_price", -1),
         "enabled": bool(getattr(settings, "herosms_enabled", False)),
         "service": getattr(settings, "herosms_service", "dr") or "dr",
         "country": int(getattr(settings, "herosms_country", 187) or 187),
@@ -389,6 +416,10 @@ def _load_herosms_runtime_settings() -> dict:
     key_map = {
         "sms.provider": ("provider", lambda v, d=data["provider"]: str(v or d)),
         "sms.operator": ("operator", lambda v, d=data["operator"]: str(v or d)),
+        "sms.provider_ids": ("provider_ids", lambda v, d=data["provider_ids"]: str(v or d)),
+        "sms.except_provider_ids": ("except_provider_ids", lambda v, d=data["except_provider_ids"]: str(v or d)),
+        "sms.phone_exception": ("phone_exception", lambda v, d=data["phone_exception"]: str(v or d)),
+        "sms.min_price": ("min_price", lambda v, d=data["min_price"]: v if v not in (None, "") else d),
         "herosms.enabled": ("enabled", lambda v, d=data["enabled"]: _parse_bool(v, d)),
         "herosms.service": ("service", lambda v, d=data["service"]: str(v or d)),
         "herosms.country": ("country", lambda v, d=data["country"]: int(v or d)),
@@ -440,6 +471,69 @@ def _build_price_candidates(
             candidates.append(value)
     candidates.append(None)  # 最后回退到不限价
     return candidates
+
+
+def _build_provider_candidates(engine: Any, client: object, cfg: SMSProviderConfig) -> list[dict]:
+    if (cfg.provider or "").strip().lower() != "smsbower":
+        return []
+    if str(cfg.provider_ids or "").strip():
+        return []
+    try:
+        provider_quotes = client.get_provider_price_options(cfg.service, cfg.country)
+        provider_quotes = [item for item in provider_quotes if item.get("provider_id")]
+        provider_quotes.sort(key=lambda x: (x.get("price") if x.get("price") is not None else 999999, -(x.get("count") or 0)))
+        if provider_quotes:
+            engine._log(
+                "add-phone: SMSBower provider 自动排序已启用，候选="
+                + ", ".join(
+                    f"{item.get('provider_id')}[price={item.get('price')},count={item.get('count')}]"
+                    for item in provider_quotes[:8]
+                )
+            )
+        return provider_quotes[:8]
+    except Exception as exc:
+        engine._log(f"add-phone: 获取 SMSBower provider 报价失败，将回退为平台自动选择: {exc}", "warning")
+        return []
+
+
+def _build_provider_try_plan(provider_candidates: list[dict], candidate_price: Optional[float], cfg: SMSProviderConfig) -> list[dict]:
+    explicit_provider_ids = str(cfg.provider_ids or "").strip()
+    if explicit_provider_ids:
+        return [{"provider_ids": explicit_provider_ids}]
+    if not provider_candidates:
+        return [{"provider_ids": None}]
+    plan = []
+    for item in provider_candidates:
+        quote_price = item.get("price")
+        if candidate_price is not None and quote_price is not None and quote_price > candidate_price:
+            continue
+        plan.append({
+            "provider_ids": str(item.get("provider_id") or "").strip(),
+            "price": quote_price,
+            "count": item.get("count"),
+        })
+    return plan or [{"provider_ids": None}]
+
+
+def _request_number_with_provider_options(
+    client: object,
+    *,
+    candidate_price: Optional[float],
+    selected_operator: str,
+    cfg: SMSProviderConfig,
+    provider_ids: Optional[str],
+):
+    try:
+        return client.request_number(
+            max_price=candidate_price,
+            operator=selected_operator or None,
+            provider_ids=provider_ids or cfg.provider_ids or None,
+            except_provider_ids=cfg.except_provider_ids or None,
+            phone_exception=cfg.phone_exception or None,
+            min_price=cfg.min_price,
+        )
+    except TypeError:
+        return client.request_number(max_price=candidate_price, operator=selected_operator or None)
 
 
 def _get_saved_herosms_api_key() -> str:
