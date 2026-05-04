@@ -245,11 +245,41 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.SMS,
         description="短信平台号码前缀排除规则"
     ),
+    "sms_country_key": SettingDefinition(
+        db_key="sms.country_key",
+        default_value="",
+        category=SettingCategory.SMS,
+        description="短信平台国家 slug/key（5SIM 等文本国家标识）"
+    ),
     "sms_min_price": SettingDefinition(
         db_key="sms.min_price",
         default_value=-1,
         category=SettingCategory.SMS,
         description="短信平台最小取号价格，-1 表示不限制"
+    ),
+    "sms_reuse": SettingDefinition(
+        db_key="sms.reuse",
+        default_value=False,
+        category=SettingCategory.SMS,
+        description="短信平台是否启用平台级复用能力"
+    ),
+    "sms_voice": SettingDefinition(
+        db_key="sms.voice",
+        default_value=False,
+        category=SettingCategory.SMS,
+        description="短信平台是否允许语音验证码"
+    ),
+    "sms_forwarding": SettingDefinition(
+        db_key="sms.forwarding",
+        default_value=False,
+        category=SettingCategory.SMS,
+        description="短信平台是否启用转发"
+    ),
+    "sms_forwarding_number": SettingDefinition(
+        db_key="sms.forwarding_number",
+        default_value="",
+        category=SettingCategory.SMS,
+        description="短信平台转发目标号码"
     ),
 
     # HeroSMS 接码平台配置
@@ -624,7 +654,12 @@ SETTING_TYPES: Dict[str, Type] = {
     "sms_provider_ids": str,
     "sms_except_provider_ids": str,
     "sms_phone_exception": str,
+    "sms_country_key": str,
     "sms_min_price": float,
+    "sms_reuse": bool,
+    "sms_voice": bool,
+    "sms_forwarding": bool,
+    "sms_forwarding_number": str,
     "herosms_enabled": bool,
     "herosms_country": int,
     "herosms_timeout": int,
@@ -950,7 +985,12 @@ class Settings(BaseModel):
     sms_provider_ids: str = ""
     sms_except_provider_ids: str = ""
     sms_phone_exception: str = ""
+    sms_country_key: str = ""
     sms_min_price: float = -1
+    sms_reuse: bool = False
+    sms_voice: bool = False
+    sms_forwarding: bool = False
+    sms_forwarding_number: str = ""
 
     # HeroSMS 接码平台配置
     herosms_enabled: bool = False

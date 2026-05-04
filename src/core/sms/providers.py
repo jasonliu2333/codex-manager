@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 from .base import BaseSMSProvider, PlaceholderSMSProvider, SMSProviderConfig
+from .fivesim_provider import FiveSimProvider
 from .herosms_provider import HeroSMSProvider
 from .smsbower_provider import SMSBowerProvider
-
-
-class FiveSimProvider(PlaceholderSMSProvider):
-    provider_name = "5sim"
 
 
 def get_sms_provider(config: SMSProviderConfig) -> BaseSMSProvider:

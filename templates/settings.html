@@ -591,13 +591,13 @@
                                 <div class="hint" style="margin-top: 6px;">密码框不回显真实 Key；留空表示保持数据库中已保存的 Key 不变。</div>
                             </div>
 
-                            <div class="form-row">
+                            <div class="form-row provider-group provider-common">
                                 <div class="form-group">
                                     <label for="herosms-service">服务代码</label>
                                     <input type="text" id="herosms-service" name="service" value="dr">
-                                    <span class="hint">默认 <code>dr</code>，按 HeroSMS 平台服务代码填写。</span>
+                                    <span class="hint" id="sms-service-hint">默认 <code>dr</code>，按当前短信平台服务代码填写。</span>
                                 </div>
-                                <div class="form-group">
+                                <div class="form-group provider-group provider-numeric-country">
                                     <label for="herosms-country">国家代码</label>
                                     <div class="search-select" id="herosms-country-select">
                                         <input type="text" id="herosms-country-search" placeholder="搜索国家名称或代码，例如 菲律宾 / Philippines / 4" autocomplete="off">
@@ -606,19 +606,24 @@
                                     <input type="number" id="herosms-country" name="country" value="187" min="1">
                                     <span class="hint">上方可搜索选择国家；下方保存实际 HeroSMS 国家代码。</span>
                                 </div>
-                                <div class="form-group">
+                                <div class="form-group provider-group provider-country-key">
+                                    <label for="sms-country-key">国家 slug/key（5SIM）</label>
+                                    <input type="text" id="sms-country-key" name="country_key" placeholder="例如 england / any">
+                                    <span class="hint">5SIM 使用国家文本 key，而不是数字国家码。</span>
+                                </div>
+                                <div class="form-group provider-group provider-common">
                                     <label for="herosms-max-price">最大单价</label>
                                     <input type="text" id="herosms-max-price" name="max_price" value="-1">
                                     <span class="hint">填 <code>-1</code> 表示不限制。</span>
                                 </div>
-                                <div class="form-group">
+                                <div class="form-group provider-group provider-common">
                                     <label for="sms-operator">运营商（可选）</label>
                                     <input type="text" id="sms-operator" name="operator" placeholder="例如 vodafone；留空自动选择">
-                                    <span class="hint">当前仅 HeroSMS 已接入运营商维度；留空表示不指定运营商。</span>
+                                    <span class="hint">支持的平台可按运营商取号；留空表示不指定运营商。</span>
                                 </div>
                             </div>
 
-                            <div class="form-group">
+                            <div class="form-group provider-group provider-common">
                                 <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
                                     <button type="button" class="btn btn-secondary btn-sm" id="sms-top-countries-btn">🌍 查询推荐国家</button>
                                     <button type="button" class="btn btn-secondary btn-sm" id="sms-services-btn">🧩 查询服务列表</button>
@@ -632,12 +637,12 @@
                                 </div>
                             </div>
 
-                            <div class="form-group">
+                            <div class="form-group provider-group provider-common">
                                 <label for="herosms-proxy">短信平台专用代理（可选）</label>
                                 <input type="text" id="herosms-proxy" name="proxy" placeholder="留空则复用注册/补录代理">
                             </div>
 
-                            <div class="form-row">
+                            <div class="form-row provider-group provider-smsbower">
                                 <div class="form-group">
                                     <label for="sms-provider-ids">供应商 ID 列表（可选）</label>
                                     <input type="text" id="sms-provider-ids" name="provider_ids" placeholder="例如 1,2,3">
@@ -655,10 +660,31 @@
                                 </div>
                             </div>
 
-                            <div class="form-group">
+                            <div class="form-group provider-group provider-smsbower">
                                 <label for="sms-phone-exception">号码前缀排除（可选）</label>
                                 <input type="text" id="sms-phone-exception" name="phone_exception" placeholder="例如 7918,7900111">
                                 <span class="hint">SMSBower 支持 `phoneException`，用于排除号码前缀。</span>
+                            </div>
+
+                            <div class="form-row provider-group provider-5sim">
+                                <div class="form-group">
+                                    <label style="display:flex;align-items:center;gap:8px;margin-top:30px;">
+                                        <input type="checkbox" id="sms-reuse-platform" name="reuse_platform">
+                                        启用平台级复用（5SIM reuse）
+                                    </label>
+                                    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+                                        <input type="checkbox" id="sms-voice" name="voice">
+                                        允许语音验证码（5SIM voice）
+                                    </label>
+                                </div>
+                                <div class="form-group">
+                                    <label style="display:flex;align-items:center;gap:8px;margin-top:30px;">
+                                        <input type="checkbox" id="sms-forwarding" name="forwarding">
+                                        启用转发（5SIM forwarding）
+                                    </label>
+                                    <input type="text" id="sms-forwarding-number" name="forwarding_number" placeholder="转发号码，11位无+号" style="margin-top:10px;">
+                                    <span class="hint">5SIM forwarding number。</span>
+                                </div>
                             </div>
 
                             <div class="form-row">

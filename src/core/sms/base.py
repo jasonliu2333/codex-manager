@@ -25,6 +25,7 @@ class SMSProviderConfig:
     provider: str = "herosms"
     service: str = "dr"
     country: int = 187
+    country_key: str = ""
     max_price: Optional[float] = None
     min_price: Optional[float] = None
     proxy: Optional[str] = None
@@ -32,6 +33,10 @@ class SMSProviderConfig:
     provider_ids: str = ""
     except_provider_ids: str = ""
     phone_exception: str = ""
+    reuse: bool = False
+    voice: bool = False
+    forwarding: bool = False
+    forwarding_number: str = ""
 
 
 class SMSProviderError(RuntimeError):
@@ -81,6 +86,11 @@ class BaseSMSProvider(ABC):
         except_provider_ids: Optional[str] = None,
         phone_exception: Optional[str] = None,
         min_price: Optional[float] = None,
+        country_key: Optional[str] = None,
+        reuse: Optional[bool] = None,
+        voice: Optional[bool] = None,
+        forwarding: Optional[bool] = None,
+        forwarding_number: Optional[str] = None,
     ) -> SMSActivation:
         raise NotImplementedError
 

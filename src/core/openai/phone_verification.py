@@ -70,6 +70,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
         provider=str(runtime.get("provider", "herosms") or "herosms"),
         service=runtime.get("service", "dr") or "dr",
         country=int(runtime.get("country", 187) or 187),
+        country_key=str(runtime.get("country_key", "") or ""),
         max_price=_positive_float_or_none(runtime.get("max_price", -1)),
         min_price=_positive_float_or_none(runtime.get("min_price", -1)),
         proxy=(runtime.get("proxy", "") or getattr(engine, "proxy_url", None) or None),
@@ -77,6 +78,10 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
         provider_ids=str(runtime.get("provider_ids", "") or ""),
         except_provider_ids=str(runtime.get("except_provider_ids", "") or ""),
         phone_exception=str(runtime.get("phone_exception", "") or ""),
+        reuse=bool(runtime.get("reuse_platform", False)),
+        voice=bool(runtime.get("voice", False)),
+        forwarding=bool(runtime.get("forwarding", False)),
+        forwarding_number=str(runtime.get("forwarding_number", "") or ""),
     )
     client = get_sms_provider(cfg)
     max_number_attempts = max(1, int(runtime.get("max_number_attempts", 1) or 1))
@@ -166,6 +171,13 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                             )
                             balance_after = _safe_get_balance(client)
                             _log_activation_cost(engine, activation, balance_before, balance_after)
+                            if activation.activation_operator or activation.activation_time or activation.can_get_another_sms is not None:
+                                engine._log(
+                                    "add-phone: activation 扩展信息: "
+                                    f"operator={activation.activation_operator or '-'}, "
+                                    f"time={activation.activation_time or '-'}, "
+                                    f"can_get_another_sms={activation.can_get_another_sms if activation.can_get_another_sms is not None else '-'}"
+                                )
                             break
                         except Exception as exc:
                             last_request_error = exc
@@ -396,7 +408,12 @@ def _load_herosms_runtime_settings() -> dict:
         "provider_ids": getattr(settings, "sms_provider_ids", "") or "",
         "except_provider_ids": getattr(settings, "sms_except_provider_ids", "") or "",
         "phone_exception": getattr(settings, "sms_phone_exception", "") or "",
+        "country_key": getattr(settings, "sms_country_key", "") or "",
         "min_price": getattr(settings, "sms_min_price", -1),
+        "reuse_platform": bool(getattr(settings, "sms_reuse", False)),
+        "voice": bool(getattr(settings, "sms_voice", False)),
+        "forwarding": bool(getattr(settings, "sms_forwarding", False)),
+        "forwarding_number": getattr(settings, "sms_forwarding_number", "") or "",
         "enabled": bool(getattr(settings, "herosms_enabled", False)),
         "service": getattr(settings, "herosms_service", "dr") or "dr",
         "country": int(getattr(settings, "herosms_country", 187) or 187),
@@ -419,7 +436,12 @@ def _load_herosms_runtime_settings() -> dict:
         "sms.provider_ids": ("provider_ids", lambda v, d=data["provider_ids"]: str(v or d)),
         "sms.except_provider_ids": ("except_provider_ids", lambda v, d=data["except_provider_ids"]: str(v or d)),
         "sms.phone_exception": ("phone_exception", lambda v, d=data["phone_exception"]: str(v or d)),
+        "sms.country_key": ("country_key", lambda v, d=data["country_key"]: str(v or d)),
         "sms.min_price": ("min_price", lambda v, d=data["min_price"]: v if v not in (None, "") else d),
+        "sms.reuse": ("reuse_platform", lambda v, d=data["reuse_platform"]: _parse_bool(v, d)),
+        "sms.voice": ("voice", lambda v, d=data["voice"]: _parse_bool(v, d)),
+        "sms.forwarding": ("forwarding", lambda v, d=data["forwarding"]: _parse_bool(v, d)),
+        "sms.forwarding_number": ("forwarding_number", lambda v, d=data["forwarding_number"]: str(v or d)),
         "herosms.enabled": ("enabled", lambda v, d=data["enabled"]: _parse_bool(v, d)),
         "herosms.service": ("service", lambda v, d=data["service"]: str(v or d)),
         "herosms.country": ("country", lambda v, d=data["country"]: int(v or d)),
@@ -531,6 +553,11 @@ def _request_number_with_provider_options(
             except_provider_ids=cfg.except_provider_ids or None,
             phone_exception=cfg.phone_exception or None,
             min_price=cfg.min_price,
+            country_key=cfg.country_key or None,
+            reuse=cfg.reuse,
+            voice=cfg.voice,
+            forwarding=cfg.forwarding,
+            forwarding_number=cfg.forwarding_number or None,
         )
     except TypeError:
         return client.request_number(max_price=candidate_price, operator=selected_operator or None)

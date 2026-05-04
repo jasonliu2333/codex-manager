@@ -253,6 +253,7 @@ function initEventListeners() {
     if (elements.herosmsSettingsForm) {
         elements.herosmsSettingsForm.addEventListener('submit', handleSaveSmsSettings);
     }
+    document.getElementById('sms-provider')?.addEventListener('change', handleSmsProviderChanged);
     document.getElementById('sms-top-countries-btn')?.addEventListener('click', loadSmsTopCountries);
     document.getElementById('sms-services-btn')?.addEventListener('click', loadSmsServices);
     document.getElementById('sms-operators-btn')?.addEventListener('click', loadSmsOperators);
@@ -415,7 +416,12 @@ async function loadSettings() {
             document.getElementById('sms-provider-ids').value = data.herosms.provider_ids || '';
             document.getElementById('sms-except-provider-ids').value = data.herosms.except_provider_ids || '';
             document.getElementById('sms-phone-exception').value = data.herosms.phone_exception || '';
+            document.getElementById('sms-country-key').value = data.herosms.country_key || '';
             document.getElementById('sms-min-price').value = data.herosms.min_price ?? '-1';
+            document.getElementById('sms-reuse-platform').checked = !!data.herosms.reuse_platform;
+            document.getElementById('sms-voice').checked = !!data.herosms.voice;
+            document.getElementById('sms-forwarding').checked = !!data.herosms.forwarding;
+            document.getElementById('sms-forwarding-number').value = data.herosms.forwarding_number || '';
             document.getElementById('herosms-enabled').checked = !!data.herosms.enabled;
             document.getElementById('herosms-service').value = data.herosms.service || 'dr';
             document.getElementById('herosms-country').value = data.herosms.country || 187;
@@ -631,7 +637,12 @@ async function handleSaveSmsSettings(e) {
         provider_ids: document.getElementById('sms-provider-ids').value.trim(),
         except_provider_ids: document.getElementById('sms-except-provider-ids').value.trim(),
         phone_exception: document.getElementById('sms-phone-exception').value.trim(),
+        country_key: document.getElementById('sms-country-key').value.trim(),
         min_price: document.getElementById('sms-min-price').value.trim() || '-1',
+        reuse_platform: document.getElementById('sms-reuse-platform').checked,
+        voice: document.getElementById('sms-voice').checked,
+        forwarding: document.getElementById('sms-forwarding').checked,
+        forwarding_number: document.getElementById('sms-forwarding-number').value.trim(),
         enabled: document.getElementById('herosms-enabled').checked,
         api_key: document.getElementById('herosms-api-key').value || null,
         service: document.getElementById('herosms-service').value.trim() || 'dr',
@@ -716,10 +727,12 @@ async function loadSmsCountries() {
     const menu = document.getElementById('herosms-country-menu');
     if (!menu) return;
     try {
-        const data = await api.get('/settings/sms/countries');
+        const provider = document.getElementById('sms-provider')?.value || 'herosms';
+        const data = await api.get(`/settings/sms/countries?provider=${encodeURIComponent(provider)}`);
         herosmsCountries = data.countries || [];
         const current = parseInt(document.getElementById('herosms-country')?.value) || 187;
-        updateHeroSMSCountrySearch(current);
+        const currentKey = document.getElementById('sms-country-key')?.value?.trim() || '';
+        updateHeroSMSCountrySearch(provider === '5sim' ? currentKey : current);
     } catch (error) {
         console.warn('加载 HeroSMS 国家列表失败:', error);
         menu.innerHTML = '<div class="search-select-item">国家列表加载失败</div>';
@@ -733,6 +746,7 @@ function handleHeroSMSCountrySearchChange() {
     const value = input.value.trim();
     const matched = herosmsCountries.find(c => c.display === value)
         || herosmsCountries.find(c => String(c.code) === value)
+        || herosmsCountries.find(c => (c.country_key || '').toLowerCase() === value.toLowerCase())
         || herosmsCountries.find(c => (c.name || '').toLowerCase() === value.toLowerCase());
     if (matched) {
         selectHeroSMSCountry(matched);
@@ -742,7 +756,8 @@ function handleHeroSMSCountrySearchChange() {
 function updateHeroSMSCountrySearch(code) {
     const input = document.getElementById('herosms-country-search');
     if (!input) return;
-    const matched = herosmsCountries.find(c => String(c.code) === String(code));
+    const matched = herosmsCountries.find(c => String(c.code) === String(code))
+        || herosmsCountries.find(c => String(c.country_key || '') === String(code));
     input.value = matched ? matched.display : '';
 }
 
@@ -784,8 +799,10 @@ function renderHeroSMSCountryMenu() {
 function selectHeroSMSCountry(country) {
     const input = document.getElementById('herosms-country-search');
     const countryInput = document.getElementById('herosms-country');
+    const countryKeyInput = document.getElementById('sms-country-key');
     const menu = document.getElementById('herosms-country-menu');
-    if (countryInput) countryInput.value = country.code;
+    if (countryInput && country.code != null) countryInput.value = country.code;
+    if (countryKeyInput) countryKeyInput.value = country.country_key || '';
     if (input) input.value = country.display;
     if (menu) menu.classList.remove('active');
 }
@@ -804,8 +821,11 @@ function setSmsInspectorHtml(html) {
 async function loadSmsTopCountries() {
     try {
         const service = document.getElementById('herosms-service').value.trim() || 'dr';
+        const provider = document.getElementById('sms-provider').value || 'herosms';
+        const country = parseInt(document.getElementById('herosms-country').value) || 0;
+        const countryKey = document.getElementById('sms-country-key').value.trim();
         setSmsInspectorHtml('正在加载推荐国家...');
-        const data = await api.get(`/settings/sms/top-countries?service=${encodeURIComponent(service)}`);
+        const data = await api.get(`/settings/sms/top-countries?service=${encodeURIComponent(service)}&provider=${encodeURIComponent(provider)}&country=${country || ''}&country_key=${encodeURIComponent(countryKey)}`);
         smsInspectorState.topCountries = data.items || [];
         if (!smsInspectorState.topCountries.length) {
             setSmsInspectorHtml('当前没有解析到推荐国家数据。');
@@ -829,8 +849,11 @@ async function loadSmsTopCountries() {
 
 async function loadSmsServices() {
     try {
+        const provider = document.getElementById('sms-provider').value || 'herosms';
+        const country = parseInt(document.getElementById('herosms-country').value) || 0;
+        const countryKey = document.getElementById('sms-country-key').value.trim();
         setSmsInspectorHtml('正在加载服务列表...');
-        const data = await api.get('/settings/sms/services');
+        const data = await api.get(`/settings/sms/services?provider=${encodeURIComponent(provider)}&country=${country || ''}&country_key=${encodeURIComponent(countryKey)}`);
         const items = data.items || [];
         if (!items.length) {
             setSmsInspectorHtml('当前平台没有返回服务列表。');
@@ -853,12 +876,16 @@ async function loadSmsServices() {
 async function loadSmsOperators() {
     try {
         const country = parseInt(document.getElementById('herosms-country').value) || 0;
+        const provider = document.getElementById('sms-provider').value || 'herosms';
+        const countryKey = document.getElementById('sms-country-key').value.trim();
         if (!country) {
-            toast.error('请先选择国家');
-            return;
+            if (provider !== '5sim' || !countryKey) {
+                toast.error('请先选择国家');
+                return;
+            }
         }
         setSmsInspectorHtml('正在加载运营商...');
-        const data = await api.get(`/settings/sms/operators?country=${country}`);
+        const data = await api.get(`/settings/sms/operators?country=${country || ''}&provider=${encodeURIComponent(provider)}&country_key=${encodeURIComponent(countryKey)}`);
         smsInspectorState.operators = data.items || [];
         if (!smsInspectorState.operators.length) {
             setSmsInspectorHtml('当前国家没有解析到运营商列表。');
@@ -886,12 +913,16 @@ async function loadSmsOperatorQuotes() {
     try {
         const country = parseInt(document.getElementById('herosms-country').value) || 0;
         const service = document.getElementById('herosms-service').value.trim() || 'dr';
+        const provider = document.getElementById('sms-provider').value || 'herosms';
+        const countryKey = document.getElementById('sms-country-key').value.trim();
         if (!country) {
-            toast.error('请先选择国家');
-            return;
+            if (provider !== '5sim' || !countryKey) {
+                toast.error('请先选择国家');
+                return;
+            }
         }
         setSmsInspectorHtml('正在加载运营商报价...');
-        const data = await api.get(`/settings/sms/operator-quotes?country=${country}&service=${encodeURIComponent(service)}`);
+        const data = await api.get(`/settings/sms/operator-quotes?country=${country || ''}&service=${encodeURIComponent(service)}&provider=${encodeURIComponent(provider)}&country_key=${encodeURIComponent(countryKey)}`);
         smsInspectorState.quotes = data.items || [];
         if (!smsInspectorState.quotes.length) {
             setSmsInspectorHtml('当前国家没有解析到运营商报价。');
@@ -917,12 +948,16 @@ async function loadSmsProviderQuotes() {
     try {
         const country = parseInt(document.getElementById('herosms-country').value) || 0;
         const service = document.getElementById('herosms-service').value.trim() || 'dr';
+        const provider = document.getElementById('sms-provider').value || 'herosms';
+        const countryKey = document.getElementById('sms-country-key').value.trim();
         if (!country) {
-            toast.error('请先选择国家');
-            return;
+            if (provider !== '5sim' || !countryKey) {
+                toast.error('请先选择国家');
+                return;
+            }
         }
         setSmsInspectorHtml('正在加载 Provider 级报价...');
-        const data = await api.get(`/settings/sms/provider-quotes?country=${country}&service=${encodeURIComponent(service)}`);
+        const data = await api.get(`/settings/sms/provider-quotes?country=${country || ''}&service=${encodeURIComponent(service)}&provider=${encodeURIComponent(provider)}&country_key=${encodeURIComponent(countryKey)}`);
         const items = data.items || [];
         if (!items.length) {
             setSmsInspectorHtml('当前平台没有 provider 级报价数据。');
@@ -946,8 +981,9 @@ async function loadSmsProviderQuotes() {
 
 async function loadSmsStaticWallet() {
     try {
+        const provider = document.getElementById('sms-provider').value || 'herosms';
         setSmsInspectorHtml('正在加载静态钱包...');
-        const data = await api.get('/settings/sms/static-wallet?coin=usdt&network=tron');
+        const data = await api.get(`/settings/sms/static-wallet?coin=usdt&network=tron&provider=${encodeURIComponent(provider)}`);
         setSmsInspectorHtml(`
             <div style="font-weight:600;margin-bottom:8px;">静态钱包</div>
             <div>coin=${escapeHtml(data.coin || 'usdt')}</div>
@@ -957,6 +993,61 @@ async function loadSmsStaticWallet() {
     } catch (error) {
         setSmsInspectorHtml(`加载静态钱包失败：${escapeHtml(error.message)}`);
     }
+}
+
+function handleSmsProviderChanged() {
+    const provider = document.getElementById('sms-provider').value || 'herosms';
+    const countryInput = document.getElementById('herosms-country');
+    const countryKeyInput = document.getElementById('sms-country-key');
+    const providerIdsInput = document.getElementById('sms-provider-ids');
+    const exceptProviderIdsInput = document.getElementById('sms-except-provider-ids');
+    const phoneExceptionInput = document.getElementById('sms-phone-exception');
+    const minPriceInput = document.getElementById('sms-min-price');
+    const reuseCheckbox = document.getElementById('sms-reuse-platform');
+    const voiceCheckbox = document.getElementById('sms-voice');
+    const forwardingCheckbox = document.getElementById('sms-forwarding');
+    const forwardingNumberInput = document.getElementById('sms-forwarding-number');
+
+    if (countryInput) countryInput.disabled = provider === '5sim';
+    if (countryKeyInput) countryKeyInput.disabled = provider !== '5sim';
+    if (providerIdsInput) providerIdsInput.disabled = provider !== 'smsbower';
+    if (exceptProviderIdsInput) exceptProviderIdsInput.disabled = provider !== 'smsbower';
+    if (phoneExceptionInput) phoneExceptionInput.disabled = provider !== 'smsbower';
+    if (minPriceInput) minPriceInput.disabled = provider === 'herosms';
+    if (reuseCheckbox) reuseCheckbox.disabled = provider !== '5sim';
+    if (voiceCheckbox) voiceCheckbox.disabled = provider !== '5sim';
+    if (forwardingCheckbox) forwardingCheckbox.disabled = provider !== '5sim';
+    if (forwardingNumberInput) forwardingNumberInput.disabled = provider !== '5sim';
+
+    document.querySelectorAll('.provider-group').forEach(el => {
+        el.style.display = '';
+    });
+    document.querySelectorAll('.provider-smsbower').forEach(el => {
+        el.style.display = provider === 'smsbower' ? '' : 'none';
+    });
+    document.querySelectorAll('.provider-5sim').forEach(el => {
+        el.style.display = provider === '5sim' ? '' : 'none';
+    });
+    document.querySelectorAll('.provider-country-key').forEach(el => {
+        el.style.display = provider === '5sim' ? '' : 'none';
+    });
+    document.querySelectorAll('.provider-numeric-country').forEach(el => {
+        el.style.display = provider === '5sim' ? 'none' : '';
+    });
+
+    const serviceHint = document.getElementById('sms-service-hint');
+    if (serviceHint) {
+        if (provider === '5sim') {
+            serviceHint.innerHTML = '5SIM 使用产品名（product），例如 <code>facebook</code>。';
+        } else if (provider === 'smsbower') {
+            serviceHint.innerHTML = 'SMSBower 使用服务代码；可配合 providerIds / minPrice 定向取号。';
+        } else {
+            serviceHint.innerHTML = '默认 <code>dr</code>，按当前短信平台服务代码填写。';
+        }
+    }
+
+    setSmsInspectorHtml(`已切换到 <strong>${escapeHtml(provider)}</strong>，下方查询按钮将基于当前表单值实时查询。`);
+    loadSmsCountries();
 }
 
 // 备份数据库
