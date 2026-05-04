@@ -31,6 +31,9 @@ class HeroSMSActivation:
     raw_number: str
     country_phone_code: str = ""
     activation_cost: Optional[float] = None
+    activation_time: Optional[str] = None
+    activation_operator: Optional[str] = None
+    can_get_another_sms: Optional[bool] = None
 
 
 class HeroSMSClient:
@@ -76,13 +79,16 @@ class HeroSMSClient:
             data = resp.json()
             if isinstance(data, dict) and data.get("activationId"):
                 raw = str(data.get("phoneNumber") or "")
-                country_code = str(data.get("countryPhoneCode") or "")
+                country_code = str(data.get("countryPhoneCode") or data.get("countryCode") or "")
                 return HeroSMSActivation(
                     activation_id=str(data["activationId"]),
                     raw_number=raw,
                     phone_number=normalize_phone_number(raw, country_code),
                     country_phone_code=country_code,
                     activation_cost=_to_float_or_none(data.get("activationCost")),
+                    activation_time=str(data.get("activationTime") or "").strip() or None,
+                    activation_operator=str(data.get("activationOperator") or "").strip() or None,
+                    can_get_another_sms=bool(data.get("canGetAnotherSms")) if data.get("canGetAnotherSms") is not None else None,
                 )
             v2_error = resp.text[:200]
         except Exception as exc:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 from curl_cffi import requests as cffi_requests
@@ -16,6 +17,10 @@ from .base import (
     SMSProviderNoBalanceError,
     SMSProviderNoNumbersError,
 )
+
+_FIVESIM_OPERATORS_CACHE: dict[tuple[str, str], tuple[float, list[str]]] = {}
+_FIVESIM_OPERATOR_QUOTES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+_FIVESIM_CACHE_TTL_SECONDS = 180
 
 
 class FiveSimProvider(BaseSMSProvider):
@@ -81,7 +86,8 @@ class FiveSimProvider(BaseSMSProvider):
         return services
 
     def get_prices(self, service: Optional[str] = None) -> Any:
-        resp = self._get("/guest/prices", headers=self._guest_headers())
+        params = {"product": service} if service else None
+        resp = self._get("/guest/prices", headers=self._guest_headers(), params=params)
         resp.raise_for_status()
         return resp.json()
 
@@ -102,6 +108,13 @@ class FiveSimProvider(BaseSMSProvider):
     def list_country_prices(self, service: Optional[str] = None, countries: Optional[list[dict]] = None) -> list[dict]:
         service = service or self.config.service
         countries = countries or self.get_countries()
+        try:
+            price_matrix = self.get_prices(service=service)
+            parsed = self._list_country_prices_from_price_matrix(price_matrix, service=service, countries=countries)
+            if parsed:
+                return parsed
+        except Exception:
+            pass
         priced = []
         for country in countries:
             country_key = country.get("country_key")
@@ -125,8 +138,13 @@ class FiveSimProvider(BaseSMSProvider):
     def get_top_countries_by_service(self, service: Optional[str] = None) -> list[dict]:
         return self.list_country_prices(service=service or self.config.service, countries=self.get_countries())[:50]
 
-    def get_operators(self, country: int) -> list[str]:
+    def get_operators(self, country: int, service: Optional[str] = None) -> list[str]:
         country_key = self._resolve_country_key()
+        service = service or self.config.service
+        cache_key = (country_key, str(service or "").strip().lower())
+        cached = _fivesim_cache_get(_FIVESIM_OPERATORS_CACHE, cache_key)
+        if cached is not None:
+            return cached
         resp = self._get("/guest/countries", headers=self._guest_headers())
         resp.raise_for_status()
         data = resp.json()
@@ -138,13 +156,34 @@ class FiveSimProvider(BaseSMSProvider):
                     continue
                 if isinstance(value, dict) and ("activation" in value or "hosting" in value):
                     operators.append(str(key))
-            return operators
+            if not service:
+                _fivesim_cache_set(_FIVESIM_OPERATORS_CACHE, cache_key, operators)
+                return operators
+            filtered = []
+            for operator in operators:
+                try:
+                    resp = self._get(f"/guest/products/{country_key}/{operator}", headers=self._guest_headers())
+                    if resp.status_code >= 400:
+                        continue
+                    product_map = resp.json()
+                    payload = product_map.get(service, {}) if isinstance(product_map, dict) else {}
+                    if isinstance(payload, dict) and (payload.get("Price") is not None or payload.get("Qty") is not None):
+                        filtered.append(operator)
+                except Exception:
+                    continue
+            result = filtered or operators
+            _fivesim_cache_set(_FIVESIM_OPERATORS_CACHE, cache_key, result)
+            return result
         return []
 
     def get_operator_quote_options(self, service: Optional[str], country: int) -> list[dict]:
         country_key = self._resolve_country_key()
         service = service or self.config.service
-        operators = self.get_operators(country)
+        cache_key = (country_key, str(service or "").strip().lower())
+        cached = _fivesim_cache_get(_FIVESIM_OPERATOR_QUOTES_CACHE, cache_key)
+        if cached is not None:
+            return cached
+        operators = self.get_operators(country, service=service)
         options = []
         for operator in operators:
             try:
@@ -159,7 +198,9 @@ class FiveSimProvider(BaseSMSProvider):
                 })
             except Exception as exc:
                 options.append({"operator": operator, "price": None, "count": None, "error": str(exc)})
-        return sorted(options, key=lambda x: (x.get("price") if x.get("price") is not None else 999999, -(x.get("count") or 0)))
+        result = sorted(options, key=lambda x: (x.get("price") if x.get("price") is not None else 999999, -(x.get("count") or 0)))
+        _fivesim_cache_set(_FIVESIM_OPERATOR_QUOTES_CACHE, cache_key, result)
+        return result
 
     def get_provider_price_options(self, service: Optional[str], country: int) -> list[dict]:
         return []
@@ -333,6 +374,68 @@ class FiveSimProvider(BaseSMSProvider):
         match = re.search(r"(?<!\\d)(\\d{4,8})(?!\\d)", text or "")
         return match.group(1) if match else ""
 
+    @classmethod
+    def _list_country_prices_from_price_matrix(cls, raw: Any, *, service: str, countries: list[dict]) -> list[dict]:
+        if not isinstance(raw, dict):
+            return []
+        service_node = raw.get(service) if isinstance(raw.get(service), dict) else raw
+        if not isinstance(service_node, dict):
+            return []
+
+        country_map = {}
+        for item in countries:
+            key = str(item.get("country_key") or "").strip()
+            if key:
+                country_map[key] = item
+
+        priced = []
+        for country_key, operator_map in service_node.items():
+            if not isinstance(operator_map, dict):
+                continue
+            best_price = None
+            total_count = 0
+            for payload in operator_map.values():
+                if not isinstance(payload, dict):
+                    continue
+                price = cls._to_float_or_none(payload.get("cost") or payload.get("Price") or payload.get("price"))
+                count = payload.get("count") or payload.get("Qty")
+                try:
+                    count = int(count) if count is not None else 0
+                except Exception:
+                    count = 0
+                if price is not None and (best_price is None or price < best_price):
+                    best_price = price
+                total_count += max(count, 0)
+            if best_price is None:
+                continue
+            country = country_map.get(str(country_key), {
+                "country_key": str(country_key),
+                "apiName": str(country_key),
+                "isoCode": "",
+                "dialCode": "",
+            })
+            priced.append({
+                **country,
+                "price": best_price,
+                "count": total_count,
+            })
+        return sorted(priced, key=lambda x: (x.get("price") if x.get("price") is not None else 999999, -(x.get("count") or 0)))
+
+
+def _fivesim_cache_get(cache: dict, key):
+    item = cache.get(key)
+    if not item:
+        return None
+    expires_at, value = item
+    if expires_at < time.time():
+        cache.pop(key, None)
+        return None
+    return value
+
+
+def _fivesim_cache_set(cache: dict, key, value):
+    cache[key] = (time.time() + _FIVESIM_CACHE_TTL_SECONDS, value)
+
     @staticmethod
     def _raise_provider_error(text: str):
         low = str(text or "").lower()
@@ -348,6 +451,8 @@ class FiveSimProvider(BaseSMSProvider):
             raise SMSProviderError(f"5SIM 运营商无效: {text}")
         if "no product" in low:
             raise SMSProviderError(f"5SIM 服务无效: {text}")
+        if "reuse not possible" in low or "reuse false" in low or "reuse expired" in low:
+            raise SMSProviderError(f"5SIM 号码复用失败: {text}")
         if "server offline" in low or "internal error" in low:
             raise SMSProviderApiUnavailableError(text)
         raise SMSProviderError(text)

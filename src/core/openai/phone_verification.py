@@ -1,4 +1,4 @@
-"""OpenAI add-phone 流程与 HeroSMS 的桥接。"""
+"""OpenAI add-phone 流程与短信平台的桥接。"""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from ...config.settings import get_settings
+from ...config.settings import get_settings, normalize_sms_provider_name, get_sms_provider_api_key_db_key, get_sms_provider_api_key_field
 from ...database import crud
 from ...database.session import get_db
 from ..sms import SMSActivation, SMSProviderConfig, get_sms_provider
 
 
-HEROSMS_REUSE_POOL_KEY = "herosms.reuse_pool"
-HEROSMS_ACTIVATION_WINDOW_SECONDS = 20 * 60
+SMS_REUSE_POOL_KEY = "herosms.reuse_pool"
+SMS_ACTIVATION_WINDOW_SECONDS = 20 * 60
 _REUSE_POOL_LOCK = threading.RLock()
 
 
@@ -39,14 +39,20 @@ def is_add_phone_challenge(page_type: str = "", continue_url: str = "", payload:
 def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Optional[str]:
     """处理 auth.openai.com/add-phone，并返回下一步 continue_url。"""
 
-    runtime = _load_herosms_runtime_settings()
+    runtime = _load_sms_runtime_settings()
+    provider_name = normalize_sms_provider_name(runtime.get("provider", "herosms"))
+    provider_label = {
+        "herosms": "HeroSMS",
+        "smsbower": "SMSBower",
+        "5sim": "5SIM",
+    }.get(provider_name, provider_name)
     if not runtime.get("enabled", False):
-        engine._log("检测到 add-phone，但 HeroSMS 未启用，跳过手机验证", "warning")
+        engine._log(f"检测到 add-phone，但 {provider_label} 未启用，跳过手机验证", "warning")
         return None
 
-    api_key = _get_saved_herosms_api_key()
+    api_key = _get_saved_sms_api_key()
     if not api_key:
-        engine._log("检测到 add-phone，但未配置 HeroSMS API Key", "error")
+        engine._log(f"检测到 add-phone，但未配置 {provider_label} API Key", "error")
         return None
 
     if continue_url:
@@ -258,7 +264,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 exclude_codes=previous_codes,
                 exclude_texts=previous_texts if reused_activation else None,
                 request_started_at=request_started_at,
-                trace_callback=lambda message: engine._log(f"add-phone: HeroSMS 状态: {message}", "debug"),
+            trace_callback=lambda message: engine._log(f"add-phone: {provider_label} 状态: {message}", "debug"),
             )
             if not code:
                 raise RuntimeError("等待短信验证码超时")
@@ -293,7 +299,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     try:
                         client.request_resend_sms(activation.activation_id)
                     except Exception as exc:
-                        engine._log(f"add-phone: 请求 HeroSMS 继续接收下一条短信失败，后续复用时仍会重试: {exc}", "warning")
+                        engine._log(f"add-phone: 请求 {provider_label} 继续接收下一条短信失败，后续复用时仍会重试: {exc}", "warning")
                     engine._log(f"add-phone: 号码 {activation.phone_number} 已保存到复用池，后续账号可继续使用")
             if should_finish:
                 try:
@@ -400,10 +406,10 @@ def _parse_bool(value: Any, default: bool) -> bool:
     return default
 
 
-def _load_herosms_runtime_settings() -> dict:
+def _load_sms_runtime_settings() -> dict:
     settings = get_settings()
     data = {
-        "provider": getattr(settings, "sms_provider", "herosms") or "herosms",
+        "provider": normalize_sms_provider_name(getattr(settings, "sms_provider", "herosms") or "herosms"),
         "operator": getattr(settings, "sms_operator", "") or "",
         "provider_ids": getattr(settings, "sms_provider_ids", "") or "",
         "except_provider_ids": getattr(settings, "sms_except_provider_ids", "") or "",
@@ -563,10 +569,13 @@ def _request_number_with_provider_options(
         return client.request_number(max_price=candidate_price, operator=selected_operator or None)
 
 
-def _get_saved_herosms_api_key() -> str:
+def _get_saved_sms_api_key() -> str:
+    provider_name = normalize_sms_provider_name(getattr(get_settings(), "sms_provider", "herosms") or "herosms")
+    db_key = get_sms_provider_api_key_db_key(provider_name)
+    settings_field = get_sms_provider_api_key_field(provider_name)
     try:
         with get_db() as db:
-            setting = crud.get_setting(db, "herosms.api_key")
+            setting = crud.get_setting(db, db_key)
             value = str(setting.value or "").strip() if setting else ""
             if value:
                 return value
@@ -574,7 +583,7 @@ def _get_saved_herosms_api_key() -> str:
         pass
     try:
         settings = get_settings()
-        secret = getattr(settings, "herosms_api_key", None)
+        secret = getattr(settings, settings_field, None)
         if secret:
             return secret.get_secret_value() if hasattr(secret, "get_secret_value") else str(secret)
     except Exception:
@@ -582,10 +591,15 @@ def _get_saved_herosms_api_key() -> str:
     return ""
 
 
+# 兼容旧命名
+_load_herosms_runtime_settings = _load_sms_runtime_settings
+_get_saved_herosms_api_key = _get_saved_sms_api_key
+
+
 def _load_reuse_pool() -> list[dict]:
     try:
         with get_db() as db:
-            setting = crud.get_setting(db, HEROSMS_REUSE_POOL_KEY)
+            setting = crud.get_setting(db, SMS_REUSE_POOL_KEY)
             if not setting or not setting.value:
                 return []
             data = json.loads(setting.value)
@@ -598,9 +612,9 @@ def _save_reuse_pool(pool: list[dict]) -> None:
     with get_db() as db:
         crud.set_setting(
             db,
-            HEROSMS_REUSE_POOL_KEY,
+            SMS_REUSE_POOL_KEY,
             json.dumps(pool, ensure_ascii=False),
-            description="HeroSMS 成功号码复用池",
+            description="短信平台成功号码复用池",
             category="sms",
         )
 
@@ -647,7 +661,7 @@ def _register_new_activation(
     max_uses: int,
 ) -> None:
     now = _utc_now()
-    expires_at = _utc_after_seconds(HEROSMS_ACTIVATION_WINDOW_SECONDS)
+    expires_at = _utc_after_seconds(SMS_ACTIVATION_WINDOW_SECONDS)
     with _REUSE_POOL_LOCK:
         pool = _load_reuse_pool()
         item = next((x for x in pool if str(x.get("activation_id")) == str(activation.activation_id)), None)
@@ -686,7 +700,7 @@ def _record_activation_success(
     request_started_at: str,
     reused: bool,
 ) -> bool:
-    """记录号码成功使用次数。返回 True 表示应结束 HeroSMS activation。"""
+    """记录号码成功使用次数。返回 True 表示应结束当前短信平台 activation。"""
     now = _utc_now()
     with _REUSE_POOL_LOCK:
         pool = _load_reuse_pool()
@@ -826,7 +840,7 @@ def _activation_window_expired(item: dict) -> bool:
     created_at = str(item.get("activation_started_at") or item.get("created_at") or "")
     try:
         dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).total_seconds() >= HEROSMS_ACTIVATION_WINDOW_SECONDS
+        return (datetime.now(timezone.utc) - dt).total_seconds() >= SMS_ACTIVATION_WINDOW_SECONDS
     except Exception:
         return True
 
@@ -898,3 +912,4 @@ def _summarize_retry_reason(error_text: str) -> str:
     if "phone_max_usage_exceeded" in text or "maximum number of accounts" in text:
         return "号码已达最大绑定次数"
     return "当前号码不可用"
+

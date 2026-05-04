@@ -296,6 +296,20 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         description="HeroSMS API Key",
         is_secret=True
     ),
+    "smsbower_api_key": SettingDefinition(
+        db_key="smsbower.api_key",
+        default_value="",
+        category=SettingCategory.SMS,
+        description="SMSBower API Key",
+        is_secret=True
+    ),
+    "fivesim_api_key": SettingDefinition(
+        db_key="fivesim.api_key",
+        default_value="",
+        category=SettingCategory.SMS,
+        description="5SIM API Key",
+        is_secret=True
+    ),
     "herosms_service": SettingDefinition(
         db_key="herosms.service",
         default_value="dr",
@@ -698,6 +712,21 @@ DYNAMIC_PROXY_KEYS = {
     "proxy_dynamic_api_key_header",
     "proxy_dynamic_result_field",
 }
+SMS_PROVIDER_LABELS = {
+    "herosms": "HeroSMS",
+    "smsbower": "SMSBower",
+    "5sim": "5SIM",
+}
+SMS_PROVIDER_API_KEY_FIELDS = {
+    "herosms": "herosms_api_key",
+    "smsbower": "smsbower_api_key",
+    "5sim": "fivesim_api_key",
+}
+SMS_PROVIDER_API_KEY_DB_KEYS = {
+    "herosms": "herosms.api_key",
+    "smsbower": "smsbower.api_key",
+    "5sim": "fivesim.api_key",
+}
 
 
 def _convert_value(attr_name: str, value: str) -> Any:
@@ -745,6 +774,27 @@ def _convert_value(attr_name: str, value: str) -> Any:
                 return []
     else:
         return value
+
+
+def normalize_sms_provider_name(provider: Optional[str]) -> str:
+    raw = str(provider or "").strip().lower()
+    if raw in {"5sim", "five_sim", "fivesim"}:
+        return "5sim"
+    if raw == "smsbower":
+        return "smsbower"
+    return "herosms"
+
+
+def get_sms_provider_display_name(provider: Optional[str]) -> str:
+    return SMS_PROVIDER_LABELS.get(normalize_sms_provider_name(provider), "HeroSMS")
+
+
+def get_sms_provider_api_key_field(provider: Optional[str]) -> str:
+    return SMS_PROVIDER_API_KEY_FIELDS[normalize_sms_provider_name(provider)]
+
+
+def get_sms_provider_api_key_db_key(provider: Optional[str]) -> str:
+    return SMS_PROVIDER_API_KEY_DB_KEYS[normalize_sms_provider_name(provider)]
 
 
 def _normalize_database_url(url: str) -> str:

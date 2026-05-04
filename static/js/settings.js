@@ -70,8 +70,8 @@ const elements = {
     // 验证码设置
     emailCodeForm: document.getElementById('email-code-form'),
     // HeroSMS 设置
-    herosmsSettingsForm: document.getElementById('herosms-settings-form'),
-    testHeroSMSBtn: document.getElementById('test-herosms-btn'),
+    smsSettingsForm: document.getElementById('sms-settings-form'),
+    testSmsBtn: document.getElementById('test-sms-btn'),
     // Outlook 设置
     outlookSettingsForm: document.getElementById('outlook-settings-form'),
     // Web UI 访问控制
@@ -82,6 +82,80 @@ const elements = {
 let selectedServiceIds = new Set();
 let herosmsCountries = [];
 let smsInspectorState = { topCountries: [], operators: [], quotes: [] };
+const smsProviderUiConfig = {
+    herosms: {
+        label: 'HeroSMS',
+        serviceExample: 'dr',
+        serviceHint: 'HeroSMS 使用服务代码，例如 <code>dr</code> 表示 OpenAI。',
+        enabledHint: '关闭后，遇到 add-phone 只记录日志并跳过，不会调用 HeroSMS。',
+        apiKeyHint: 'HeroSMS 密码框不回显真实 Key；留空表示保持数据库中已保存的 HeroSMS Key 不变。',
+        docsTitle: 'HeroSMS 配置说明',
+        docsDesc: 'HeroSMS 主要使用数字国家码与服务代码，当前实现支持余额、国家、服务、价格、推荐国家、运营商与接码轮询。',
+        docsFields: '关键字段:service=服务代码，country=数字国家码，maxPrice=最大单价。',
+        docsLinks: '<a href="https://hero-sms.com/cn/api" target="_blank" rel="noreferrer">官方文档</a>',
+        countryLabel: '国家代码',
+        countryHint: '上方可搜索选择国家；下方保存实际 HeroSMS 国家代码。',
+        countrySearchPlaceholder: '搜索国家名称或代码，例如 菲律宾 / Philippines / 4',
+        countryKeyLabel: '国家 slug/key',
+        countryKeyHint: 'HeroSMS 不使用国家 slug/key，可留空。',
+        maxPriceLabel: '最大单价',
+        maxPriceHint: 'HeroSMS 支持按最大单价筛选；填 <code>-1</code> 表示不限制。',
+        operatorHint: 'HeroSMS 支持按运营商取号；留空表示不指定运营商。',
+        proxyLabel: 'HeroSMS 专用代理（可选）',
+        inspectorHint: 'HeroSMS 支持推荐国家、服务列表、运营商、运营商报价等查询。',
+        providerQuotesLabel: 'HeroSMS 当前没有 provider 级报价接口。',
+        walletSupported: false,
+        walletHint: 'HeroSMS 当前未实现静态钱包接口。',
+    },
+    smsbower: {
+        label: 'SMSBower',
+        serviceExample: 'dr',
+        serviceHint: 'SMSBower 使用服务代码；可配合 providerIds / exceptProviderIds / minPrice / phoneException 定向取号。',
+        enabledHint: '关闭后，遇到 add-phone 只记录日志并跳过，不会调用 SMSBower。',
+        apiKeyHint: 'SMSBower 密码框不回显真实 Key；留空表示保持数据库中已保存的 SMSBower Key 不变。',
+        docsTitle: 'SMSBower 配置说明',
+        docsDesc: 'SMSBower 客户端文档显示取号主接口为 getNumber，同时支持 JSON 扩展返回、Provider 报价与静态钱包接口。',
+        docsFields: '关键字段:service、country、maxPrice、providerIds、exceptProviderIds、phoneException、minPrice。',
+        docsLinks: '<a href="https://smsbower.app/api/?page=client" target="_blank" rel="noreferrer">官方文档</a>',
+        countryLabel: '国家代码',
+        countryHint: '上方可搜索选择国家；下方保存实际 SMSBower 国家代码。',
+        countrySearchPlaceholder: '搜索国家名称或代码，例如 Russia / 151',
+        countryKeyLabel: '国家 slug/key',
+        countryKeyHint: 'SMSBower 不使用国家 slug/key，可留空。',
+        maxPriceLabel: '最大单价',
+        maxPriceHint: 'SMSBower 同时支持 maxPrice 与 minPrice；填 <code>-1</code> 表示不限制。',
+        operatorHint: 'SMSBower 文档未公开运营商查询接口；通常留空，必要时使用 activationOperator 兼容参数。',
+        proxyLabel: 'SMSBower 专用代理（可选）',
+        inspectorHint: 'SMSBower 支持服务列表、推荐国家、Provider 级报价、静态钱包。运营商相关能力取决于服务端兼容情况。',
+        providerQuotesLabel: 'SMSBower 支持按 providerIds / exceptProviderIds 进一步限制取号来源。',
+        walletSupported: true,
+        walletHint: 'SMSBower 支持静态钱包查询（例如 usdt/tron）。',
+    },
+    '5sim': {
+        label: '5SIM',
+        serviceExample: 'openai',
+        serviceHint: '5SIM 使用产品名（product），例如 <code>openai</code>、<code>facebook</code>、<code>telegram</code>。',
+        enabledHint: '关闭后，遇到 add-phone 只记录日志并跳过，不会调用 5SIM。',
+        apiKeyHint: '5SIM 密码框不回显真实 Key；留空表示保持数据库中已保存的 5SIM Key 不变。',
+        docsTitle: '5SIM 配置说明',
+        docsDesc: '5SIM 用户接口使用 REST 路径，不使用数字国家码，而是使用国家 slug 与产品名。',
+        docsFields: '关键字段:country_key=国家 slug，service=产品名。可参考 5SIM 设置页固定格式：countries 页提供国家 slug，products 页提供产品名。',
+        docsLinks: '<a href="https://5sim.net/zh/docs#user" target="_blank" rel="noreferrer">官方文档</a> · <a href="https://5sim.net/zh/settings/countries" target="_blank" rel="noreferrer">国家格式</a> · <a href="https://5sim.net/zh/settings/products" target="_blank" rel="noreferrer">产品格式</a> · <a href="https://5sim.net/zh/settings/operators" target="_blank" rel="noreferrer">运营商页</a>',
+        countryLabel: '国家代码',
+        countryHint: '5SIM 不使用数字国家码，下方输入框仅保留兼容，不参与实际取号。',
+        countrySearchPlaceholder: '搜索国家 slug 或名称，例如 england / any / England',
+        countryKeyLabel: '国家 slug/key（5SIM）',
+        countryKeyHint: '5SIM 使用国家文本 key，例如 <code>england</code>、<code>usa</code>、<code>indonesia</code>、<code>any</code>。',
+        maxPriceLabel: '最大单价（仅 operator=any 时生效）',
+        maxPriceHint: '5SIM 文档说明 maxPrice 仅在 operator 为 <code>any</code> 时生效；填 <code>-1</code> 表示不限制。',
+        operatorHint: '5SIM 路径里包含 operator；当前实现默认使用 <code>any</code>，暂不在页面强制输入。',
+        proxyLabel: '5SIM 专用代理（可选）',
+        inspectorHint: '5SIM 支持国家、服务列表、推荐国家、运营商、运营商报价；不支持 providerIds 与静态钱包。运营商页可作为固定字段参考，但并非所有 operator 都支持当前 product。',
+        providerQuotesLabel: '5SIM 不提供 provider 级报价接口。',
+        walletSupported: false,
+        walletHint: '5SIM 文档未提供静态钱包接口。',
+    },
+};
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -250,8 +324,8 @@ function initEventListeners() {
     }
 
     // 短信接码设置
-    if (elements.herosmsSettingsForm) {
-        elements.herosmsSettingsForm.addEventListener('submit', handleSaveSmsSettings);
+    if (elements.smsSettingsForm) {
+        elements.smsSettingsForm.addEventListener('submit', handleSaveSmsSettings);
     }
     document.getElementById('sms-provider')?.addEventListener('change', handleSmsProviderChanged);
     document.getElementById('sms-top-countries-btn')?.addEventListener('click', loadSmsTopCountries);
@@ -260,18 +334,18 @@ function initEventListeners() {
     document.getElementById('sms-operator-quotes-btn')?.addEventListener('click', loadSmsOperatorQuotes);
     document.getElementById('sms-provider-quotes-btn')?.addEventListener('click', loadSmsProviderQuotes);
     document.getElementById('sms-wallet-btn')?.addEventListener('click', loadSmsStaticWallet);
-    if (elements.testHeroSMSBtn) {
-        elements.testHeroSMSBtn.addEventListener('click', handleTestSmsProvider);
+    if (elements.testSmsBtn) {
+        elements.testSmsBtn.addEventListener('click', handleTestSmsProvider);
     }
-    const herosmsCountrySearch = document.getElementById('herosms-country-search');
+    const herosmsCountrySearch = document.getElementById('sms-country-search');
     if (herosmsCountrySearch) {
         herosmsCountrySearch.addEventListener('input', renderHeroSMSCountryMenu);
         herosmsCountrySearch.addEventListener('focus', renderHeroSMSCountryMenu);
         herosmsCountrySearch.addEventListener('change', handleHeroSMSCountrySearchChange);
     }
     document.addEventListener('click', (e) => {
-        const box = document.getElementById('herosms-country-select');
-        const menu = document.getElementById('herosms-country-menu');
+        const box = document.getElementById('sms-country-select');
+        const menu = document.getElementById('sms-country-menu');
         if (box && menu && !box.contains(e.target)) {
             menu.classList.remove('active');
         }
@@ -422,33 +496,36 @@ async function loadSettings() {
             document.getElementById('sms-voice').checked = !!data.herosms.voice;
             document.getElementById('sms-forwarding').checked = !!data.herosms.forwarding;
             document.getElementById('sms-forwarding-number').value = data.herosms.forwarding_number || '';
-            document.getElementById('herosms-enabled').checked = !!data.herosms.enabled;
-            document.getElementById('herosms-service').value = data.herosms.service || 'dr';
-            document.getElementById('herosms-country').value = data.herosms.country || 187;
+            document.getElementById('sms-enabled').checked = !!data.herosms.enabled;
+            document.getElementById('sms-service').value = data.herosms.service || 'dr';
+            document.getElementById('sms-country').value = data.herosms.country || 187;
             updateHeroSMSCountrySearch(data.herosms.country || 187);
-            document.getElementById('herosms-max-price').value = data.herosms.max_price ?? '-1';
-            document.getElementById('herosms-proxy').value = data.herosms.proxy || '';
-            document.getElementById('herosms-timeout').value = data.herosms.timeout || 30;
-            document.getElementById('herosms-verify-timeout').value = data.herosms.verify_timeout || 180;
-            document.getElementById('herosms-poll-interval').value = data.herosms.poll_interval || 3;
-            document.getElementById('herosms-lowest-price-first').checked = data.herosms.lowest_price_first !== false;
-            document.getElementById('herosms-max-number-attempts').value = data.herosms.max_number_attempts || 1;
-            document.getElementById('herosms-target-number-index').value = data.herosms.target_number_index || 1;
-            document.getElementById('herosms-price-relax-enabled').checked = data.herosms.price_relax_enabled !== false;
-            document.getElementById('herosms-price-relax-max-multiplier').value = data.herosms.price_relax_max_multiplier || 5;
-            document.getElementById('herosms-reuse-enabled').checked = !!data.herosms.reuse_enabled;
-            document.getElementById('herosms-reuse-max-uses').value = data.herosms.reuse_max_uses || 2;
-            const keyInput = document.getElementById('herosms-api-key');
-            const keyStatus = document.getElementById('herosms-api-key-status');
+            document.getElementById('sms-max-price').value = data.herosms.max_price ?? '-1';
+            document.getElementById('sms-proxy').value = data.herosms.proxy || '';
+            document.getElementById('sms-timeout').value = data.herosms.timeout || 30;
+            document.getElementById('sms-verify-timeout').value = data.herosms.verify_timeout || 180;
+            document.getElementById('sms-poll-interval').value = data.herosms.poll_interval || 3;
+            document.getElementById('sms-lowest-price-first').checked = data.herosms.lowest_price_first !== false;
+            document.getElementById('sms-max-number-attempts').value = data.herosms.max_number_attempts || 1;
+            document.getElementById('sms-target-number-index').value = data.herosms.target_number_index || 1;
+            document.getElementById('sms-price-relax-enabled').checked = data.herosms.price_relax_enabled !== false;
+            document.getElementById('sms-price-relax-max-multiplier').value = data.herosms.price_relax_max_multiplier || 5;
+            document.getElementById('sms-reuse-enabled').checked = !!data.herosms.reuse_enabled;
+            document.getElementById('sms-reuse-max-uses').value = data.herosms.reuse_max_uses || 2;
+            const keyInput = document.getElementById('sms-api-key');
+            const keyStatus = document.getElementById('sms-api-key-status');
+            const providerName = data.herosms.provider_display_name || data.herosms.provider || 'HeroSMS';
             if (keyInput) {
                 keyInput.value = '';
                 keyInput.dataset.hasKey = data.herosms.has_api_key ? '1' : '0';
-                keyInput.placeholder = data.herosms.has_api_key ? '留空保持已保存 Key 不变' : '请输入短信平台 API Key';
+                keyInput.placeholder = data.herosms.has_api_key ? `留空保持已保存 ${providerName} Key 不变` : `请输入 ${providerName} API Key`;
             }
             if (keyStatus) {
                 keyStatus.dataset.hasKey = data.herosms.has_api_key ? '1' : '0';
-                keyStatus.textContent = data.herosms.has_api_key ? '当前已保存 API Key：是' : '当前已保存 API Key：否';
+                keyStatus.textContent = data.herosms.has_api_key ? `当前已保存 ${providerName} API Key:是` : `当前已保存 ${providerName} API Key:否`;
             }
+            updateSmsProviderUi(data.herosms.provider || 'herosms');
+            handleSmsProviderChanged();
         }
 
         // 加载 Outlook 设置
@@ -643,26 +720,30 @@ async function handleSaveSmsSettings(e) {
         voice: document.getElementById('sms-voice').checked,
         forwarding: document.getElementById('sms-forwarding').checked,
         forwarding_number: document.getElementById('sms-forwarding-number').value.trim(),
-        enabled: document.getElementById('herosms-enabled').checked,
-        api_key: document.getElementById('herosms-api-key').value || null,
-        service: document.getElementById('herosms-service').value.trim() || 'dr',
-        country: parseInt(document.getElementById('herosms-country').value) || 187,
-        max_price: document.getElementById('herosms-max-price').value.trim() || '-1',
-        proxy: document.getElementById('herosms-proxy').value.trim(),
-        timeout: parseInt(document.getElementById('herosms-timeout').value) || 30,
-        verify_timeout: parseInt(document.getElementById('herosms-verify-timeout').value) || 180,
-        poll_interval: parseInt(document.getElementById('herosms-poll-interval').value) || 3,
-        lowest_price_first: document.getElementById('herosms-lowest-price-first').checked,
-        max_number_attempts: parseInt(document.getElementById('herosms-max-number-attempts').value) || 1,
-        target_number_index: parseInt(document.getElementById('herosms-target-number-index').value) || 1,
-        price_relax_enabled: document.getElementById('herosms-price-relax-enabled').checked,
-        price_relax_max_multiplier: parseInt(document.getElementById('herosms-price-relax-max-multiplier').value) || 5,
-        reuse_enabled: document.getElementById('herosms-reuse-enabled').checked,
-        reuse_max_uses: parseInt(document.getElementById('herosms-reuse-max-uses').value) || 2,
+        enabled: document.getElementById('sms-enabled').checked,
+        api_key: document.getElementById('sms-api-key').value || null,
+        service: document.getElementById('sms-service').value.trim() || 'dr',
+        country: parseInt(document.getElementById('sms-country').value) || 187,
+        max_price: document.getElementById('sms-max-price').value.trim() || '-1',
+        proxy: document.getElementById('sms-proxy').value.trim(),
+        timeout: parseInt(document.getElementById('sms-timeout').value) || 30,
+        verify_timeout: parseInt(document.getElementById('sms-verify-timeout').value) || 180,
+        poll_interval: parseInt(document.getElementById('sms-poll-interval').value) || 3,
+        lowest_price_first: document.getElementById('sms-lowest-price-first').checked,
+        max_number_attempts: parseInt(document.getElementById('sms-max-number-attempts').value) || 1,
+        target_number_index: parseInt(document.getElementById('sms-target-number-index').value) || 1,
+        price_relax_enabled: document.getElementById('sms-price-relax-enabled').checked,
+        price_relax_max_multiplier: parseInt(document.getElementById('sms-price-relax-max-multiplier').value) || 5,
+        reuse_enabled: document.getElementById('sms-reuse-enabled').checked,
+        reuse_max_uses: parseInt(document.getElementById('sms-reuse-max-uses').value) || 2,
     };
 
-    if (data.country <= 0) {
+    if (data.provider !== '5sim' && data.country <= 0) {
         toast.error('国家代码必须大于 0');
+        return;
+    }
+    if (data.provider === '5sim' && !data.country_key) {
+        toast.error('5SIM 需要填写国家 slug/key');
         return;
     }
     if (data.verify_timeout < 30 || data.verify_timeout > 600) {
@@ -689,7 +770,7 @@ async function handleSaveSmsSettings(e) {
     try {
         await api.post('/settings/sms', data);
         toast.success(data.enabled ? '短信平台已启用' : '短信平台已关闭');
-        document.getElementById('herosms-api-key').value = '';
+        document.getElementById('sms-api-key').value = '';
         loadSettings();
     } catch (error) {
         toast.error('保存失败: ' + error.message);
@@ -697,14 +778,16 @@ async function handleSaveSmsSettings(e) {
 }
 
 async function handleTestSmsProvider() {
-    const btn = elements.testHeroSMSBtn;
+    const btn = elements.testSmsBtn;
     if (!btn) return;
     btn.disabled = true;
     btn.textContent = '测试中...';
     try {
+        const provider = document.getElementById('sms-provider').value || 'herosms';
         const result = await api.post('/settings/sms/test', {
-            api_key: document.getElementById('herosms-api-key').value || null,
-            proxy: document.getElementById('herosms-proxy').value.trim() || ''
+            api_key: document.getElementById('sms-api-key').value || null,
+            proxy: document.getElementById('sms-proxy').value.trim() || '',
+            provider,
         });
         if (result.success) {
             const extra = result.https_openai_message
@@ -724,24 +807,24 @@ OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.http
 }
 
 async function loadSmsCountries() {
-    const menu = document.getElementById('herosms-country-menu');
+    const menu = document.getElementById('sms-country-menu');
     if (!menu) return;
     try {
         const provider = document.getElementById('sms-provider')?.value || 'herosms';
         const data = await api.get(`/settings/sms/countries?provider=${encodeURIComponent(provider)}`);
         herosmsCountries = data.countries || [];
-        const current = parseInt(document.getElementById('herosms-country')?.value) || 187;
+        const current = parseInt(document.getElementById('sms-country')?.value) || 187;
         const currentKey = document.getElementById('sms-country-key')?.value?.trim() || '';
         updateHeroSMSCountrySearch(provider === '5sim' ? currentKey : current);
     } catch (error) {
-        console.warn('加载 HeroSMS 国家列表失败:', error);
+        console.warn('加载短信平台国家列表失败:', error);
         menu.innerHTML = '<div class="search-select-item">国家列表加载失败</div>';
     }
 }
 
 function handleHeroSMSCountrySearchChange() {
-    const input = document.getElementById('herosms-country-search');
-    const countryInput = document.getElementById('herosms-country');
+    const input = document.getElementById('sms-country-search');
+    const countryInput = document.getElementById('sms-country');
     if (!input || !countryInput) return;
     const value = input.value.trim();
     const matched = herosmsCountries.find(c => c.display === value)
@@ -754,16 +837,87 @@ function handleHeroSMSCountrySearchChange() {
 }
 
 function updateHeroSMSCountrySearch(code) {
-    const input = document.getElementById('herosms-country-search');
+    const input = document.getElementById('sms-country-search');
     if (!input) return;
     const matched = herosmsCountries.find(c => String(c.code) === String(code))
         || herosmsCountries.find(c => String(c.country_key || '') === String(code));
     input.value = matched ? matched.display : '';
 }
 
+function getSmsProviderUiConfig(provider) {
+    return smsProviderUiConfig[provider] || smsProviderUiConfig.herosms;
+}
+
+function updateSmsProviderUi(provider) {
+    const cfg = getSmsProviderUiConfig(provider);
+    const keyStatus = document.getElementById('sms-api-key-status');
+    const keyInput = document.getElementById('sms-api-key');
+    const hasSavedKey = keyStatus?.dataset.hasKey === '1';
+    const serviceInput = document.getElementById('sms-service');
+
+    const textMap = {
+        'sms-provider-enabled-hint': cfg.enabledHint,
+        'sms-api-key-label': `${cfg.label} API Key`,
+        'sms-api-key-hint': cfg.apiKeyHint,
+        'sms-provider-docs-title': cfg.docsTitle,
+        'sms-provider-docs-desc': cfg.docsDesc,
+        'sms-provider-docs-fields': cfg.docsFields,
+        'sms-country-label': cfg.countryLabel,
+        'sms-country-hint': cfg.countryHint,
+        'sms-country-key-label': cfg.countryKeyLabel,
+        'sms-country-key-hint': cfg.countryKeyHint,
+        'sms-max-price-label': cfg.maxPriceLabel,
+        'sms-max-price-hint': cfg.maxPriceHint,
+        'sms-operator-hint': cfg.operatorHint,
+        'sms-proxy-label': cfg.proxyLabel,
+        'sms-inspector-hint': cfg.inspectorHint,
+    };
+    Object.entries(textMap).forEach(([id, value]) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = value;
+    });
+
+    const docsLinks = document.getElementById('sms-provider-docs-links');
+    if (docsLinks) docsLinks.innerHTML = cfg.docsLinks;
+
+    const searchInput = document.getElementById('sms-country-search');
+    if (searchInput) searchInput.placeholder = cfg.countrySearchPlaceholder;
+
+    if (serviceInput && (!serviceInput.value || ['dr', 'openai'].includes(serviceInput.value.trim()))) {
+        serviceInput.placeholder = `例如 ${cfg.serviceExample}`;
+    }
+    const serviceHint = document.getElementById('sms-service-hint');
+    if (serviceHint) serviceHint.innerHTML = cfg.serviceHint;
+
+    if (keyInput) {
+        keyInput.placeholder = hasSavedKey ? `留空保持已保存 ${cfg.label} Key 不变` : `请输入 ${cfg.label} API Key`;
+    }
+    if (keyStatus) {
+        keyStatus.textContent = hasSavedKey ? `当前已保存 ${cfg.label} API Key:是` : `当前已保存 ${cfg.label} API Key:否`;
+    }
+
+    const walletBtn = document.getElementById('sms-wallet-btn');
+    if (walletBtn) {
+        walletBtn.disabled = !cfg.walletSupported;
+        walletBtn.title = cfg.walletHint;
+    }
+    const providerQuotesBtn = document.getElementById('sms-provider-quotes-btn');
+    if (providerQuotesBtn) {
+        providerQuotesBtn.disabled = provider === 'herosms' || provider === '5sim';
+        providerQuotesBtn.title = cfg.providerQuotesLabel;
+    }
+    const operatorsBtn = document.getElementById('sms-operators-btn');
+    const operatorQuotesBtn = document.getElementById('sms-operator-quotes-btn');
+    const operatorGroup = document.querySelector('.provider-operator-group');
+    const operatorSupported = provider === 'herosms' || provider === '5sim';
+    if (operatorsBtn) operatorsBtn.disabled = !operatorSupported;
+    if (operatorQuotesBtn) operatorQuotesBtn.disabled = !operatorSupported;
+    if (operatorGroup) operatorGroup.style.display = operatorSupported ? '' : 'none';
+}
+
 function renderHeroSMSCountryMenu() {
-    const input = document.getElementById('herosms-country-search');
-    const menu = document.getElementById('herosms-country-menu');
+    const input = document.getElementById('sms-country-search');
+    const menu = document.getElementById('sms-country-menu');
     if (!input || !menu) return;
     const query = input.value.trim().toLowerCase();
     const items = herosmsCountries.filter(c => {
@@ -797,16 +951,17 @@ function renderHeroSMSCountryMenu() {
 }
 
 function selectHeroSMSCountry(country) {
-    const input = document.getElementById('herosms-country-search');
-    const countryInput = document.getElementById('herosms-country');
+    const input = document.getElementById('sms-country-search');
+    const countryInput = document.getElementById('sms-country');
     const countryKeyInput = document.getElementById('sms-country-key');
-    const menu = document.getElementById('herosms-country-menu');
+    const menu = document.getElementById('sms-country-menu');
     if (countryInput && country.code != null) countryInput.value = country.code;
     if (countryKeyInput) countryKeyInput.value = country.country_key || '';
     if (input) input.value = country.display;
     if (menu) menu.classList.remove('active');
 }
 
+const loadSmsCountriesCompat = loadSmsCountries;
 const loadHeroSMSCountries = loadSmsCountries;
 
 // 兼容旧命名，避免其他地方引用时出错
@@ -818,21 +973,37 @@ function setSmsInspectorHtml(html) {
     if (box) box.innerHTML = html;
 }
 
+function getCurrentSmsContext() {
+    return {
+        provider: document.getElementById('sms-provider').value || 'herosms',
+        service: document.getElementById('sms-service').value.trim() || 'dr',
+        country: parseInt(document.getElementById('sms-country').value) || 0,
+        countryKey: document.getElementById('sms-country-key').value.trim(),
+    };
+}
+
+function getSmsProviderMeta(provider) {
+    const cfg = getSmsProviderUiConfig(provider);
+    return {
+        label: cfg.label,
+        providerQuotesLabel: cfg.providerQuotesLabel,
+        walletHint: cfg.walletHint,
+    };
+}
+
 async function loadSmsTopCountries() {
     try {
-        const service = document.getElementById('herosms-service').value.trim() || 'dr';
-        const provider = document.getElementById('sms-provider').value || 'herosms';
-        const country = parseInt(document.getElementById('herosms-country').value) || 0;
-        const countryKey = document.getElementById('sms-country-key').value.trim();
-        setSmsInspectorHtml('正在加载推荐国家...');
+        const { service, provider, country, countryKey } = getCurrentSmsContext();
+        const meta = getSmsProviderMeta(provider);
+        setSmsInspectorHtml(`正在加载 ${escapeHtml(meta.label)} 推荐国家...`);
         const data = await api.get(`/settings/sms/top-countries?service=${encodeURIComponent(service)}&provider=${encodeURIComponent(provider)}&country=${country || ''}&country_key=${encodeURIComponent(countryKey)}`);
         smsInspectorState.topCountries = data.items || [];
         if (!smsInspectorState.topCountries.length) {
-            setSmsInspectorHtml('当前没有解析到推荐国家数据。');
+            setSmsInspectorHtml(`${escapeHtml(meta.label)} 当前没有解析到推荐国家数据。`);
             return;
         }
         setSmsInspectorHtml(`
-            <div style="font-weight:600;margin-bottom:8px;">推荐国家（按价格/库存排序）</div>
+            <div style="font-weight:600;margin-bottom:8px;">${escapeHtml(meta.label)} 推荐国家（按价格/库存排序）</div>
             ${smsInspectorState.topCountries.slice(0, 10).map(item => `
                 <div style="padding:4px 0;border-bottom:1px dashed var(--border-color);">
                     <strong>${escapeHtml(item.apiName || item.isoCode || String(item.heroSmsCountry))}</strong>
@@ -843,24 +1014,23 @@ async function loadSmsTopCountries() {
             `).join('')}
         `);
     } catch (error) {
-        setSmsInspectorHtml(`加载推荐国家失败：${escapeHtml(error.message)}`);
+        setSmsInspectorHtml(`加载推荐国家失败:${escapeHtml(error.message)}`);
     }
 }
 
 async function loadSmsServices() {
     try {
-        const provider = document.getElementById('sms-provider').value || 'herosms';
-        const country = parseInt(document.getElementById('herosms-country').value) || 0;
-        const countryKey = document.getElementById('sms-country-key').value.trim();
-        setSmsInspectorHtml('正在加载服务列表...');
+        const { provider, country, countryKey } = getCurrentSmsContext();
+        const meta = getSmsProviderMeta(provider);
+        setSmsInspectorHtml(`正在加载 ${escapeHtml(meta.label)} 服务列表...`);
         const data = await api.get(`/settings/sms/services?provider=${encodeURIComponent(provider)}&country=${country || ''}&country_key=${encodeURIComponent(countryKey)}`);
         const items = data.items || [];
         if (!items.length) {
-            setSmsInspectorHtml('当前平台没有返回服务列表。');
+            setSmsInspectorHtml(`${escapeHtml(meta.label)} 没有返回服务列表。`);
             return;
         }
         setSmsInspectorHtml(`
-            <div style="font-weight:600;margin-bottom:8px;">服务列表</div>
+            <div style="font-weight:600;margin-bottom:8px;">${escapeHtml(meta.label)} 服务列表</div>
             ${items.slice(0, 80).map(item => `
                 <div style="padding:4px 0;border-bottom:1px dashed var(--border-color);">
                     <strong>${escapeHtml(item.code || '-')}</strong>
@@ -869,67 +1039,67 @@ async function loadSmsServices() {
             `).join('')}
         `);
     } catch (error) {
-        setSmsInspectorHtml(`加载服务列表失败：${escapeHtml(error.message)}`);
+        setSmsInspectorHtml(`加载服务列表失败:${escapeHtml(error.message)}`);
     }
 }
 
 async function loadSmsOperators() {
     try {
-        const country = parseInt(document.getElementById('herosms-country').value) || 0;
-        const provider = document.getElementById('sms-provider').value || 'herosms';
-        const countryKey = document.getElementById('sms-country-key').value.trim();
+        const { country, service, provider, countryKey } = getCurrentSmsContext();
+        const meta = getSmsProviderMeta(provider);
         if (!country) {
             if (provider !== '5sim' || !countryKey) {
                 toast.error('请先选择国家');
                 return;
             }
         }
-        setSmsInspectorHtml('正在加载运营商...');
-        const data = await api.get(`/settings/sms/operators?country=${country || ''}&provider=${encodeURIComponent(provider)}&country_key=${encodeURIComponent(countryKey)}`);
+        setSmsInspectorHtml(`正在加载 ${escapeHtml(meta.label)} 运营商...`);
+        const data = await api.get(`/settings/sms/operators?country=${country || ''}&service=${encodeURIComponent(service)}&provider=${encodeURIComponent(provider)}&country_key=${encodeURIComponent(countryKey)}`);
         smsInspectorState.operators = data.items || [];
         if (!smsInspectorState.operators.length) {
-            setSmsInspectorHtml('当前国家没有解析到运营商列表。');
+            setSmsInspectorHtml(`${escapeHtml(meta.label)} 当前国家没有解析到运营商列表。`);
             return;
         }
         setSmsInspectorHtml(`
-            <div style="font-weight:600;margin-bottom:8px;">运营商列表</div>
+            <div style="font-weight:600;margin-bottom:8px;">${escapeHtml(meta.label)} 运营商列表</div>
             ${smsInspectorState.operators.map(op => `
                 <button type="button" class="btn btn-secondary btn-sm sms-operator-chip" data-operator="${escapeHtml(op)}" style="margin:0 6px 6px 0;">${escapeHtml(op)}</button>
             `).join('')}
-            <div style="margin-top:8px;color:var(--text-muted);font-size:0.82rem;">点击运营商名称可直接填入“运营商”输入框。</div>
+            <div style="margin-top:8px;color:var(--text-muted);font-size:0.82rem;">点击运营商名称可直接填入“运营商”输入框，并自动刷新运营商报价。</div>
         `);
         document.querySelectorAll('.sms-operator-chip').forEach(btn => {
             btn.addEventListener('click', () => {
                 const input = document.getElementById('sms-operator');
-                if (input) input.value = btn.dataset.operator || '';
+                if (input) {
+                    input.value = btn.dataset.operator || '';
+                    loadSmsOperatorQuotes();
+                }
             });
         });
     } catch (error) {
-        setSmsInspectorHtml(`加载运营商失败：${escapeHtml(error.message)}`);
+        setSmsInspectorHtml(`加载运营商失败:${escapeHtml(error.message)}`);
     }
 }
 
 async function loadSmsOperatorQuotes() {
     try {
-        const country = parseInt(document.getElementById('herosms-country').value) || 0;
-        const service = document.getElementById('herosms-service').value.trim() || 'dr';
-        const provider = document.getElementById('sms-provider').value || 'herosms';
-        const countryKey = document.getElementById('sms-country-key').value.trim();
+        const { country, service, provider, countryKey } = getCurrentSmsContext();
+        const meta = getSmsProviderMeta(provider);
         if (!country) {
             if (provider !== '5sim' || !countryKey) {
                 toast.error('请先选择国家');
                 return;
             }
         }
-        setSmsInspectorHtml('正在加载运营商报价...');
+        setSmsInspectorHtml(`正在加载 ${escapeHtml(meta.label)} 运营商报价...`);
         const data = await api.get(`/settings/sms/operator-quotes?country=${country || ''}&service=${encodeURIComponent(service)}&provider=${encodeURIComponent(provider)}&country_key=${encodeURIComponent(countryKey)}`);
         smsInspectorState.quotes = data.items || [];
         if (!smsInspectorState.quotes.length) {
-            setSmsInspectorHtml('当前国家没有解析到运营商报价。');
+            setSmsInspectorHtml(`${escapeHtml(meta.label)} 当前国家没有解析到运营商报价。`);
             return;
         }
         setSmsInspectorHtml(`
-            <div style="font-weight:600;margin-bottom:8px;">运营商报价</div>
+            <div style="font-weight:600;margin-bottom:8px;">${escapeHtml(meta.label)} 运营商报价</div>
             ${smsInspectorState.quotes.map(item => `
                 <div style="padding:4px 0;border-bottom:1px dashed var(--border-color);">
                     <strong>${escapeHtml(item.operator || '-')}</strong>
@@ -940,31 +1110,29 @@ async function loadSmsOperatorQuotes() {
             `).join('')}
         `);
     } catch (error) {
-        setSmsInspectorHtml(`加载运营商报价失败：${escapeHtml(error.message)}`);
+        setSmsInspectorHtml(`加载运营商报价失败:${escapeHtml(error.message)}`);
     }
 }
 
 async function loadSmsProviderQuotes() {
     try {
-        const country = parseInt(document.getElementById('herosms-country').value) || 0;
-        const service = document.getElementById('herosms-service').value.trim() || 'dr';
-        const provider = document.getElementById('sms-provider').value || 'herosms';
-        const countryKey = document.getElementById('sms-country-key').value.trim();
+        const { country, service, provider, countryKey } = getCurrentSmsContext();
+        const meta = getSmsProviderMeta(provider);
         if (!country) {
             if (provider !== '5sim' || !countryKey) {
                 toast.error('请先选择国家');
                 return;
             }
         }
-        setSmsInspectorHtml('正在加载 Provider 级报价...');
+        setSmsInspectorHtml(`正在加载 ${escapeHtml(meta.label)} Provider 级报价...`);
         const data = await api.get(`/settings/sms/provider-quotes?country=${country || ''}&service=${encodeURIComponent(service)}&provider=${encodeURIComponent(provider)}&country_key=${encodeURIComponent(countryKey)}`);
         const items = data.items || [];
         if (!items.length) {
-            setSmsInspectorHtml('当前平台没有 provider 级报价数据。');
+            setSmsInspectorHtml(meta.providerQuotesLabel);
             return;
         }
         setSmsInspectorHtml(`
-            <div style="font-weight:600;margin-bottom:8px;">Provider 级报价</div>
+            <div style="font-weight:600;margin-bottom:8px;">${escapeHtml(meta.label)} Provider 级报价</div>
             ${items.map(item => `
                 <div style="padding:4px 0;border-bottom:1px dashed var(--border-color);">
                     <strong>provider_id=${escapeHtml(String(item.provider_id || '-'))}</strong>
@@ -972,32 +1140,33 @@ async function loadSmsProviderQuotes() {
                     <span style="margin-left:8px;">库存: ${item.count ?? '-'}</span>
                 </div>
             `).join('')}
-            <div style="margin-top:8px;color:var(--text-muted);font-size:0.82rem;">SMSBower 支持按 providerIds / exceptProviderIds 进一步限制取号来源。</div>
+            <div style="margin-top:8px;color:var(--text-muted);font-size:0.82rem;">${escapeHtml(meta.providerQuotesLabel)}</div>
         `);
     } catch (error) {
-        setSmsInspectorHtml(`加载 Provider 级报价失败：${escapeHtml(error.message)}`);
+        setSmsInspectorHtml(`加载 Provider 级报价失败:${escapeHtml(error.message)}`);
     }
 }
 
 async function loadSmsStaticWallet() {
     try {
-        const provider = document.getElementById('sms-provider').value || 'herosms';
-        setSmsInspectorHtml('正在加载静态钱包...');
+        const { provider } = getCurrentSmsContext();
+        const meta = getSmsProviderMeta(provider);
+        setSmsInspectorHtml(`正在加载 ${escapeHtml(meta.label)} 静态钱包...`);
         const data = await api.get(`/settings/sms/static-wallet?coin=usdt&network=tron&provider=${encodeURIComponent(provider)}`);
         setSmsInspectorHtml(`
-            <div style="font-weight:600;margin-bottom:8px;">静态钱包</div>
+            <div style="font-weight:600;margin-bottom:8px;">${escapeHtml(meta.label)} 静态钱包</div>
             <div>coin=${escapeHtml(data.coin || 'usdt')}</div>
             <div>network=${escapeHtml(data.network || 'tron')}</div>
             <div style="margin-top:6px;word-break:break-all;"><strong>${escapeHtml(data.wallet?.wallet_address || '未返回钱包地址')}</strong></div>
         `);
     } catch (error) {
-        setSmsInspectorHtml(`加载静态钱包失败：${escapeHtml(error.message)}`);
+        setSmsInspectorHtml(`加载静态钱包失败:${escapeHtml(error.message)}`);
     }
 }
 
 function handleSmsProviderChanged() {
     const provider = document.getElementById('sms-provider').value || 'herosms';
-    const countryInput = document.getElementById('herosms-country');
+    const countryInput = document.getElementById('sms-country');
     const countryKeyInput = document.getElementById('sms-country-key');
     const providerIdsInput = document.getElementById('sms-provider-ids');
     const exceptProviderIdsInput = document.getElementById('sms-except-provider-ids');
@@ -1007,7 +1176,6 @@ function handleSmsProviderChanged() {
     const voiceCheckbox = document.getElementById('sms-voice');
     const forwardingCheckbox = document.getElementById('sms-forwarding');
     const forwardingNumberInput = document.getElementById('sms-forwarding-number');
-
     if (countryInput) countryInput.disabled = provider === '5sim';
     if (countryKeyInput) countryKeyInput.disabled = provider !== '5sim';
     if (providerIdsInput) providerIdsInput.disabled = provider !== 'smsbower';
@@ -1034,20 +1202,16 @@ function handleSmsProviderChanged() {
     document.querySelectorAll('.provider-numeric-country').forEach(el => {
         el.style.display = provider === '5sim' ? 'none' : '';
     });
-
-    const serviceHint = document.getElementById('sms-service-hint');
-    if (serviceHint) {
-        if (provider === '5sim') {
-            serviceHint.innerHTML = '5SIM 使用产品名（product），例如 <code>facebook</code>。';
-        } else if (provider === 'smsbower') {
-            serviceHint.innerHTML = 'SMSBower 使用服务代码；可配合 providerIds / minPrice 定向取号。';
-        } else {
-            serviceHint.innerHTML = '默认 <code>dr</code>，按当前短信平台服务代码填写。';
-        }
-    }
-
+    updateSmsProviderUi(provider);
     setSmsInspectorHtml(`已切换到 <strong>${escapeHtml(provider)}</strong>，下方查询按钮将基于当前表单值实时查询。`);
     loadSmsCountries();
+    if (provider === '5sim') {
+        const service = document.getElementById('sms-service')?.value?.trim() || '';
+        const countryKey = document.getElementById('sms-country-key')?.value?.trim() || '';
+        if (service && countryKey) {
+            loadSmsOperators();
+        }
+    }
 }
 
 // 备份数据库

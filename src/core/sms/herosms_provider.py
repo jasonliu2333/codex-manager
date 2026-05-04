@@ -57,7 +57,17 @@ class HeroSMSProvider(BaseSMSProvider):
         country: Optional[int] = None,
         max_price: Optional[float] = None,
         operator: Optional[str] = None,
+        provider_ids: Optional[str] = None,
+        except_provider_ids: Optional[str] = None,
+        phone_exception: Optional[str] = None,
+        min_price: Optional[float] = None,
+        country_key: Optional[str] = None,
+        reuse: Optional[bool] = None,
+        voice: Optional[bool] = None,
+        forwarding: Optional[bool] = None,
+        forwarding_number: Optional[str] = None,
     ) -> SMSActivation:
+        del provider_ids, except_provider_ids, phone_exception, min_price, country_key, reuse, voice, forwarding, forwarding_number
         try:
             activation = self.client.request_number(
                 service=service or self.config.service,
@@ -73,6 +83,9 @@ class HeroSMSProvider(BaseSMSProvider):
             raw_number=activation.raw_number,
             country_phone_code=activation.country_phone_code,
             activation_cost=activation.activation_cost,
+            activation_time=activation.activation_time,
+            activation_operator=activation.activation_operator,
+            can_get_another_sms=activation.can_get_another_sms,
         )
 
     def get_lowest_price(self, service: Optional[str] = None, country: Optional[int] = None) -> Optional[float]:
