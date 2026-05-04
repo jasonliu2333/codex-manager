@@ -11,7 +11,7 @@ from typing import Any, Optional
 from ...config.settings import get_settings
 from ...database import crud
 from ...database.session import get_db
-from ..herosms_client import HeroSMSActivation, HeroSMSClient, HeroSMSConfig
+from ..sms import SMSActivation, SMSProviderConfig, get_sms_provider
 
 
 HEROSMS_REUSE_POOL_KEY = "herosms.reuse_pool"
@@ -65,15 +65,16 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
         except Exception as exc:
             engine._log(f"add-phone 页面预加载失败，将继续尝试 API: {exc}", "warning")
 
-    cfg = HeroSMSConfig(
+    cfg = SMSProviderConfig(
         api_key=api_key,
+        provider=str(runtime.get("provider", "herosms") or "herosms"),
         service=runtime.get("service", "dr") or "dr",
         country=int(runtime.get("country", 187) or 187),
         max_price=_positive_float_or_none(runtime.get("max_price", -1)),
         proxy=(runtime.get("proxy", "") or getattr(engine, "proxy_url", None) or None),
         timeout=int(runtime.get("timeout", 30) or 30),
     )
-    client = HeroSMSClient(cfg)
+    client = get_sms_provider(cfg)
     max_number_attempts = max(1, int(runtime.get("max_number_attempts", 1) or 1))
     target_number_index = max(1, int(runtime.get("target_number_index", 1) or 1))
     lowest_price_first = bool(runtime.get("lowest_price_first", True))
@@ -81,6 +82,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
     price_relax_max_multiplier = max(1, int(runtime.get("price_relax_max_multiplier", 5) or 5))
     reuse_enabled = bool(runtime.get("reuse_enabled", False))
     reuse_max_uses = max(1, int(runtime.get("reuse_max_uses", 1) or 1))
+    selected_operator = str(runtime.get("operator", "") or "").strip()
     resolved_max_price = cfg.max_price
     if lowest_price_first:
         try:
@@ -103,7 +105,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             _cleanup_reuse_pool(client)
             reuse_entry = _claim_reusable_activation(cfg.service, cfg.country, reuse_max_uses) if reuse_enabled else None
             if reuse_entry:
-                activation = HeroSMSActivation(
+                activation = SMSActivation(
                     activation_id=str(reuse_entry["activation_id"]),
                     phone_number=str(reuse_entry["phone_number"]),
                     raw_number=str(reuse_entry.get("raw_number") or reuse_entry["phone_number"]),
@@ -143,7 +145,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                             f"add-phone: 正在向 HeroSMS 取号 service={cfg.service}, country={cfg.country}, "
                             f"attempt={number_attempt}/{max_number_attempts}, price_try={idx}/{len(price_candidates)}, maxPrice={price_label}"
                         )
-                        activation = client.request_number(max_price=candidate_price)
+                        activation = client.request_number(max_price=candidate_price, operator=selected_operator or None)
                         balance_after = _safe_get_balance(client)
                         _log_activation_cost(engine, activation, balance_before, balance_after)
                         break
@@ -366,6 +368,8 @@ def _parse_bool(value: Any, default: bool) -> bool:
 def _load_herosms_runtime_settings() -> dict:
     settings = get_settings()
     data = {
+        "provider": getattr(settings, "sms_provider", "herosms") or "herosms",
+        "operator": getattr(settings, "sms_operator", "") or "",
         "enabled": bool(getattr(settings, "herosms_enabled", False)),
         "service": getattr(settings, "herosms_service", "dr") or "dr",
         "country": int(getattr(settings, "herosms_country", 187) or 187),
@@ -383,6 +387,8 @@ def _load_herosms_runtime_settings() -> dict:
         "reuse_max_uses": int(getattr(settings, "herosms_reuse_max_uses", 1) or 1),
     }
     key_map = {
+        "sms.provider": ("provider", lambda v, d=data["provider"]: str(v or d)),
+        "sms.operator": ("operator", lambda v, d=data["operator"]: str(v or d)),
         "herosms.enabled": ("enabled", lambda v, d=data["enabled"]: _parse_bool(v, d)),
         "herosms.service": ("service", lambda v, d=data["service"]: str(v or d)),
         "herosms.country": ("country", lambda v, d=data["country"]: int(v or d)),
@@ -513,7 +519,7 @@ def _claim_reusable_activation(service: str, country: int, max_uses: int) -> Opt
 
 
 def _register_new_activation(
-    activation: HeroSMSActivation,
+    activation: SMSActivation,
     *,
     service: str,
     country: int,
@@ -550,7 +556,7 @@ def _register_new_activation(
 
 
 def _record_activation_success(
-    activation: HeroSMSActivation,
+    activation: SMSActivation,
     *,
     service: str,
     country: int,
@@ -626,7 +632,7 @@ def _discard_reusable_activation(activation_id: str, reason: str) -> None:
         _save_reuse_pool(pool)
 
 
-def _cleanup_reuse_pool(client: Optional[HeroSMSClient] = None) -> None:
+def _cleanup_reuse_pool(client: Optional[object] = None) -> None:
     now = _utc_now()
     changed = False
     to_cancel: list[str] = []
@@ -711,7 +717,7 @@ def _append_unique_text(existing: Any, code: str) -> list[str]:
     return values[-10:]
 
 
-def _safe_get_balance(client: HeroSMSClient) -> Optional[float]:
+def _safe_get_balance(client: object) -> Optional[float]:
     try:
         return client.get_balance()
     except Exception:
@@ -720,7 +726,7 @@ def _safe_get_balance(client: HeroSMSClient) -> Optional[float]:
 
 def _log_activation_cost(
     engine: Any,
-    activation: HeroSMSActivation,
+    activation: SMSActivation,
     balance_before: Optional[float],
     balance_after: Optional[float],
 ) -> None:

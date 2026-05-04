@@ -558,15 +558,24 @@
                 </div>
             </div>
 
-            <!-- HeroSMS 接码配置 -->
+            <!-- 短信接码配置 -->
             <div class="tab-content" id="herosms-tab">
                 <div class="card">
                     <div class="card-header">
-                        <h3>HeroSMS 接码配置</h3>
+                        <h3>短信接码配置</h3>
                         <span class="hint">用于 OAuth 流程遇到 add-phone 时自动取号、收短信并完成手机验证</span>
                     </div>
                     <div class="card-body">
                         <form id="herosms-settings-form">
+                            <div class="form-group">
+                                <label for="sms-provider">短信平台</label>
+                                <select id="sms-provider" name="provider">
+                                    <option value="herosms">HeroSMS</option>
+                                    <option value="smsbower">SMSBower（预留）</option>
+                                    <option value="5sim">5SIM（预留）</option>
+                                </select>
+                                <p class="hint">当前仅 HeroSMS 已实现；其余平台为后续扩展预留。</p>
+                            </div>
                             <div class="form-group">
                                 <label style="display:flex;align-items:center;gap:8px;">
                                     <input type="checkbox" id="herosms-enabled" name="enabled">
@@ -576,7 +585,7 @@
                             </div>
 
                             <div class="form-group">
-                                <label for="herosms-api-key">HeroSMS API Key</label>
+                                <label for="herosms-api-key">平台 API Key</label>
                                 <input type="password" id="herosms-api-key" name="api_key" placeholder="已配置则留空保持不变" autocomplete="new-password">
                                 <small id="herosms-api-key-status" style="color: var(--text-muted);">当前已保存 API Key：否</small>
                                 <div class="hint" style="margin-top: 6px;">密码框不回显真实 Key；留空表示保持数据库中已保存的 Key 不变。</div>
@@ -602,10 +611,26 @@
                                     <input type="text" id="herosms-max-price" name="max_price" value="-1">
                                     <span class="hint">填 <code>-1</code> 表示不限制。</span>
                                 </div>
+                                <div class="form-group">
+                                    <label for="sms-operator">运营商（可选）</label>
+                                    <input type="text" id="sms-operator" name="operator" placeholder="例如 vodafone；留空自动选择">
+                                    <span class="hint">当前仅 HeroSMS 已接入运营商维度；留空表示不指定运营商。</span>
+                                </div>
                             </div>
 
                             <div class="form-group">
-                                <label for="herosms-proxy">HeroSMS 专用代理（可选）</label>
+                                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                                    <button type="button" class="btn btn-secondary btn-sm" id="sms-top-countries-btn">🌍 查询推荐国家</button>
+                                    <button type="button" class="btn btn-secondary btn-sm" id="sms-operators-btn">📶 查询运营商</button>
+                                    <button type="button" class="btn btn-secondary btn-sm" id="sms-operator-quotes-btn">💲 查询运营商报价</button>
+                                </div>
+                                <div id="sms-provider-inspector" style="background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:8px;padding:10px 12px;min-height:64px;color:var(--text-secondary);font-size:0.85rem;">
+                                    可用来查看当前短信平台的推荐国家、运营商和运营商报价。
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="herosms-proxy">短信平台专用代理（可选）</label>
                                 <input type="text" id="herosms-proxy" name="proxy" placeholder="留空则复用注册/补录代理">
                             </div>
 
@@ -630,7 +655,7 @@
                                         <input type="checkbox" id="herosms-lowest-price-first" name="lowest_price_first" checked>
                                         按所选国家最低价格档优先取号
                                     </label>
-                                    <span class="hint">会先查询 HeroSMS 价格表，再按最低可见价格作为 `maxPrice` 取号。</span>
+                                    <span class="hint">会先查询当前短信平台价格表，再按最低可见价格作为 `maxPrice` 取号。</span>
                                 </div>
                                 <div class="form-group">
                                     <label for="herosms-max-number-attempts">最大换号次数</label>
@@ -670,13 +695,13 @@
                                 <div class="form-group">
                                     <label for="herosms-reuse-max-uses">单号码最多使用账号数</label>
                                     <input type="number" id="herosms-reuse-max-uses" name="reuse_max_uses" value="2" min="1" max="5">
-                                    <span class="hint">建议 2-3。HeroSMS activation 通常有时间窗口，复用需要连续补录。</span>
+                                    <span class="hint">建议 2-3。接码平台 activation 通常有时间窗口，复用需要连续补录。</span>
                                 </div>
                             </div>
 
                             <div class="form-actions">
                                 <button type="submit" class="btn btn-primary">💾 保存设置</button>
-                                <button type="button" class="btn btn-secondary" id="test-herosms-btn">🔌 测试 HeroSMS 连接</button>
+                                <button type="button" class="btn btn-secondary" id="test-herosms-btn">🔌 测试短信平台连接</button>
                             </div>
                         </form>
                     </div>

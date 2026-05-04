@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from ...config.settings import get_database_url, get_settings, update_settings
 from ...core.registration_flow_templates import get_registration_flow_templates, normalize_flow_template
+from ...core.sms import SMSProviderConfig, get_sms_provider
 from ...database import crud
 from ...database.session import get_db
 
@@ -102,6 +103,8 @@ def _load_herosms_settings_from_db() -> dict:
     """
     settings = get_settings()
     defaults = {
+        "provider": str(getattr(settings, "sms_provider", "herosms") or "herosms"),
+        "operator": str(getattr(settings, "sms_operator", "") or ""),
         "enabled": bool(getattr(settings, "herosms_enabled", False)),
         "has_api_key": bool(_get_saved_herosms_api_key()),
         "service": str(getattr(settings, "herosms_service", "dr") or "dr"),
@@ -120,6 +123,8 @@ def _load_herosms_settings_from_db() -> dict:
         "reuse_max_uses": int(getattr(settings, "herosms_reuse_max_uses", 2) or 2),
     }
     db_key_map = {
+        "provider": ("sms.provider", lambda v: str(v).strip() or defaults["provider"]),
+        "operator": ("sms.operator", lambda v: str(v or "").strip()),
         "enabled": ("herosms.enabled", lambda v: _parse_bool(v, defaults["enabled"])),
         "service": ("herosms.service", lambda v: str(v).strip() or defaults["service"]),
         "country": ("herosms.country", lambda v: _parse_int(v, defaults["country"])),
@@ -644,8 +649,10 @@ class EmailCodeSettings(BaseModel):
     poll_interval: int = 3  # 验证码轮询间隔（秒）
 
 
-class HeroSMSSettings(BaseModel):
-    """HeroSMS 接码设置"""
+class SMSSettings(BaseModel):
+    """短信接码平台设置"""
+    provider: str = "herosms"
+    operator: str = ""
     enabled: bool = False
     api_key: Optional[str] = None
     service: str = "dr"
@@ -664,10 +671,15 @@ class HeroSMSSettings(BaseModel):
     reuse_max_uses: int = 2
 
 
-class HeroSMSTestRequest(BaseModel):
-    """HeroSMS 测试请求"""
+class SMSTestRequest(BaseModel):
+    """短信平台测试请求"""
     api_key: Optional[str] = None
     proxy: str = ""
+
+
+# 兼容旧命名
+HeroSMSSettings = SMSSettings
+HeroSMSTestRequest = SMSTestRequest
 
 
 @router.get("/tempmail")
@@ -731,8 +743,14 @@ async def get_herosms_settings():
     return _load_herosms_settings_from_db()
 
 
+@router.get("/sms")
+async def get_sms_settings():
+    """获取短信平台设置（通用入口）。"""
+    return _load_herosms_settings_from_db()
+
+
 @router.post("/herosms")
-async def update_herosms_settings(request: HeroSMSSettings):
+async def update_herosms_settings(request: SMSSettings):
     """更新 HeroSMS 接码设置"""
     if request.country <= 0:
         raise HTTPException(status_code=400, detail="国家代码必须大于 0")
@@ -752,6 +770,8 @@ async def update_herosms_settings(request: HeroSMSSettings):
         raise HTTPException(status_code=400, detail="号码复用次数必须在 1-5 之间")
 
     update_dict = {
+        "sms_provider": request.provider.strip() or "herosms",
+        "sms_operator": request.operator.strip(),
         "herosms_enabled": request.enabled,
         "herosms_service": request.service,
         "herosms_country": request.country,
@@ -776,12 +796,16 @@ async def update_herosms_settings(request: HeroSMSSettings):
     return {"success": True, "message": "HeroSMS 设置已更新"}
 
 
+@router.post("/sms")
+async def update_sms_settings(request: SMSSettings):
+    """更新短信平台设置（通用入口）。"""
+    return await update_herosms_settings(request)
+
+
 @router.post("/herosms/test")
-async def test_herosms_settings(request: HeroSMSTestRequest):
+async def test_herosms_settings(request: SMSTestRequest):
     """测试 HeroSMS API Key 是否可用。"""
     try:
-        from ...core.herosms_client import HeroSMSClient, HeroSMSConfig
-
         api_key = (request.api_key or "").strip()
         if not api_key:
             api_key = _get_saved_herosms_api_key()
@@ -790,12 +814,14 @@ async def test_herosms_settings(request: HeroSMSTestRequest):
 
         settings = get_settings()
         proxy = (request.proxy or "").strip() or (settings.herosms_proxy or "").strip() or None
-        client = HeroSMSClient(HeroSMSConfig(api_key=api_key, proxy=proxy))
+        provider_name = str(getattr(settings, "sms_provider", "herosms") or "herosms")
+        client = get_sms_provider(SMSProviderConfig(api_key=api_key, provider=provider_name, proxy=proxy))
         balance = client.get_balance()
         return {
             "success": True,
+            "provider": provider_name,
             "balance": balance,
-            "message": f"HeroSMS 连接成功，当前余额: {balance}"
+            "message": f"{provider_name} 连接成功，当前余额: {balance}"
         }
     except HTTPException:
         raise
@@ -803,27 +829,33 @@ async def test_herosms_settings(request: HeroSMSTestRequest):
         logger.warning("测试 HeroSMS 连接失败: %s", e)
         return {
             "success": False,
-            "message": f"HeroSMS 连接失败: {e}"
+            "message": f"短信平台连接失败: {e}"
         }
+
+
+@router.post("/sms/test")
+async def test_sms_settings(request: SMSTestRequest):
+    """测试短信平台连接（通用入口）。"""
+    return await test_herosms_settings(request)
 
 
 @router.get("/herosms/countries")
 async def get_herosms_countries():
     """获取 HeroSMS 国家列表，用于前端可搜索选择。"""
     try:
-        from ...core.herosms_client import HeroSMSClient, HeroSMSConfig
-
-        client = HeroSMSClient(HeroSMSConfig(api_key=""))
+        settings = get_settings()
+        provider_name = str(getattr(settings, "sms_provider", "herosms") or "herosms")
+        client = get_sms_provider(SMSProviderConfig(api_key="", provider=provider_name))
         countries = client.get_countries()
         normalized = []
         for item in countries:
             if not isinstance(item, dict):
                 continue
-            code = item.get("id") or item.get("country") or item.get("code")
+            code = item.get("heroSmsCountry") or item.get("hero_sms_country") or item.get("id") or item.get("country") or item.get("code")
             if code is None:
                 continue
-            name = str(item.get("name") or item.get("eng") or item.get("title") or str(code)).strip()
-            en_name = str(item.get("eng") or item.get("english") or name).strip()
+            name = str(item.get("apiName") or item.get("name") or item.get("eng") or item.get("title") or str(code)).strip()
+            en_name = str(item.get("eng") or item.get("english") or item.get("apiName") or name).strip()
             zh_name = str(
                 item.get("cn")
                 or item.get("zh")
@@ -847,6 +879,63 @@ async def get_herosms_countries():
     except Exception as e:
         logger.warning("获取 HeroSMS 国家列表失败: %s", e)
         raise HTTPException(status_code=502, detail=f"获取 HeroSMS 国家列表失败: {e}")
+
+
+@router.get("/sms/countries")
+async def get_sms_countries():
+    """获取短信平台国家列表（通用入口）。"""
+    return await get_herosms_countries()
+
+
+def _build_sms_provider_from_settings(api_key: str = "", proxy: Optional[str] = None):
+    settings = get_settings()
+    provider_name = str(getattr(settings, "sms_provider", "herosms") or "herosms")
+    return get_sms_provider(SMSProviderConfig(
+        api_key=api_key or _get_saved_herosms_api_key(),
+        provider=provider_name,
+        service=str(getattr(settings, "herosms_service", "dr") or "dr"),
+        country=int(getattr(settings, "herosms_country", 187) or 187),
+        max_price=float(getattr(settings, "herosms_max_price", -1) or -1),
+        proxy=proxy or ((getattr(settings, "herosms_proxy", "") or "").strip() or None),
+        timeout=int(getattr(settings, "herosms_timeout", 30) or 30),
+    ))
+
+
+@router.get("/sms/top-countries")
+async def get_sms_top_countries(service: Optional[str] = None):
+    try:
+        provider = _build_sms_provider_from_settings()
+        rows = provider.get_top_countries_by_service(service=service or None)
+        return {"provider": get_settings().sms_provider, "items": rows}
+    except Exception as e:
+        logger.warning("获取短信平台推荐国家失败: %s", e)
+        raise HTTPException(status_code=502, detail=f"获取推荐国家失败: {e}")
+
+
+@router.get("/sms/operators")
+async def get_sms_operators(country: int):
+    if country <= 0:
+        raise HTTPException(status_code=400, detail="国家代码必须大于 0")
+    try:
+        provider = _build_sms_provider_from_settings()
+        operators = provider.get_operators(country)
+        return {"provider": get_settings().sms_provider, "country": country, "items": operators}
+    except Exception as e:
+        logger.warning("获取短信平台运营商失败: %s", e)
+        raise HTTPException(status_code=502, detail=f"获取运营商失败: {e}")
+
+
+@router.get("/sms/operator-quotes")
+async def get_sms_operator_quotes(country: int, service: Optional[str] = None):
+    if country <= 0:
+        raise HTTPException(status_code=400, detail="国家代码必须大于 0")
+    try:
+        provider = _build_sms_provider_from_settings()
+        quotes = provider.get_operator_quote_options(service=service or None, country=country)
+        return {"provider": get_settings().sms_provider, "country": country, "service": service or "", "items": quotes}
+    except Exception as e:
+        logger.warning("获取短信平台运营商报价失败: %s", e)
+        raise HTTPException(status_code=502, detail=f"获取运营商报价失败: {e}")
 
 
 # ============== 代理列表 CRUD ==============

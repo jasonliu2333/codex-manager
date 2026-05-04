@@ -59,6 +59,7 @@ class HeroSMSClient:
         service: Optional[str] = None,
         country: Optional[int] = None,
         max_price: Optional[float] = None,
+        operator: Optional[str] = None,
     ) -> HeroSMSActivation:
         service = service or self.config.service
         country = self.config.country if country is None else country
@@ -66,6 +67,8 @@ class HeroSMSClient:
         common = {"service": service, "country": country}
         if max_price and max_price > 0:
             common["maxPrice"] = max_price
+        if operator:
+            common["operator"] = operator
 
         v2_error = None
         try:

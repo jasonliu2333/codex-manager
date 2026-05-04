@@ -215,6 +215,19 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         description="OpenAI 手机短信验证码重发接口"
     ),
 
+    "sms_provider": SettingDefinition(
+        db_key="sms.provider",
+        default_value="herosms",
+        category=SettingCategory.SMS,
+        description="当前启用的短信接码平台"
+    ),
+    "sms_operator": SettingDefinition(
+        db_key="sms.operator",
+        default_value="",
+        category=SettingCategory.SMS,
+        description="短信平台可选运营商"
+    ),
+
     # HeroSMS 接码平台配置
     "herosms_enabled": SettingDefinition(
         db_key="herosms.enabled",
@@ -582,6 +595,8 @@ SETTING_TYPES: Dict[str, Type] = {
     "proxy_dynamic_enabled": bool,
     "proxy_refresh_use_proxy": bool,
     "proxy_validate_use_proxy": bool,
+    "sms_provider": str,
+    "sms_operator": str,
     "herosms_enabled": bool,
     "herosms_country": int,
     "herosms_timeout": int,
@@ -900,6 +915,10 @@ class Settings(BaseModel):
     openai_add_phone_send_url: str = "https://auth.openai.com/api/accounts/add-phone/send"
     openai_phone_otp_validate_url: str = "https://auth.openai.com/api/accounts/phone-otp/validate"
     openai_phone_otp_resend_url: str = "https://auth.openai.com/api/accounts/phone-otp/resend"
+
+    # 短信平台配置
+    sms_provider: str = "herosms"
+    sms_operator: str = ""
 
     # HeroSMS 接码平台配置
     herosms_enabled: bool = False

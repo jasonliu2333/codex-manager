@@ -81,6 +81,7 @@ const elements = {
 // 选中的服务 ID
 let selectedServiceIds = new Set();
 let herosmsCountries = [];
+let smsInspectorState = { topCountries: [], operators: [], quotes: [] };
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -92,7 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCpaServices();
     loadSub2ApiServices();
     loadTmServices();
-    loadHeroSMSCountries();
+    loadSmsCountries();
     initEventListeners();
 });
 
@@ -248,12 +249,15 @@ function initEventListeners() {
         elements.emailCodeForm.addEventListener('submit', handleSaveEmailCode);
     }
 
-    // HeroSMS 设置
+    // 短信接码设置
     if (elements.herosmsSettingsForm) {
-        elements.herosmsSettingsForm.addEventListener('submit', handleSaveHeroSMS);
+        elements.herosmsSettingsForm.addEventListener('submit', handleSaveSmsSettings);
     }
+    document.getElementById('sms-top-countries-btn')?.addEventListener('click', loadSmsTopCountries);
+    document.getElementById('sms-operators-btn')?.addEventListener('click', loadSmsOperators);
+    document.getElementById('sms-operator-quotes-btn')?.addEventListener('click', loadSmsOperatorQuotes);
     if (elements.testHeroSMSBtn) {
-        elements.testHeroSMSBtn.addEventListener('click', handleTestHeroSMS);
+        elements.testHeroSMSBtn.addEventListener('click', handleTestSmsProvider);
     }
     const herosmsCountrySearch = document.getElementById('herosms-country-search');
     if (herosmsCountrySearch) {
@@ -401,8 +405,10 @@ async function loadSettings() {
             document.getElementById('email-code-poll-interval').value = data.email_code.poll_interval || 3;
         }
 
-        // HeroSMS 接码配置
+        // 短信接码配置
         if (data.herosms) {
+            document.getElementById('sms-provider').value = data.herosms.provider || 'herosms';
+            document.getElementById('sms-operator').value = data.herosms.operator || '';
             document.getElementById('herosms-enabled').checked = !!data.herosms.enabled;
             document.getElementById('herosms-service').value = data.herosms.service || 'dr';
             document.getElementById('herosms-country').value = data.herosms.country || 187;
@@ -424,7 +430,7 @@ async function loadSettings() {
             if (keyInput) {
                 keyInput.value = '';
                 keyInput.dataset.hasKey = data.herosms.has_api_key ? '1' : '0';
-                keyInput.placeholder = data.herosms.has_api_key ? '留空保持已保存 Key 不变' : '请输入 HeroSMS API Key';
+                keyInput.placeholder = data.herosms.has_api_key ? '留空保持已保存 Key 不变' : '请输入短信平台 API Key';
             }
             if (keyStatus) {
                 keyStatus.dataset.hasKey = data.herosms.has_api_key ? '1' : '0';
@@ -608,11 +614,13 @@ async function handleSaveEmailCode(e) {
     }
 }
 
-// 保存 HeroSMS 接码配置
-async function handleSaveHeroSMS(e) {
+// 保存短信接码配置
+async function handleSaveSmsSettings(e) {
     e.preventDefault();
 
     const data = {
+        provider: document.getElementById('sms-provider').value || 'herosms',
+        operator: document.getElementById('sms-operator').value.trim(),
         enabled: document.getElementById('herosms-enabled').checked,
         api_key: document.getElementById('herosms-api-key').value || null,
         service: document.getElementById('herosms-service').value.trim() || 'dr',
@@ -657,8 +665,8 @@ async function handleSaveHeroSMS(e) {
     }
 
     try {
-        await api.post('/settings/herosms', data);
-        toast.success(data.enabled ? 'HeroSMS 已启用' : 'HeroSMS 已关闭');
+        await api.post('/settings/sms', data);
+        toast.success(data.enabled ? '短信平台已启用' : '短信平台已关闭');
         document.getElementById('herosms-api-key').value = '';
         loadSettings();
     } catch (error) {
@@ -666,13 +674,13 @@ async function handleSaveHeroSMS(e) {
     }
 }
 
-async function handleTestHeroSMS() {
+async function handleTestSmsProvider() {
     const btn = elements.testHeroSMSBtn;
     if (!btn) return;
     btn.disabled = true;
     btn.textContent = '测试中...';
     try {
-        const result = await api.post('/settings/herosms/test', {
+        const result = await api.post('/settings/sms/test', {
             api_key: document.getElementById('herosms-api-key').value || null,
             proxy: document.getElementById('herosms-proxy').value.trim() || ''
         });
@@ -689,15 +697,15 @@ OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.http
         toast.error('测试失败: ' + error.message);
     } finally {
         btn.disabled = false;
-        btn.textContent = '🔌 测试 HeroSMS 连接';
+        btn.textContent = '🔌 测试短信平台连接';
     }
 }
 
-async function loadHeroSMSCountries() {
+async function loadSmsCountries() {
     const menu = document.getElementById('herosms-country-menu');
     if (!menu) return;
     try {
-        const data = await api.get('/settings/herosms/countries');
+        const data = await api.get('/settings/sms/countries');
         herosmsCountries = data.countries || [];
         const current = parseInt(document.getElementById('herosms-country')?.value) || 187;
         updateHeroSMSCountrySearch(current);
@@ -769,6 +777,106 @@ function selectHeroSMSCountry(country) {
     if (countryInput) countryInput.value = country.code;
     if (input) input.value = country.display;
     if (menu) menu.classList.remove('active');
+}
+
+const loadHeroSMSCountries = loadSmsCountries;
+
+// 兼容旧命名，避免其他地方引用时出错
+const handleSaveHeroSMS = handleSaveSmsSettings;
+const handleTestHeroSMS = handleTestSmsProvider;
+
+function setSmsInspectorHtml(html) {
+    const box = document.getElementById('sms-provider-inspector');
+    if (box) box.innerHTML = html;
+}
+
+async function loadSmsTopCountries() {
+    try {
+        const service = document.getElementById('herosms-service').value.trim() || 'dr';
+        setSmsInspectorHtml('正在加载推荐国家...');
+        const data = await api.get(`/settings/sms/top-countries?service=${encodeURIComponent(service)}`);
+        smsInspectorState.topCountries = data.items || [];
+        if (!smsInspectorState.topCountries.length) {
+            setSmsInspectorHtml('当前没有解析到推荐国家数据。');
+            return;
+        }
+        setSmsInspectorHtml(`
+            <div style="font-weight:600;margin-bottom:8px;">推荐国家（按价格/库存排序）</div>
+            ${smsInspectorState.topCountries.slice(0, 10).map(item => `
+                <div style="padding:4px 0;border-bottom:1px dashed var(--border-color);">
+                    <strong>${escapeHtml(item.apiName || item.isoCode || String(item.heroSmsCountry))}</strong>
+                    <span style="margin-left:8px;">国家码: ${item.heroSmsCountry}</span>
+                    <span style="margin-left:8px;">价格: ${item.price ?? '-'}</span>
+                    <span style="margin-left:8px;">库存: ${item.count ?? '-'}</span>
+                </div>
+            `).join('')}
+        `);
+    } catch (error) {
+        setSmsInspectorHtml(`加载推荐国家失败：${escapeHtml(error.message)}`);
+    }
+}
+
+async function loadSmsOperators() {
+    try {
+        const country = parseInt(document.getElementById('herosms-country').value) || 0;
+        if (!country) {
+            toast.error('请先选择国家');
+            return;
+        }
+        setSmsInspectorHtml('正在加载运营商...');
+        const data = await api.get(`/settings/sms/operators?country=${country}`);
+        smsInspectorState.operators = data.items || [];
+        if (!smsInspectorState.operators.length) {
+            setSmsInspectorHtml('当前国家没有解析到运营商列表。');
+            return;
+        }
+        setSmsInspectorHtml(`
+            <div style="font-weight:600;margin-bottom:8px;">运营商列表</div>
+            ${smsInspectorState.operators.map(op => `
+                <button type="button" class="btn btn-secondary btn-sm sms-operator-chip" data-operator="${escapeHtml(op)}" style="margin:0 6px 6px 0;">${escapeHtml(op)}</button>
+            `).join('')}
+            <div style="margin-top:8px;color:var(--text-muted);font-size:0.82rem;">点击运营商名称可直接填入“运营商”输入框。</div>
+        `);
+        document.querySelectorAll('.sms-operator-chip').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const input = document.getElementById('sms-operator');
+                if (input) input.value = btn.dataset.operator || '';
+            });
+        });
+    } catch (error) {
+        setSmsInspectorHtml(`加载运营商失败：${escapeHtml(error.message)}`);
+    }
+}
+
+async function loadSmsOperatorQuotes() {
+    try {
+        const country = parseInt(document.getElementById('herosms-country').value) || 0;
+        const service = document.getElementById('herosms-service').value.trim() || 'dr';
+        if (!country) {
+            toast.error('请先选择国家');
+            return;
+        }
+        setSmsInspectorHtml('正在加载运营商报价...');
+        const data = await api.get(`/settings/sms/operator-quotes?country=${country}&service=${encodeURIComponent(service)}`);
+        smsInspectorState.quotes = data.items || [];
+        if (!smsInspectorState.quotes.length) {
+            setSmsInspectorHtml('当前国家没有解析到运营商报价。');
+            return;
+        }
+        setSmsInspectorHtml(`
+            <div style="font-weight:600;margin-bottom:8px;">运营商报价</div>
+            ${smsInspectorState.quotes.map(item => `
+                <div style="padding:4px 0;border-bottom:1px dashed var(--border-color);">
+                    <strong>${escapeHtml(item.operator || '-')}</strong>
+                    <span style="margin-left:8px;">价格: ${item.price ?? '-'}</span>
+                    <span style="margin-left:8px;">库存: ${item.count ?? '-'}</span>
+                    ${item.error ? `<span style="margin-left:8px;color:var(--danger-color);">错误: ${escapeHtml(item.error)}</span>` : ''}
+                </div>
+            `).join('')}
+        `);
+    } catch (error) {
+        setSmsInspectorHtml(`加载运营商报价失败：${escapeHtml(error.message)}`);
+    }
 }
 
 // 备份数据库
