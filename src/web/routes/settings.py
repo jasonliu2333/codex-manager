@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from ...config.settings import get_database_url, get_settings, update_settings
