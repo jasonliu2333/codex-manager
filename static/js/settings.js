@@ -886,6 +886,18 @@ function updateSmsProviderUi(provider) {
     if (serviceInput && (!serviceInput.value || ['dr', 'openai'].includes(serviceInput.value.trim()))) {
         serviceInput.placeholder = `例如 ${cfg.serviceExample}`;
     }
+    if (serviceInput) {
+        const providerDefaults = {
+            herosms: 'dr',
+            smsbower: 'dr',
+            '5sim': 'openai',
+        };
+        const current = (serviceInput.value || '').trim().toLowerCase();
+        const knownDefaults = new Set(Object.values(providerDefaults));
+        if (!current || knownDefaults.has(current)) {
+            serviceInput.value = providerDefaults[provider] || cfg.serviceExample;
+        }
+    }
     const serviceHint = document.getElementById('sms-service-hint');
     if (serviceHint) serviceHint.innerHTML = cfg.serviceHint;
 
@@ -1007,7 +1019,7 @@ async function loadSmsTopCountries() {
             ${smsInspectorState.topCountries.slice(0, 10).map(item => `
                 <div style="padding:4px 0;border-bottom:1px dashed var(--border-color);">
                     <strong>${escapeHtml(item.apiName || item.isoCode || String(item.heroSmsCountry))}</strong>
-                    <span style="margin-left:8px;">国家码: ${item.heroSmsCountry}</span>
+                    <span style="margin-left:8px;">国家码: ${item.heroSmsCountry ?? item.country_key ?? '-'}</span>
                     <span style="margin-left:8px;">价格: ${item.price ?? '-'}</span>
                     <span style="margin-left:8px;">库存: ${item.count ?? '-'}</span>
                 </div>
