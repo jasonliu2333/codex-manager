@@ -16,6 +16,7 @@ from ..sms import SMSActivation, SMSProviderConfig, get_sms_provider
 
 SMS_REUSE_POOL_KEY = "herosms.reuse_pool"
 SMS_ACTIVATION_WINDOW_SECONDS = 20 * 60
+SMS_PENDING_CANCEL_KEY = "sms.pending_cancel_pool"
 _REUSE_POOL_LOCK = threading.RLock()
 
 
@@ -136,6 +137,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
         previous_texts: set[str] = set()
         try:
             _cleanup_reuse_pool(client)
+            _cleanup_pending_cancels(client)
             reuse_entry = _claim_reusable_activation(cfg.service, cfg.country, reuse_max_uses) if reuse_enabled else None
             if reuse_entry:
                 activation = SMSActivation(
@@ -176,6 +178,16 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 last_request_error: Optional[Exception] = None
                 for idx, candidate_price in enumerate(price_candidates, start=1):
                     provider_try_plan = _build_provider_try_plan(provider_candidates, candidate_price, cfg)
+                    if provider_candidates:
+                        engine._log(
+                            "add-phone: 当前价格档可尝试 provider: "
+                            + ", ".join(
+                                f"{item.get('provider_ids') or '自动'}"
+                                f"[price={item.get('price') if item.get('price') is not None else '-'},"
+                                f"count={item.get('count') if item.get('count') is not None else '-'}]"
+                                for item in provider_try_plan
+                            )
+                        )
                     for provider_try_index, provider_choice in enumerate(provider_try_plan, start=1):
                         try:
                             price_label = "不限价" if candidate_price is None else str(candidate_price)
@@ -197,6 +209,12 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                                 provider_ids=provider_choice.get("provider_ids"),
                             )
                             balance_after = _safe_get_balance(client)
+                            engine._log(
+                                "add-phone: 当前价格档命中结果: "
+                                f"maxPrice={price_label}, "
+                                f"provider={provider_choice_label}, "
+                                f"actual_price={activation.activation_cost if activation.activation_cost is not None else '未知'}"
+                            )
                             _log_activation_cost(engine, activation, balance_before, balance_after)
                             if activation.activation_operator or activation.activation_time or activation.can_get_another_sms is not None:
                                 engine._log(
@@ -329,17 +347,11 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             engine._log(f"add-phone: 手机验证失败: {exc}", "error")
             if activation:
                 if reused_activation:
-                    try:
-                        client.cancel_activation(activation.activation_id)
-                    except Exception:
-                        try:
-                            client.finish_activation(activation.activation_id)
-                        except Exception:
-                            pass
+                    _release_failed_activation(client, activation.activation_id, last_error)
                     _discard_reusable_activation(activation.activation_id, last_error)
                     engine._log(f"add-phone: 复用号码 {activation.phone_number} 已因错误废弃", "warning")
                 else:
-                    client.cancel_activation(activation.activation_id)
+                    _release_failed_activation(client, activation.activation_id, last_error)
             if reused_activation and _should_retry_with_new_number(last_error) and number_attempt < max_number_attempts:
                 engine._log(
                     f"add-phone: 复用号码不可继续使用（{_summarize_retry_reason(last_error)}），自动切换到新号码重试",
@@ -690,6 +702,29 @@ def _load_reuse_pool() -> list[dict]:
         return []
 
 
+def _load_pending_cancel_pool() -> list[dict]:
+    try:
+        with get_db() as db:
+            setting = crud.get_setting(db, SMS_PENDING_CANCEL_KEY)
+            if not setting or not setting.value:
+                return []
+            data = json.loads(setting.value)
+            return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_pending_cancel_pool(pool: list[dict]) -> None:
+    with get_db() as db:
+        crud.set_setting(
+            db,
+            SMS_PENDING_CANCEL_KEY,
+            json.dumps(pool, ensure_ascii=False),
+            description="短信平台待补取消 activation 队列",
+            category="sms",
+        )
+
+
 def _save_reuse_pool(pool: list[dict]) -> None:
     with get_db() as db:
         crud.set_setting(
@@ -697,6 +732,17 @@ def _save_reuse_pool(pool: list[dict]) -> None:
             SMS_REUSE_POOL_KEY,
             json.dumps(pool, ensure_ascii=False),
             description="短信平台成功号码复用池",
+            category="sms",
+        )
+
+
+def _save_pending_cancel_pool(pool: list[dict]) -> None:
+    with get_db() as db:
+        crud.set_setting(
+            db,
+            SMS_PENDING_CANCEL_KEY,
+            json.dumps(pool, ensure_ascii=False),
+            description="短信平台待补取消 activation 队列",
             category="sms",
         )
 
@@ -847,6 +893,67 @@ def _discard_reusable_activation(activation_id: str, reason: str) -> None:
                 item["updated_at"] = now
                 break
         _save_reuse_pool(pool)
+
+
+def _queue_pending_cancel(activation_id: str, reason: str) -> None:
+    now = _utc_now()
+    with _REUSE_POOL_LOCK:
+        pool = _load_pending_cancel_pool()
+        item = next((x for x in pool if str(x.get("activation_id")) == str(activation_id)), None)
+        if item is None:
+            item = {"activation_id": str(activation_id)}
+            pool.append(item)
+        item.update({
+            "reason": str(reason or "").strip()[:300],
+            "created_at": str(item.get("created_at") or now),
+            "last_attempt_at": now,
+            "attempts": int(item.get("attempts") or 0),
+        })
+        _save_pending_cancel_pool(pool[-100:])
+
+
+def _cleanup_pending_cancels(client: object) -> None:
+    now = _utc_now()
+    with _REUSE_POOL_LOCK:
+        pool = _load_pending_cancel_pool()
+        if not pool:
+            return
+        remain = []
+        for item in pool:
+            activation_id = str(item.get("activation_id") or "").strip()
+            if not activation_id:
+                continue
+            last_attempt_at = str(item.get("last_attempt_at") or "")
+            if last_attempt_at and not _reservation_is_stale(last_attempt_at):
+                remain.append(item)
+                continue
+            try:
+                try:
+                    client.set_status(activation_id, 8)
+                except Exception:
+                    pass
+                if client.cancel_activation(activation_id):
+                    continue
+            except Exception:
+                pass
+            item["attempts"] = int(item.get("attempts") or 0) + 1
+            item["last_attempt_at"] = now
+            if int(item["attempts"]) < 5:
+                remain.append(item)
+        _save_pending_cancel_pool(remain[-100:])
+
+
+def _release_failed_activation(client: object, activation_id: str, reason: str) -> None:
+    try:
+        try:
+            client.set_status(activation_id, 8)
+        except Exception:
+            pass
+        if client.cancel_activation(activation_id):
+            return
+    except Exception:
+        pass
+    _queue_pending_cancel(activation_id, reason)
 
 
 def _cleanup_reuse_pool(client: Optional[object] = None) -> None:
