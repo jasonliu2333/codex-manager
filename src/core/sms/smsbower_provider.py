@@ -24,6 +24,9 @@ class SMSBowerClient(HeroSMSClient):
     base_url = "https://smsbower.page/stubs/handler_api.php"
     payment_base_url = "https://smsbower.page/api/payment/getActualWalletAddress"
 
+    def get_status_v2(self, activation_id: str) -> dict:
+        return self.get_status(activation_id)
+
     def request_number(
         self,
         service: Optional[str] = None,
@@ -189,6 +192,9 @@ class SMSBowerProvider(HeroSMSProvider):
         priced = self.list_country_prices(service=service, countries=countries)
         return sorted(priced, key=lambda x: (x.get("price") if x.get("price") is not None else 999999, -(x.get("count") or 0)))[:50]
 
+    def get_status_v2(self, activation_id: str) -> dict:
+        return self.get_status(activation_id)
+
     def get_operators(self, country: int) -> list[str]:
         raise NotImplementedError("SMSBower 当前未提供公开运营商列表接口")
 
@@ -279,6 +285,9 @@ class SMSBowerProvider(HeroSMSProvider):
         if isinstance(data, dict):
             return data
         raise SMSProviderError(f"SMSBower 静态钱包响应异常: {str(resp.text)[:200]}")
+
+    def wait_for_code(self, activation_id: str, **kwargs):
+        return self.client.wait_for_code(activation_id, **kwargs)
 
     @classmethod
     def extract_provider_prices(cls, raw: Any, country_id: int, service: str) -> list[dict]:

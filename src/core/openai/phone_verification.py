@@ -158,7 +158,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     for provider_try_index, provider_choice in enumerate(provider_try_plan, start=1):
                         try:
                             price_label = "不限价" if candidate_price is None else str(candidate_price)
-                            provider_label = provider_choice.get("provider_ids") or "自动"
+                            provider_choice_label = provider_choice.get("provider_ids") or "自动"
                             provider_meta = ""
                             if provider_choice.get("price") is not None or provider_choice.get("count") is not None:
                                 provider_meta = f", provider_quote={provider_choice.get('price')}, provider_count={provider_choice.get('count')}"
@@ -166,7 +166,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                             engine._log(
                                 f"add-phone: 正在向短信平台取号 service={cfg.service}, country={cfg.country}, "
                                 f"attempt={number_attempt}/{max_number_attempts}, price_try={idx}/{len(price_candidates)}, "
-                                f"provider_try={provider_try_index}/{len(provider_try_plan)}, maxPrice={price_label}, providerIds={provider_label}{provider_meta}"
+                                f"provider_try={provider_try_index}/{len(provider_try_plan)}, maxPrice={price_label}, providerIds={provider_choice_label}{provider_meta}"
                             )
                             activation = _request_number_with_provider_options(
                                 client,
@@ -200,12 +200,6 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 if activation is None and last_request_error:
                     raise last_request_error
                 engine._log(f"add-phone: 取号成功 {activation.phone_number} (activation={activation.activation_id})")
-                _register_new_activation(
-                    activation,
-                    service=cfg.service,
-                    country=cfg.country,
-                    max_uses=reuse_max_uses,
-                )
 
                 if number_attempt < target_number_index:
                     engine._log(f"add-phone: 当前为第 {number_attempt} 个号码，配置要求从第 {target_number_index} 个号码开始使用，跳过当前号码", "warning")
@@ -325,6 +319,12 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     engine._log(f"add-phone: 复用号码 {activation.phone_number} 已因错误废弃", "warning")
                 else:
                     client.cancel_activation(activation.activation_id)
+            if reused_activation and _should_retry_with_new_number(last_error) and number_attempt < max_number_attempts:
+                engine._log(
+                    f"add-phone: 复用号码不可继续使用（{_summarize_retry_reason(last_error)}），自动切换到新号码重试",
+                    "warning",
+                )
+                continue
             if _should_retry_with_new_number(last_error) and number_attempt < max_number_attempts:
                 engine._log(
                     f"add-phone: 检测到当前号码不可继续使用（{_summarize_retry_reason(last_error)}），自动切换到下一个号码重试",
@@ -942,6 +942,25 @@ def _should_retry_with_new_number(error_text: str) -> bool:
         "phone_max_usage_exceeded",
         "maximum number of accounts",
         "phone number is already linked",
+        "phone_number_in_use",
+        "phone number already in use",
+        "phone number blocked",
+        "phone_number_blocked",
+        "phone number invalid",
+        "invalid phone number",
+        "phone_number_invalid",
+        "phone number is not supported",
+        "unsupported phone number",
+        "phone_number_not_supported",
+        "phone verification failed for this number",
+        "phone_number_banned",
+        "phone number banned",
+        "too many attempts",
+        "too many requests for this phone number",
+        "phone number cannot be used",
+        "phone number is unavailable",
+        "number unavailable",
+        "temporarily unavailable",
     ]
     return any(marker in text for marker in markers)
 
@@ -950,5 +969,19 @@ def _summarize_retry_reason(error_text: str) -> str:
     text = (error_text or "").lower()
     if "phone_max_usage_exceeded" in text or "maximum number of accounts" in text:
         return "号码已达最大绑定次数"
+    if "phone_number_in_use" in text or "phone number already in use" in text:
+        return "号码已被占用"
+    if "phone_number_blocked" in text or "phone number blocked" in text or "phone number banned" in text or "phone_number_banned" in text:
+        return "号码已被封禁"
+    if "phone_number_invalid" in text or "invalid phone number" in text:
+        return "号码格式无效"
+    if "phone number is not supported" in text or "unsupported phone number" in text or "phone_number_not_supported" in text:
+        return "号码不受支持"
+    if "phone verification failed for this number" in text:
+        return "号码无法用于验证"
+    if "too many attempts" in text or "too many requests for this phone number" in text:
+        return "号码尝试次数过多"
+    if "phone number cannot be used" in text or "phone number is unavailable" in text or "number unavailable" in text or "temporarily unavailable" in text:
+        return "号码当前不可用"
     return "当前号码不可用"
 
