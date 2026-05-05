@@ -2,8 +2,11 @@
 设置 API 路由
 """
 
+import json
 import logging
 import os
+import time
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -25,6 +28,9 @@ from ...database.session import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+SEEKPROXY_GEO_CACHE_TTL = 86400
+SEEKPROXY_GEO_CACHE_PATH = Path("data/cache/seekproxy_geo_cache.json")
 
 
 SMS_COUNTRY_ZH = {
@@ -241,6 +247,7 @@ def _load_proxy_settings_from_db() -> dict:
         "has_password": bool(getattr(settings, "proxy_password", None)),
         "preference_mode": str(getattr(settings, "proxy_preference_mode", "auto") or "auto"),
         "preferred_fixed_id": int(getattr(settings, "proxy_preferred_fixed_id", 0) or 0),
+        "connect_retry_count": int(getattr(settings, "proxy_connect_retry_count", 3) or 3),
         "dynamic_enabled": bool(getattr(settings, "proxy_dynamic_enabled", False)),
         "dynamic_profiles": dict(getattr(settings, "proxy_dynamic_profiles", {}) or {}),
         "dynamic_mode": str(getattr(settings, "proxy_dynamic_mode", "api") or "api"),
@@ -279,6 +286,7 @@ def _load_proxy_settings_from_db() -> dict:
         "username": ("proxy.username", lambda v: str(v).strip() or None),
         "preference_mode": ("proxy.preference_mode", lambda v: str(v).strip() or defaults["preference_mode"]),
         "preferred_fixed_id": ("proxy.preferred_fixed_id", lambda v: _parse_int(v, defaults["preferred_fixed_id"])),
+        "connect_retry_count": ("proxy.connect_retry_count", lambda v: _parse_int(v, defaults["connect_retry_count"])),
         "dynamic_enabled": ("proxy.dynamic_enabled", lambda v: _parse_bool(v, defaults["dynamic_enabled"])),
         "dynamic_profiles": ("proxy.dynamic_profiles", lambda v: v if isinstance(v, dict) else defaults["dynamic_profiles"]),
         "dynamic_mode": ("proxy.dynamic_mode", lambda v: str(v).strip() or defaults["dynamic_mode"]),
@@ -395,6 +403,159 @@ def _build_proxy_test_mapping(proxy_url: str, *, include_https: bool) -> dict:
     if include_https:
         proxies["https"] = proxy_url
     return proxies
+
+
+def _ensure_seekproxy_cache_dir() -> None:
+    try:
+        SEEKPROXY_GEO_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _load_seekproxy_geo_cache() -> dict:
+    try:
+        if SEEKPROXY_GEO_CACHE_PATH.exists():
+            return json.loads(SEEKPROXY_GEO_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("读取 SeekProxy 地理缓存失败: %s", exc)
+    return {}
+
+
+def _save_seekproxy_geo_cache(data: dict) -> None:
+    try:
+        _ensure_seekproxy_cache_dir()
+        SEEKPROXY_GEO_CACHE_PATH.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("保存 SeekProxy 地理缓存失败: %s", exc)
+
+
+def _seekproxy_cache_get(section: str, cache_key: str) -> Optional[list]:
+    cache = _load_seekproxy_geo_cache()
+    node = ((cache.get(section) or {}) if isinstance(cache, dict) else {})
+    entry = node.get(cache_key) if isinstance(node, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    ts = float(entry.get("ts") or 0)
+    if time.time() - ts > SEEKPROXY_GEO_CACHE_TTL:
+        return None
+    data = entry.get("data")
+    return data if isinstance(data, list) else None
+
+
+def _seekproxy_cache_set(section: str, cache_key: str, rows: list[dict]) -> None:
+    cache = _load_seekproxy_geo_cache()
+    if not isinstance(cache, dict):
+        cache = {}
+    section_node = cache.get(section)
+    if not isinstance(section_node, dict):
+        section_node = {}
+        cache[section] = section_node
+    section_node[cache_key] = {
+        "ts": time.time(),
+        "data": rows,
+    }
+    _save_seekproxy_geo_cache(cache)
+
+
+def _fetch_seekproxy_json(path: str, params: Optional[dict] = None) -> list[dict]:
+    from urllib.parse import urlencode
+    from curl_cffi import requests as cffi_requests
+
+    url = f"https://www.seekproxy.com{path}"
+    if params:
+        query = urlencode({k: v for k, v in params.items() if v not in (None, "")})
+        if query:
+            url = f"{url}?{query}"
+
+    response = cffi_requests.get(url, timeout=20, impersonate="chrome")
+    response.raise_for_status()
+    payload = response.json()
+    if int(payload.get("code") or 0) != 200:
+        raise ValueError(payload.get("msg") or "SeekProxy 接口返回失败")
+    data = payload.get("data") or []
+    if not isinstance(data, list):
+        return []
+    return data
+
+
+def _get_seekproxy_countries(force_refresh: bool = False) -> list[dict]:
+    cache_key = "all"
+    if not force_refresh:
+        cached = _seekproxy_cache_get("countries", cache_key)
+        if cached is not None:
+            return cached
+    rows = _fetch_seekproxy_json("/out-api/country-list")
+    normalized = [
+        {
+            "code": str(item.get("code") or "").strip().upper(),
+            "name": str(item.get("name") or "").strip(),
+        }
+        for item in rows
+        if str(item.get("code") or "").strip()
+    ]
+    _seekproxy_cache_set("countries", cache_key, normalized)
+    return normalized
+
+
+def _get_seekproxy_states(country_code: str, force_refresh: bool = False) -> list[dict]:
+    code = str(country_code or "").strip().upper()
+    if not code:
+        return []
+    if not force_refresh:
+        cached = _seekproxy_cache_get("states", code)
+        if cached is not None:
+            return cached
+    rows = _fetch_seekproxy_json("/out-api/state-list", {"code": code})
+    normalized = []
+    for item in rows:
+        if isinstance(item, dict):
+            state_code = str(item.get("code") or item.get("state") or item.get("name") or "").strip()
+            state_name = str(item.get("name") or item.get("state") or item.get("code") or "").strip()
+        else:
+            state_code = str(item or "").strip()
+            state_name = state_code
+        if state_name:
+            normalized.append({"code": state_code or state_name, "name": state_name})
+    _seekproxy_cache_set("states", code, normalized)
+    return normalized
+
+
+def _get_seekproxy_cities(country_code: str, state_name: str, force_refresh: bool = False) -> list[dict]:
+    code = str(country_code or "").strip().upper()
+    state = str(state_name or "").strip()
+    if not code or not state:
+        return []
+    cache_key = f"{code}::{state}"
+    if not force_refresh:
+        cached = _seekproxy_cache_get("cities", cache_key)
+        if cached is not None:
+            return cached
+    rows = _fetch_seekproxy_json("/out-api/city-list", {"code": code, "state": state})
+    normalized = []
+    for item in rows:
+        if isinstance(item, dict):
+            city_code = str(item.get("code") or item.get("city") or item.get("name") or "").strip()
+            city_name = str(item.get("name") or item.get("city") or item.get("code") or "").strip()
+        else:
+            city_code = str(item or "").strip()
+            city_name = city_code
+        if city_name:
+            normalized.append({"code": city_code or city_name, "name": city_name})
+    _seekproxy_cache_set("cities", cache_key, normalized)
+    return normalized
+
+
+def _search_seekproxy_geo_rows(rows: list[dict], keyword: str) -> list[dict]:
+    key = str(keyword or "").strip().lower()
+    if not key:
+        return rows[:200]
+    matched = []
+    for row in rows:
+        code = str(row.get("code") or "").lower()
+        name = str(row.get("name") or "").lower()
+        if key in code or key in name:
+            matched.append(row)
+    return matched[:200]
 
 
 def _test_proxy_http_basic(proxy_url: str) -> dict:
@@ -535,6 +696,7 @@ async def get_dynamic_proxy_settings():
     return {
         "enabled": proxy_settings["dynamic_enabled"],
         "profiles": proxy_settings["dynamic_profiles"],
+        "dynamic_profiles": proxy_settings["dynamic_profiles"],
         "mode": proxy_settings["dynamic_mode"],
         "provider": proxy_settings["dynamic_provider"],
         "api_url": proxy_settings["dynamic_api_url"],
@@ -602,6 +764,50 @@ class ProxyPreferenceSettings(BaseModel):
     """任务代理来源策略"""
     preference_mode: str = "auto"
     preferred_fixed_id: int = 0
+    connect_retry_count: int = 3
+
+
+@router.get("/proxy/seekproxy/countries")
+async def get_seekproxy_countries(keyword: str = Query("", description="国家代码或名称关键字"), refresh: bool = Query(False)):
+    try:
+        rows = _get_seekproxy_countries(force_refresh=refresh)
+        return {"items": _search_seekproxy_geo_rows(rows, keyword)}
+    except Exception as exc:
+        logger.warning("获取 SeekProxy 国家列表失败: %s", exc)
+        raise HTTPException(status_code=502, detail=f"获取 SeekProxy 国家列表失败: {exc}")
+
+
+@router.get("/proxy/seekproxy/states")
+async def get_seekproxy_states(
+    country_code: str = Query(..., description="国家代码"),
+    keyword: str = Query("", description="州/省关键字"),
+    refresh: bool = Query(False),
+):
+    try:
+        rows = _get_seekproxy_states(country_code, force_refresh=refresh)
+        return {"country_code": country_code.upper(), "items": _search_seekproxy_geo_rows(rows, keyword)}
+    except Exception as exc:
+        logger.warning("获取 SeekProxy 州省列表失败: %s", exc)
+        raise HTTPException(status_code=502, detail=f"获取 SeekProxy 州省列表失败: {exc}")
+
+
+@router.get("/proxy/seekproxy/cities")
+async def get_seekproxy_cities(
+    country_code: str = Query(..., description="国家代码"),
+    state: str = Query(..., description="州/省名称"),
+    keyword: str = Query("", description="城市关键字"),
+    refresh: bool = Query(False),
+):
+    try:
+        rows = _get_seekproxy_cities(country_code, state, force_refresh=refresh)
+        return {
+            "country_code": country_code.upper(),
+            "state": state,
+            "items": _search_seekproxy_geo_rows(rows, keyword),
+        }
+    except Exception as exc:
+        logger.warning("获取 SeekProxy 城市列表失败: %s", exc)
+        raise HTTPException(status_code=502, detail=f"获取 SeekProxy 城市列表失败: {exc}")
 
 
 @router.post("/proxy/dynamic")
@@ -738,6 +944,7 @@ async def update_proxy_preference_settings(request: ProxyPreferenceSettings):
         raise HTTPException(status_code=400, detail="代理来源策略无效")
 
     preferred_fixed_id = int(request.preferred_fixed_id or 0)
+    connect_retry_count = max(1, min(10, int(request.connect_retry_count or 3)))
     selected_proxy = None
     if preference_mode == "fixed":
         if preferred_fixed_id <= 0:
@@ -752,13 +959,107 @@ async def update_proxy_preference_settings(request: ProxyPreferenceSettings):
     update_settings(
         proxy_preference_mode=preference_mode,
         proxy_preferred_fixed_id=preferred_fixed_id if preference_mode == "fixed" else 0,
+        proxy_connect_retry_count=connect_retry_count,
     )
     return {
         "success": True,
         "message": "任务代理策略已更新",
         "preference_mode": preference_mode,
         "preferred_fixed_id": preferred_fixed_id if preference_mode == "fixed" else 0,
+        "connect_retry_count": connect_retry_count,
         "preferred_fixed_name": getattr(selected_proxy, "name", None),
+    }
+
+
+@router.post("/proxy/preference/test")
+async def test_proxy_preference_settings(request: ProxyPreferenceSettings):
+    """测试当前任务代理策略最终命中的代理是否可达。"""
+    from ...core.dynamic_proxy import get_proxy_url_for_task
+
+    preference_mode = str(request.preference_mode or "auto").strip().lower() or "auto"
+    allowed_modes = {"auto", "dynamic", "fixed", "pool", "direct"}
+    if preference_mode not in allowed_modes:
+        raise HTTPException(status_code=400, detail="代理来源策略无效")
+
+    preferred_fixed_id = int(request.preferred_fixed_id or 0)
+
+    def get_fixed_proxy():
+        if preferred_fixed_id <= 0:
+            return None, "固定代理未选择"
+        with get_db() as db:
+            proxy = crud.get_proxy_by_id(db, preferred_fixed_id)
+            if not proxy:
+                return None, "指定固定代理不存在"
+            if not proxy.enabled:
+                return None, "指定固定代理未启用"
+            return proxy.proxy_url, f"固定代理 #{proxy.id} {proxy.name}"
+
+    def get_pool_proxy():
+        with get_db() as db:
+            proxy = crud.get_random_proxy(db)
+            if not proxy:
+                return None, "代理池无可用代理"
+            return proxy.proxy_url, f"代理池命中 #{proxy.id} {proxy.name}"
+
+    settings = get_settings()
+    dynamic_proxy = get_proxy_url_for_task() if settings.proxy_dynamic_enabled else None
+    fixed_proxy, fixed_detail = get_fixed_proxy()
+    pool_proxy, pool_detail = get_pool_proxy()
+    static_proxy = settings.proxy_url
+
+    source = "direct"
+    source_name = "直连"
+    source_detail = ""
+    proxy_url = None
+    if preference_mode == "dynamic":
+        proxy_url, source, source_name, source_detail = dynamic_proxy, "dynamic", "动态代理", "任务代理策略=dynamic"
+    elif preference_mode == "fixed":
+        proxy_url, source, source_name, source_detail = fixed_proxy, "fixed", "固定代理", fixed_detail
+    elif preference_mode == "pool":
+        proxy_url, source, source_name, source_detail = pool_proxy, "pool", "代理池", pool_detail
+    elif preference_mode == "direct":
+        proxy_url, source, source_name, source_detail = None, "direct", "直连", "任务代理策略=direct"
+    else:
+        if dynamic_proxy:
+            proxy_url, source, source_name, source_detail = dynamic_proxy, "dynamic", "动态代理", "auto 命中动态代理"
+        elif fixed_proxy:
+            proxy_url, source, source_name, source_detail = fixed_proxy, "fixed", "固定代理", fixed_detail
+        elif pool_proxy:
+            proxy_url, source, source_name, source_detail = pool_proxy, "pool", "代理池", pool_detail
+        elif static_proxy:
+            proxy_url, source, source_name, source_detail = static_proxy, "static", "静态代理", "auto 命中静态代理"
+        else:
+            proxy_url, source, source_name, source_detail = None, "direct", "直连", "auto 未命中任何代理"
+
+    if not proxy_url:
+        return {
+            "success": True,
+            "proxy_source": source,
+            "proxy_source_name": source_name,
+            "message": f"当前策略最终为{source_name}，无需代理连通性测试",
+        }
+
+    basic = _test_proxy_http_basic(proxy_url)
+    if not basic.get("success"):
+        return {
+            "success": False,
+            "proxy_source": source,
+            "proxy_source_name": source_name,
+            "proxy_used": proxy_url,
+            "message": basic.get("message", "HTTP 代理测试失败"),
+        }
+    https_test = _test_proxy_https_openai(proxy_url)
+    return {
+        "success": bool(https_test.get("success")),
+        "proxy_source": source,
+        "proxy_source_name": source_name,
+        "proxy_source_detail": source_detail,
+        "proxy_used": proxy_url,
+        "ip": basic.get("ip", ""),
+        "response_time": basic.get("response_time"),
+        "https_openai_ok": bool(https_test.get("success")),
+        "https_openai_message": https_test.get("message", ""),
+        "message": https_test.get("message") if not https_test.get("success") else basic.get("message", "代理可用"),
     }
 
 

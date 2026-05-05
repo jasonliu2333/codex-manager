@@ -89,21 +89,26 @@
                                     启用动态代理
                                 </label>
                             </div>
-                            <div class="form-group">
-                                <label for="dynamic-proxy-mode">接入模式</label>
-                                <select id="dynamic-proxy-mode" name="mode">
-                                    <option value="api">API提取模式（白名单）</option>
-                                    <option value="account">账密接入模式</option>
-                                </select>
-                                <small style="color: var(--text-muted);">API提取模式保留原白名单代理地址方式；账密模式按用户名/密码直连代理网关。</small>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="dynamic-proxy-provider">代理平台</label>
+                                    <select id="dynamic-proxy-provider" name="provider">
+                                        <option value="haiwaidaili">海外代理</option>
+                                        <option value="seekproxy">SeekProxy</option>
+                                    </select>
+                                    <small style="color: var(--text-muted);">先选择代理平台，再选择该平台的接入模式。</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="dynamic-proxy-mode">接入模式</label>
+                                    <select id="dynamic-proxy-mode" name="mode">
+                                        <option value="api">API提取模式</option>
+                                        <option value="account">账密接入模式</option>
+                                    </select>
+                                    <small style="color: var(--text-muted);">不同平台下会显示该平台自己的 API 提取字段或账密接入字段。</small>
+                                </div>
                             </div>
-                            <div class="form-group" id="dynamic-proxy-provider-group">
-                                <label for="dynamic-proxy-provider">API 提供商</label>
-                                <select id="dynamic-proxy-provider" name="provider">
-                                    <option value="generic">通用</option>
-                                    <option value="haiwaidaili">海外代理</option>
-                                    <option value="seekproxy">SeekProxy</option>
-                                </select>
+                            <div id="dynamic-proxy-platform-summary" style="background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:8px;padding:10px 12px;margin-bottom:12px;color:var(--text-secondary);font-size:0.85rem;">
+                                请选择代理平台与接入模式。
                             </div>
                             <div class="form-group">
                                 <div id="dynamic-proxy-api-mode-group">
@@ -115,11 +120,11 @@
                             <div id="dynamic-proxy-provider-auth-group">
                                 <div class="form-row">
                                     <div class="form-group">
-                                        <label for="dynamic-proxy-provider-appid">供应商 AppId（白名单模式）</label>
+                                        <label for="dynamic-proxy-provider-appid">海外代理 AppId</label>
                                         <input type="text" id="dynamic-proxy-provider-appid" name="provider_appid" placeholder="例如 16121">
                                     </div>
                                     <div class="form-group">
-                                        <label for="dynamic-proxy-provider-appkey">供应商 AppKey（白名单模式）</label>
+                                        <label for="dynamic-proxy-provider-appkey">海外代理 AppKey</label>
                                         <input type="password" id="dynamic-proxy-provider-appkey" name="provider_appkey" placeholder="留空保持不变" autocomplete="new-password">
                                         <small id="dynamic-proxy-provider-appkey-status" style="color: var(--text-muted);">未保存 AppKey</small>
                                     </div>
@@ -129,44 +134,97 @@
                             <div id="dynamic-proxy-seekproxy-group" style="display:none;">
                                 <div class="form-row">
                                     <div class="form-group">
-                                        <label for="dynamic-proxy-seekproxy-trade-no">SeekProxy trade_no</label>
+                                        <label for="dynamic-proxy-seekproxy-trade-no">业务号 trade_no</label>
                                         <input type="text" id="dynamic-proxy-seekproxy-trade-no" name="seekproxy_trade_no" placeholder="例如 DH398988654014">
                                     </div>
                                     <div class="form-group">
-                                        <label for="dynamic-proxy-seekproxy-key">SeekProxy key</label>
+                                        <label for="dynamic-proxy-seekproxy-key">业务密钥 key</label>
                                         <input type="password" id="dynamic-proxy-seekproxy-key" name="seekproxy_key" placeholder="留空保持不变" autocomplete="new-password">
                                         <small id="dynamic-proxy-seekproxy-key-status" style="color: var(--text-muted);">未保存 key</small>
                                     </div>
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
-                                        <label for="dynamic-proxy-seekproxy-auth-type">auth_type</label>
-                                        <input type="number" id="dynamic-proxy-seekproxy-auth-type" name="seekproxy_auth_type" value="2" min="1">
+                                        <label for="dynamic-proxy-seekproxy-auth-type">认证方式</label>
+                                        <select id="dynamic-proxy-seekproxy-auth-type" name="seekproxy_auth_type">
+                                            <option value="2">白名单提取</option>
+                                            <option value="1">账密代理串</option>
+                                        </select>
                                     </div>
                                     <div class="form-group">
-                                        <label for="dynamic-proxy-seekproxy-ip-count">ip_count</label>
+                                        <label for="dynamic-proxy-seekproxy-ip-count">提取数量</label>
                                         <input type="number" id="dynamic-proxy-seekproxy-ip-count" name="seekproxy_ip_count" value="1" min="1" max="20">
                                     </div>
                                     <div class="form-group">
-                                        <label for="dynamic-proxy-seekproxy-break-type">break_type</label>
-                                        <input type="number" id="dynamic-proxy-seekproxy-break-type" name="seekproxy_break_type" value="1" min="1">
+                                        <label for="dynamic-proxy-seekproxy-break-type">去重/换断方式</label>
+                                        <select id="dynamic-proxy-seekproxy-break-type" name="seekproxy_break_type">
+                                            <option value="1">默认方式</option>
+                                            <option value="0">关闭去重</option>
+                                        </select>
                                     </div>
                                     <div class="form-group">
-                                        <label for="dynamic-proxy-seekproxy-time">time</label>
+                                        <label for="dynamic-proxy-seekproxy-time">IP 时长(分钟)</label>
                                         <input type="number" id="dynamic-proxy-seekproxy-time" name="seekproxy_time" value="5" min="1">
                                     </div>
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
-                                        <label for="dynamic-proxy-seekproxy-state">state</label>
-                                        <input type="text" id="dynamic-proxy-seekproxy-state" name="seekproxy_state" placeholder="可选">
+                                        <label for="dynamic-proxy-seekproxy-country">国家代码</label>
+                                        <input type="text" id="dynamic-proxy-seekproxy-country" name="seekproxy_country" value="US" placeholder="例如 US">
+                                        <small style="color: var(--text-muted);">可直接输入国家代码；也可使用下方搜索/缓存列表辅助选择。</small>
                                     </div>
                                     <div class="form-group">
-                                        <label for="dynamic-proxy-seekproxy-city">city</label>
-                                        <input type="text" id="dynamic-proxy-seekproxy-city" name="seekproxy_city" placeholder="可选">
+                                        <label for="dynamic-proxy-seekproxy-country-search">国家搜索</label>
+                                        <input type="text" id="dynamic-proxy-seekproxy-country-search" placeholder="搜索国家代码或名称，例如 US / 美国">
+                                        <small style="color: var(--text-muted);">留空则保持当前国家代码。</small>
                                     </div>
                                 </div>
-                                <small style="color: var(--text-muted);">SeekProxy 将按文档拼接接口：<code>/api/get-ips?trade_no=...&key=...&auth_type=...&ip_count=...&format=1&break_type=...&time=...</code></small>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="dynamic-proxy-seekproxy-country-options">国家候选</label>
+                                        <select id="dynamic-proxy-seekproxy-country-options" size="6" style="margin-top:6px;"></select>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="dynamic-proxy-seekproxy-state-search">州/省</label>
+                                        <input type="text" id="dynamic-proxy-seekproxy-state-search" placeholder="输入关键词搜索州/省；留空表示随机">
+                                        <select id="dynamic-proxy-seekproxy-state-options" size="6" style="margin-top:6px;"></select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="dynamic-proxy-seekproxy-city-search">城市</label>
+                                        <input type="text" id="dynamic-proxy-seekproxy-city-search" placeholder="输入关键词搜索城市；留空表示随机">
+                                        <select id="dynamic-proxy-seekproxy-city-options" size="6" style="margin-top:6px;"></select>
+                                    </div>
+                                </div>
+                                <div class="form-row" id="dynamic-proxy-seekproxy-auth1-group" style="display:none;">
+                                    <div class="form-group">
+                                        <label for="dynamic-proxy-seekproxy-protocol">代理协议</label>
+                                        <select id="dynamic-proxy-seekproxy-protocol" name="seekproxy_protocol">
+                                            <option value="0">HTTP</option>
+                                            <option value="2">SOCKS5</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="dynamic-proxy-seekproxy-pattern">返回格式</label>
+                                        <select id="dynamic-proxy-seekproxy-pattern" name="seekproxy_pattern">
+                                            <option value="0">地址:端口:账号:密码</option>
+                                            <option value="1">账号:密码@地址:端口</option>
+                                            <option value="2">地址|端口|账号|密码</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="dynamic-proxy-seekproxy-valid-code">时效编码</label>
+                                        <select id="dynamic-proxy-seekproxy-valid-code" name="seekproxy_valid_code">
+                                            <option value="0">0 - IP粘性5-30分钟</option>
+                                            <option value="2">2 - IP粘性1-6小时</option>
+                                            <option value="1">1 - 每次请求更换IP</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <input type="hidden" id="dynamic-proxy-seekproxy-state" name="seekproxy_state" value="">
+                                <input type="hidden" id="dynamic-proxy-seekproxy-city" name="seekproxy_city" value="">
+                                <small style="color: var(--text-muted);">SeekProxy 将按文档拼接接口：<code>/api/get-ips?trade_no=...&key=...&auth_type=...&ip_count=...&country=...&state=...&city=...&format=1&break_type=...&time=...</code>。州/省、城市留空则随机。</small>
                             </div>
                             <div class="form-row">
                                 <div class="form-group" id="dynamic-proxy-api-key-group">
@@ -224,6 +282,45 @@
                             <div class="form-actions">
                                 <button type="submit" class="btn btn-primary">💾 保存设置</button>
                                 <button type="button" class="btn btn-secondary" id="test-dynamic-proxy-btn">🔌 测试动态代理</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top: var(--spacing-lg);">
+                    <div class="card-header">
+                        <h3>任务代理来源策略</h3>
+                        <span class="hint">明确指定补录、批量任务优先使用哪种代理来源</span>
+                    </div>
+                    <div class="card-body">
+                        <form id="proxy-preference-form">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="proxy-preference-mode">代理来源</label>
+                                    <select id="proxy-preference-mode" name="preference_mode">
+                                        <option value="auto">自动</option>
+                                        <option value="dynamic">动态代理</option>
+                                        <option value="fixed">固定代理</option>
+                                        <option value="pool">代理池</option>
+                                        <option value="direct">直连</option>
+                                    </select>
+                                    <small class="hint">自动：动态代理 > 指定固定代理 > 代理池 > 静态代理。直连：任务不使用代理。</small>
+                                </div>
+                                <div class="form-group" id="proxy-preferred-fixed-group" style="display:none;">
+                                    <label for="proxy-preferred-fixed-id">指定固定代理</label>
+                                    <select id="proxy-preferred-fixed-id" name="preferred_fixed_id">
+                                        <option value="0">请选择固定代理</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="proxy-connect-retry-count">代理不可达重试次数</label>
+                                    <input type="number" id="proxy-connect-retry-count" name="connect_retry_count" min="1" max="10" value="3">
+                                    <small class="hint">当命中的代理来源不可达时，按此次数重试；失败后直接报错，不降级直连。</small>
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">💾 保存任务代理策略</button>
+                                <button type="button" class="btn btn-secondary" id="test-proxy-preference-btn">🔌 测试当前策略代理</button>
                             </div>
                         </form>
                     </div>

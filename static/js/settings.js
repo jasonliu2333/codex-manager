@@ -39,6 +39,7 @@ const elements = {
     // 动态代理设置
     dynamicProxyForm: document.getElementById('dynamic-proxy-form'),
     proxyPreferenceForm: document.getElementById('proxy-preference-form'),
+    testProxyPreferenceBtn: document.getElementById('test-proxy-preference-btn'),
     proxyOperationSettingsForm: document.getElementById('proxy-operation-settings-form'),
     testDynamicProxyBtn: document.getElementById('test-dynamic-proxy-btn'),
     // CPA 服务管理
@@ -84,6 +85,8 @@ let selectedServiceIds = new Set();
 let herosmsCountries = [];
 let smsInspectorState = { topCountries: [], operators: [], quotes: [] };
 let dynamicProxyProfiles = {};
+let seekproxyGeoCache = { countries: [], states: {}, cities: {} };
+let lastDynamicProxyProfileKey = null;
 const smsProviderUiConfig = {
     herosms: {
         label: 'HeroSMS',
@@ -316,9 +319,25 @@ function initEventListeners() {
     if (elements.proxyPreferenceForm) {
         elements.proxyPreferenceForm.addEventListener('submit', handleSaveProxyPreference);
     }
+    if (elements.testProxyPreferenceBtn) {
+        elements.testProxyPreferenceBtn.addEventListener('click', handleTestProxyPreference);
+    }
     document.getElementById('dynamic-proxy-mode')?.addEventListener('change', updateDynamicProxyModeUi);
     document.getElementById('dynamic-proxy-provider')?.addEventListener('change', updateDynamicProxyModeUi);
     document.getElementById('dynamic-proxy-seekproxy-auth-type')?.addEventListener('change', updateDynamicProxyModeUi);
+    document.getElementById('dynamic-proxy-seekproxy-country-search')?.addEventListener('input', handleSeekproxyCountrySearch);
+    document.getElementById('dynamic-proxy-seekproxy-country-options')?.addEventListener('change', handleSeekproxyCountrySelected);
+    document.getElementById('dynamic-proxy-seekproxy-country-options')?.addEventListener('click', handleSeekproxyCountrySelected);
+    document.getElementById('dynamic-proxy-seekproxy-country-options')?.addEventListener('dblclick', handleSeekproxyCountrySelected);
+    document.getElementById('dynamic-proxy-seekproxy-country')?.addEventListener('change', handleSeekproxyCountryCodeChanged);
+    document.getElementById('dynamic-proxy-seekproxy-state-search')?.addEventListener('input', handleSeekproxyStateSearch);
+    document.getElementById('dynamic-proxy-seekproxy-state-options')?.addEventListener('change', handleSeekproxyStateSelected);
+    document.getElementById('dynamic-proxy-seekproxy-state-options')?.addEventListener('click', handleSeekproxyStateSelected);
+    document.getElementById('dynamic-proxy-seekproxy-state-options')?.addEventListener('dblclick', handleSeekproxyStateSelected);
+    document.getElementById('dynamic-proxy-seekproxy-city-search')?.addEventListener('input', handleSeekproxyCitySearch);
+    document.getElementById('dynamic-proxy-seekproxy-city-options')?.addEventListener('change', handleSeekproxyCitySelected);
+    document.getElementById('dynamic-proxy-seekproxy-city-options')?.addEventListener('click', handleSeekproxyCitySelected);
+    document.getElementById('dynamic-proxy-seekproxy-city-options')?.addEventListener('dblclick', handleSeekproxyCitySelected);
     document.getElementById('proxy-preference-mode')?.addEventListener('change', updateProxyPreferenceUi);
     if (elements.testDynamicProxyBtn) {
         elements.testDynamicProxyBtn.addEventListener('click', handleTestDynamicProxy);
@@ -441,7 +460,7 @@ async function loadSettings() {
         const data = await api.get('/settings');
 
         // 动态代理设置
-        dynamicProxyProfiles = data.proxy?.profiles || {};
+        dynamicProxyProfiles = data.proxy?.dynamic_profiles || data.proxy?.profiles || {};
         document.getElementById('dynamic-proxy-enabled').checked = data.proxy?.dynamic_enabled || false;
         document.getElementById('dynamic-proxy-mode').value = data.proxy?.dynamic_mode || 'api';
         document.getElementById('dynamic-proxy-provider').value = data.proxy?.dynamic_provider || 'generic';
@@ -498,6 +517,8 @@ async function loadSettings() {
             preferredFixedId.dataset.preferredValue = String(data.proxy?.preferred_fixed_id || 0);
             preferredFixedId.value = String(data.proxy?.preferred_fixed_id || 0);
         }
+        const connectRetryCount = document.getElementById('proxy-connect-retry-count');
+        if (connectRetryCount) connectRetryCount.value = data.proxy?.connect_retry_count || 3;
         const diagSource = document.getElementById('proxy-diagnostics-source');
         const diagDynamicKey = document.getElementById('proxy-diagnostics-dynamic-key');
         const diagStaticPassword = document.getElementById('proxy-diagnostics-static-password');
@@ -1850,7 +1871,7 @@ function collectDynamicProxyPayload({ includeSecrets = true, includeOperationFla
         payload.port = 1456;
         payload.username = '';
         payload.password = null;
-        payload.country = document.getElementById('dynamic-proxy-country').value.trim() || 'US';
+        payload.country = document.getElementById('dynamic-proxy-seekproxy-country').value.trim() || 'US';
         return payload;
     }
 
@@ -1895,14 +1916,52 @@ async function handleSaveProxyPreference(e) {
     e.preventDefault();
     const mode = document.getElementById('proxy-preference-mode').value || 'auto';
     const preferredFixedId = parseInt(document.getElementById('proxy-preferred-fixed-id').value) || 0;
+    const connectRetryCount = parseInt(document.getElementById('proxy-connect-retry-count').value) || 3;
     try {
         await api.post('/settings/proxy/preference', {
             preference_mode: mode,
             preferred_fixed_id: preferredFixedId,
+            connect_retry_count: connectRetryCount,
         });
         toast.success('任务代理策略已保存');
     } catch (error) {
         toast.error('保存失败: ' + error.message);
+    }
+}
+
+async function handleTestProxyPreference() {
+    const btn = elements.testProxyPreferenceBtn;
+    if (!btn) return;
+    btn.disabled = true;
+    btn.textContent = '测试中...';
+    try {
+        const mode = document.getElementById('proxy-preference-mode').value || 'auto';
+        const preferredFixedId = parseInt(document.getElementById('proxy-preferred-fixed-id').value) || 0;
+        const connectRetryCount = parseInt(document.getElementById('proxy-connect-retry-count').value) || 3;
+        const result = await api.post('/settings/proxy/preference/test', {
+            preference_mode: mode,
+            preferred_fixed_id: preferredFixedId,
+            connect_retry_count: connectRetryCount,
+        });
+        const sourceText = result.proxy_source_name ? `来源: ${result.proxy_source_name}` : '来源: -';
+        const proxyText = result.proxy_used ? `
+代理: ${result.proxy_used}` : '';
+        const httpsText = result.https_openai_message
+            ? `
+OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.https_openai_message}`
+            : '';
+        const message = `${sourceText}${proxyText}
+${result.message || (result.success ? '代理可用' : '代理不可用')}${httpsText}`;
+        if (result.success) {
+            toast.success(message);
+        } else {
+            toast.error(message);
+        }
+    } catch (error) {
+        toast.error('测试失败: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔌 测试当前策略代理';
     }
 }
 
@@ -1956,6 +2015,31 @@ async function handleSaveDynamicProxy(e) {
                 dynamicPasswordStatus.textContent = hasPassword ? '已保存代理密码' : '未保存代理密码';
             }
         }
+
+        const profileKey = `${data.provider || 'generic'}::${data.mode || 'api'}`;
+        const currentProfile = dynamicProxyProfiles[profileKey] || {};
+        dynamicProxyProfiles[profileKey] = {
+            ...currentProfile,
+            ...data,
+            trade_no: data.seekproxy_trade_no ?? currentProfile.trade_no,
+            auth_type: data.seekproxy_auth_type ?? currentProfile.auth_type,
+            ip_count: data.seekproxy_ip_count ?? currentProfile.ip_count,
+            state: data.seekproxy_state ?? currentProfile.state,
+            city: data.seekproxy_city ?? currentProfile.city,
+            break_type: data.seekproxy_break_type ?? currentProfile.break_type,
+            time: data.seekproxy_time ?? currentProfile.time,
+            protocol: data.seekproxy_protocol ?? currentProfile.protocol,
+            pattern: data.seekproxy_pattern ?? currentProfile.pattern,
+            valid_code: data.seekproxy_valid_code ?? currentProfile.valid_code,
+            provider_appid: data.provider_appid ?? currentProfile.provider_appid,
+            api_url: data.api_url ?? currentProfile.api_url,
+            api_key_header: data.api_key_header ?? currentProfile.api_key_header,
+            result_field: data.result_field ?? currentProfile.result_field,
+            password: undefined,
+            api_key: undefined,
+            provider_appkey: undefined,
+            seekproxy_key: undefined
+        };
     } catch (error) {
         toast.error('保存失败: ' + error.message);
     }
@@ -1998,6 +2082,24 @@ OpenAI HTTPS: ${result.https_openai_ok ? '可用' : '不可用'} - ${result.http
 function updateDynamicProxyModeUi() {
     const mode = document.getElementById('dynamic-proxy-mode')?.value || 'api';
     const provider = document.getElementById('dynamic-proxy-provider')?.value || 'generic';
+    const currentProfileKey = getDynamicProfileKey();
+    if (lastDynamicProxyProfileKey && lastDynamicProxyProfileKey !== currentProfileKey) {
+        dynamicProxyProfiles[lastDynamicProxyProfileKey] = {
+            ...(dynamicProxyProfiles[lastDynamicProxyProfileKey] || {}),
+            ...collectDynamicProxyPayload({ includeSecrets: false, includeOperationFlags: true }),
+            trade_no: document.getElementById('dynamic-proxy-seekproxy-trade-no')?.value?.trim() || dynamicProxyProfiles[lastDynamicProxyProfileKey]?.trade_no || '',
+            auth_type: parseInt(document.getElementById('dynamic-proxy-seekproxy-auth-type')?.value || dynamicProxyProfiles[lastDynamicProxyProfileKey]?.auth_type || '2', 10) || 2,
+            ip_count: parseInt(document.getElementById('dynamic-proxy-seekproxy-ip-count')?.value || dynamicProxyProfiles[lastDynamicProxyProfileKey]?.ip_count || '1', 10) || 1,
+            state: document.getElementById('dynamic-proxy-seekproxy-state')?.value?.trim() || '',
+            city: document.getElementById('dynamic-proxy-seekproxy-city')?.value?.trim() || '',
+            break_type: parseInt(document.getElementById('dynamic-proxy-seekproxy-break-type')?.value || dynamicProxyProfiles[lastDynamicProxyProfileKey]?.break_type || '1', 10) || 1,
+            time: parseInt(document.getElementById('dynamic-proxy-seekproxy-time')?.value || dynamicProxyProfiles[lastDynamicProxyProfileKey]?.time || '5', 10) || 5,
+            protocol: parseInt(document.getElementById('dynamic-proxy-seekproxy-protocol')?.value || dynamicProxyProfiles[lastDynamicProxyProfileKey]?.protocol || '0', 10) || 0,
+            pattern: parseInt(document.getElementById('dynamic-proxy-seekproxy-pattern')?.value || dynamicProxyProfiles[lastDynamicProxyProfileKey]?.pattern || '0', 10) || 0,
+            valid_code: parseInt(document.getElementById('dynamic-proxy-seekproxy-valid-code')?.value || dynamicProxyProfiles[lastDynamicProxyProfileKey]?.valid_code || '0', 10) || 0,
+        };
+    }
+    lastDynamicProxyProfileKey = currentProfileKey;
     const summary = document.getElementById('dynamic-proxy-platform-summary');
     const summaryMap = {
         haiwaidaili: {
@@ -2035,7 +2137,11 @@ function updateDynamicProxyModeUi() {
     if (haiwaidailiGroup) haiwaidailiGroup.style.display = mode === 'api' && provider === 'haiwaidaili' ? '' : 'none';
     const accountGroup = document.getElementById('dynamic-proxy-account-mode-group');
     if (accountGroup) accountGroup.style.display = mode === 'account' ? '' : 'none';
-    applyDynamicProfile(dynamicProxyProfiles[getDynamicProfileKey()] || {});
+    applyDynamicProfile(normalizeSeekproxyProfileSnapshot(dynamicProxyProfiles[currentProfileKey] || {}));
+    if (mode === 'api' && provider === 'seekproxy') {
+        handleSeekproxyCountrySearch().catch(() => {});
+        handleSeekproxyCountryCodeChanged().catch(() => {});
+    }
 }
 
 function updateProxyPreferenceUi() {
@@ -2050,8 +2156,247 @@ function getDynamicProfileKey() {
     return `${provider}::${mode}`;
 }
 
-function applyDynamicProfile(profile) {
+function setSelectOptions(selectEl, items, valueKey = 'code', labelBuilder = (item) => item.name || item.code || '') {
+    if (!selectEl) return;
+    const rows = Array.isArray(items) ? items : [];
+    selectEl.innerHTML = `<option value="">留空随机</option>` + rows.map(item => {
+        const value = item?.[valueKey] ?? item?.code ?? item?.name ?? '';
+        const label = labelBuilder(item);
+        return `<option value="${escapeHtml(String(value))}">${escapeHtml(String(label || value))}</option>`;
+    }).join('');
+}
+
+function renderSeekproxyCountryCandidates(items) {
+    const input = document.getElementById('dynamic-proxy-seekproxy-country-search');
+    if (!input) return;
+    const listId = 'dynamic-proxy-seekproxy-country-list';
+    let list = document.getElementById(listId);
+    if (!list) {
+        list = document.createElement('datalist');
+        list.id = listId;
+        document.body.appendChild(list);
+        input.setAttribute('list', listId);
+    }
+    const rows = Array.isArray(items) ? items : [];
+    list.innerHTML = rows.map(item => {
+        const code = String(item.code || '').toUpperCase();
+        const name = String(item.name || '');
+        return `<option value="${escapeHtml(code)}">${escapeHtml(name ? `${code} - ${name}` : code)}</option>`;
+    }).join('');
+    setSelectOptions(
+        document.getElementById('dynamic-proxy-seekproxy-country-options'),
+        rows,
+        'code',
+        (item) => `${String(item.code || '').toUpperCase()} - ${item.name || ''}`
+    );
+}
+
+async function loadSeekproxyCountries(keyword = '') {
+    const result = await api.get(`/settings/proxy/seekproxy/countries?keyword=${encodeURIComponent(keyword)}`);
+    seekproxyGeoCache.countries = result.items || [];
+    return seekproxyGeoCache.countries;
+}
+
+async function loadSeekproxyStates(countryCode, keyword = '') {
+    if (!countryCode) {
+        seekproxyGeoCache.states[countryCode || ''] = [];
+        return [];
+    }
+    const result = await api.get(`/settings/proxy/seekproxy/states?country_code=${encodeURIComponent(countryCode)}&keyword=${encodeURIComponent(keyword)}`);
+    seekproxyGeoCache.states[countryCode.toUpperCase()] = result.items || [];
+    return result.items || [];
+}
+
+async function loadSeekproxyCities(countryCode, state, keyword = '') {
+    if (!countryCode || !state) {
+        return [];
+    }
+    const result = await api.get(`/settings/proxy/seekproxy/cities?country_code=${encodeURIComponent(countryCode)}&state=${encodeURIComponent(state)}&keyword=${encodeURIComponent(keyword)}`);
+    const cacheKey = `${countryCode.toUpperCase()}::${state}`;
+    seekproxyGeoCache.cities[cacheKey] = result.items || [];
+    return result.items || [];
+}
+
+async function handleSeekproxyCountrySearch() {
+    try {
+        const keyword = document.getElementById('dynamic-proxy-seekproxy-country-search')?.value?.trim() || '';
+        const items = await loadSeekproxyCountries(keyword);
+        renderSeekproxyCountryCandidates(items);
+        const stateOptions = document.getElementById('dynamic-proxy-seekproxy-state-options');
+        const cityOptions = document.getElementById('dynamic-proxy-seekproxy-city-options');
+        setSelectOptions(stateOptions, []);
+        setSelectOptions(cityOptions, []);
+        if (items.length === 1) {
+            document.getElementById('dynamic-proxy-seekproxy-country').value = items[0].code || '';
+            await handleSeekproxyCountryCodeChanged();
+        }
+    } catch (error) {
+        toast.error('加载 SeekProxy 国家失败: ' + error.message);
+    }
+}
+
+async function handleSeekproxyCountrySelected() {
+    const optionValue = document.getElementById('dynamic-proxy-seekproxy-country-options')?.value || '';
+    if (!optionValue) return;
+    const countryInput = document.getElementById('dynamic-proxy-seekproxy-country');
+    const searchInput = document.getElementById('dynamic-proxy-seekproxy-country-search');
+    if (countryInput) countryInput.value = optionValue.toUpperCase();
+    if (searchInput) {
+        const matched = (seekproxyGeoCache.countries || []).find(item => String(item.code || '').toUpperCase() === optionValue.toUpperCase());
+        searchInput.value = matched ? `${matched.code} - ${matched.name}` : optionValue.toUpperCase();
+    }
+    await handleSeekproxyCountryCodeChanged();
+}
+
+async function handleSeekproxyCountryCodeChanged() {
+    const countryInput = document.getElementById('dynamic-proxy-seekproxy-country');
+    const searchInput = document.getElementById('dynamic-proxy-seekproxy-country-search');
+    let countryCode = countryInput?.value?.trim()?.toUpperCase() || '';
+    if (!countryCode && searchInput?.value?.trim()) {
+        const keyword = searchInput.value.trim().toLowerCase();
+        const matched = (seekproxyGeoCache.countries || []).find(item => {
+            const code = String(item.code || '').toLowerCase();
+            const name = String(item.name || '').toLowerCase();
+            return keyword === code || keyword === name || `${code} - ${name}` === keyword;
+        });
+        if (matched) {
+            countryCode = String(matched.code || '').toUpperCase();
+            if (countryInput) countryInput.value = countryCode;
+        }
+    }
+    const stateInput = document.getElementById('dynamic-proxy-seekproxy-state');
+    const cityInput = document.getElementById('dynamic-proxy-seekproxy-city');
+    if (stateInput) stateInput.value = '';
+    if (cityInput) cityInput.value = '';
+    document.getElementById('dynamic-proxy-seekproxy-state-search').value = '';
+    document.getElementById('dynamic-proxy-seekproxy-city-search').value = '';
+    try {
+        const items = await loadSeekproxyStates(countryCode, '');
+        const searchInput = document.getElementById('dynamic-proxy-seekproxy-country-search');
+        if (searchInput) {
+            const matched = (seekproxyGeoCache.countries || []).find(item => String(item.code || '').toUpperCase() === countryCode);
+            searchInput.value = matched ? `${matched.code} - ${matched.name}` : countryCode;
+        }
+        setSelectOptions(
+            document.getElementById('dynamic-proxy-seekproxy-state-options'),
+            items,
+            'name',
+            (item) => `${item.name || item.code}${item.code && item.code !== item.name ? ` (${item.code})` : ''}`
+        );
+        const stateInput = document.getElementById('dynamic-proxy-seekproxy-state');
+        const stateOptions = document.getElementById('dynamic-proxy-seekproxy-state-options');
+        if (stateOptions && stateInput?.value) {
+            stateOptions.value = stateInput.value;
+        }
+        setSelectOptions(document.getElementById('dynamic-proxy-seekproxy-city-options'), []);
+    } catch (error) {
+        toast.error('加载 SeekProxy 州省失败: ' + error.message);
+    }
+}
+
+function normalizeSeekproxyProfileSnapshot(profile) {
     const p = profile || {};
+    return {
+        ...p,
+        trade_no: p.trade_no ?? p.seekproxy_trade_no ?? '',
+        auth_type: p.auth_type ?? p.seekproxy_auth_type ?? 2,
+        ip_count: p.ip_count ?? p.seekproxy_ip_count ?? 1,
+        state: p.state ?? p.seekproxy_state ?? '',
+        city: p.city ?? p.seekproxy_city ?? '',
+        break_type: p.break_type ?? p.seekproxy_break_type ?? 1,
+        time: p.time ?? p.seekproxy_time ?? 5,
+        protocol: p.protocol ?? p.seekproxy_protocol ?? 0,
+        pattern: p.pattern ?? p.seekproxy_pattern ?? 0,
+        valid_code: p.valid_code ?? p.seekproxy_valid_code ?? 0,
+    };
+}
+
+async function handleSeekproxyStateSearch() {
+    const countryCode = document.getElementById('dynamic-proxy-seekproxy-country')?.value?.trim()?.toUpperCase() || '';
+    const keyword = document.getElementById('dynamic-proxy-seekproxy-state-search')?.value?.trim() || '';
+    try {
+        const items = await loadSeekproxyStates(countryCode, keyword);
+        setSelectOptions(
+            document.getElementById('dynamic-proxy-seekproxy-state-options'),
+            items,
+            'name',
+            (item) => `${item.name || item.code}${item.code && item.code !== item.name ? ` (${item.code})` : ''}`
+        );
+        const stateInput = document.getElementById('dynamic-proxy-seekproxy-state');
+        const stateSearch = document.getElementById('dynamic-proxy-seekproxy-state-search');
+        if (stateInput && keyword && !stateInput.value && items.length === 1) {
+            stateInput.value = items[0].name || items[0].code || '';
+            if (stateSearch) stateSearch.value = stateInput.value;
+        }
+        if (items.length === 1 && stateInput) {
+            stateInput.value = items[0].name || items[0].code || '';
+            if (stateSearch) stateSearch.value = stateInput.value;
+        }
+    } catch (error) {
+        toast.error('搜索 SeekProxy 州省失败: ' + error.message);
+    }
+}
+
+async function handleSeekproxyStateSelected() {
+    const stateValue = document.getElementById('dynamic-proxy-seekproxy-state-options')?.value || '';
+    const stateInput = document.getElementById('dynamic-proxy-seekproxy-state');
+    const cityInput = document.getElementById('dynamic-proxy-seekproxy-city');
+    if (stateInput) stateInput.value = stateValue;
+    const stateSearch = document.getElementById('dynamic-proxy-seekproxy-state-search');
+    if (stateSearch) stateSearch.value = stateValue;
+    if (cityInput) cityInput.value = '';
+    document.getElementById('dynamic-proxy-seekproxy-city-search').value = '';
+    const countryCode = document.getElementById('dynamic-proxy-seekproxy-country')?.value?.trim()?.toUpperCase() || '';
+    try {
+        const items = await loadSeekproxyCities(countryCode, stateValue, '');
+        setSelectOptions(
+            document.getElementById('dynamic-proxy-seekproxy-city-options'),
+            items,
+            'name',
+            (item) => `${item.name || item.code}${item.code && item.code !== item.name ? ` (${item.code})` : ''}`
+        );
+        const cityOptions = document.getElementById('dynamic-proxy-seekproxy-city-options');
+        if (cityOptions && cityInput?.value) {
+            cityOptions.value = cityInput.value;
+        }
+    } catch (error) {
+        toast.error('加载 SeekProxy 城市失败: ' + error.message);
+    }
+}
+
+async function handleSeekproxyCitySearch() {
+    const countryCode = document.getElementById('dynamic-proxy-seekproxy-country')?.value?.trim()?.toUpperCase() || '';
+    const stateValue = document.getElementById('dynamic-proxy-seekproxy-state')?.value?.trim() || '';
+    const keyword = document.getElementById('dynamic-proxy-seekproxy-city-search')?.value?.trim() || '';
+    try {
+        const items = await loadSeekproxyCities(countryCode, stateValue, keyword);
+        setSelectOptions(
+            document.getElementById('dynamic-proxy-seekproxy-city-options'),
+            items,
+            'name',
+            (item) => `${item.name || item.code}${item.code && item.code !== item.name ? ` (${item.code})` : ''}`
+        );
+        const cityInput = document.getElementById('dynamic-proxy-seekproxy-city');
+        const citySearch = document.getElementById('dynamic-proxy-seekproxy-city-search');
+        if (items.length === 1 && cityInput) {
+            cityInput.value = items[0].name || items[0].code || '';
+            if (citySearch) citySearch.value = cityInput.value;
+        }
+    } catch (error) {
+        toast.error('搜索 SeekProxy 城市失败: ' + error.message);
+    }
+}
+
+function handleSeekproxyCitySelected() {
+    const cityValue = document.getElementById('dynamic-proxy-seekproxy-city-options')?.value || '';
+    const cityInput = document.getElementById('dynamic-proxy-seekproxy-city');
+    if (cityInput) cityInput.value = cityValue;
+    const citySearch = document.getElementById('dynamic-proxy-seekproxy-city-search');
+    if (citySearch) citySearch.value = cityValue;
+}
+
+function applyDynamicProfile(profile) {
+    const p = normalizeSeekproxyProfileSnapshot(profile || {});
     if (document.getElementById('dynamic-proxy-api-url')) document.getElementById('dynamic-proxy-api-url').value = p.api_url || '';
     if (document.getElementById('dynamic-proxy-api-key-header')) document.getElementById('dynamic-proxy-api-key-header').value = p.api_key_header || 'X-API-Key';
     if (document.getElementById('dynamic-proxy-result-field')) document.getElementById('dynamic-proxy-result-field').value = p.result_field || '';
@@ -2066,11 +2411,19 @@ function applyDynamicProfile(profile) {
     if (document.getElementById('dynamic-proxy-seekproxy-city')) document.getElementById('dynamic-proxy-seekproxy-city').value = p.city || '';
     if (document.getElementById('dynamic-proxy-seekproxy-break-type')) document.getElementById('dynamic-proxy-seekproxy-break-type').value = p.break_type || 1;
     if (document.getElementById('dynamic-proxy-seekproxy-time')) document.getElementById('dynamic-proxy-seekproxy-time').value = p.time || 5;
+    if (document.getElementById('dynamic-proxy-seekproxy-country')) document.getElementById('dynamic-proxy-seekproxy-country').value = p.country || 'US';
+    if (document.getElementById('dynamic-proxy-seekproxy-country-search')) document.getElementById('dynamic-proxy-seekproxy-country-search').value = p.country || '';
+    if (document.getElementById('dynamic-proxy-seekproxy-state-search')) document.getElementById('dynamic-proxy-seekproxy-state-search').value = p.state || '';
+    if (document.getElementById('dynamic-proxy-seekproxy-city-search')) document.getElementById('dynamic-proxy-seekproxy-city-search').value = p.city || '';
     if (document.getElementById('dynamic-proxy-scheme')) document.getElementById('dynamic-proxy-scheme').value = p.scheme || 'http';
     if (document.getElementById('dynamic-proxy-host')) document.getElementById('dynamic-proxy-host').value = p.host || 'proxy.haiwai-ip.com';
     if (document.getElementById('dynamic-proxy-port')) document.getElementById('dynamic-proxy-port').value = p.port || 1456;
     if (document.getElementById('dynamic-proxy-username')) document.getElementById('dynamic-proxy-username').value = p.username || '';
     if (document.getElementById('dynamic-proxy-country')) document.getElementById('dynamic-proxy-country').value = p.country || 'us';
+    const stateOptions = document.getElementById('dynamic-proxy-seekproxy-state-options');
+    const cityOptions = document.getElementById('dynamic-proxy-seekproxy-city-options');
+    if (stateOptions && p.state) stateOptions.value = p.state;
+    if (cityOptions && p.city) cityOptions.value = p.city;
 }
 
 // ============== Team Manager 服务管理 ==============
