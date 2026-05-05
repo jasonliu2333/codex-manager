@@ -2008,23 +2008,21 @@ async def get_phone_verification_stats(
         total_cost = db.query(func.coalesce(func.sum(filtered.c.charged_cost), 0.0)).scalar() or 0.0
         total_activation_cost = db.query(func.coalesce(func.sum(filtered.c.activation_cost), 0.0)).scalar() or 0.0
         grouped = db.query(
-            PhoneVerificationAttempt.sms_provider,
-            PhoneVerificationAttempt.country,
-            PhoneVerificationAttempt.country_key,
-            PhoneVerificationAttempt.provider_slot,
-            func.count(PhoneVerificationAttempt.id).label("attempts"),
-            func.sum(case((PhoneVerificationAttempt.success == True, 1), else_=0)).label("success_count"),
-            func.sum(case((PhoneVerificationAttempt.invalid == True, 1), else_=0)).label("invalid_count"),
-            func.avg(PhoneVerificationAttempt.charged_cost).label("avg_cost"),
-            func.avg(PhoneVerificationAttempt.provider_quote).label("avg_provider_quote"),
-            func.max(PhoneVerificationAttempt.provider_count).label("max_provider_count"),
-        ).filter(
-            PhoneVerificationAttempt.created_at >= since
+            filtered.c.sms_provider,
+            filtered.c.country,
+            filtered.c.country_key,
+            filtered.c.provider_slot,
+            func.count(filtered.c.id).label("attempts"),
+            func.sum(case((filtered.c.success == True, 1), else_=0)).label("success_count"),
+            func.sum(case((filtered.c.invalid == True, 1), else_=0)).label("invalid_count"),
+            func.avg(filtered.c.charged_cost).label("avg_cost"),
+            func.avg(filtered.c.provider_quote).label("avg_provider_quote"),
+            func.max(filtered.c.provider_count).label("max_provider_count"),
         ).group_by(
-            PhoneVerificationAttempt.sms_provider,
-            PhoneVerificationAttempt.country,
-            PhoneVerificationAttempt.country_key,
-            PhoneVerificationAttempt.provider_slot,
+            filtered.c.sms_provider,
+            filtered.c.country,
+            filtered.c.country_key,
+            filtered.c.provider_slot,
         ).order_by(desc("attempts"), desc("success_count")).limit(200).all()
         rows = []
         for row in grouped:

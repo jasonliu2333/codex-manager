@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,7 @@ from typing import Any, Optional
 
 from ...config.settings import get_settings, normalize_sms_provider_name, get_sms_provider_api_key_db_key, get_sms_provider_api_key_field
 from ...database import crud
-from ...database.session import get_db
+from ...database.session import get_db, get_session_manager
 from ..sms import SMSActivation, SMSProviderConfig, get_sms_provider
 
 
@@ -18,6 +19,29 @@ SMS_REUSE_POOL_KEY = "herosms.reuse_pool"
 SMS_ACTIVATION_WINDOW_SECONDS = 20 * 60
 SMS_PENDING_CANCEL_KEY = "sms.pending_cancel_pool"
 _REUSE_POOL_LOCK = threading.RLock()
+_PHONE_STATS_SCHEMA_LOCK = threading.RLock()
+_PHONE_STATS_SCHEMA_READY = False
+logger = logging.getLogger(__name__)
+
+
+def _ensure_phone_stats_schema() -> None:
+    """兜底确保手机统计表/列已迁移。
+
+    这层兜底是为了避免服务未完整重启或旧库未迁移时，统计写入被缺表/缺列静默吞掉。
+    """
+    global _PHONE_STATS_SCHEMA_READY
+    if _PHONE_STATS_SCHEMA_READY:
+        return
+    with _PHONE_STATS_SCHEMA_LOCK:
+        if _PHONE_STATS_SCHEMA_READY:
+            return
+        try:
+            manager = get_session_manager()
+            manager.create_tables()
+            manager.migrate_tables()
+            _PHONE_STATS_SCHEMA_READY = True
+        except Exception as exc:
+            logger.warning("初始化手机统计数据库结构失败: %s", exc)
 
 
 def _extract_account_identity(engine: Any) -> tuple[Optional[int], Optional[str]]:
@@ -35,7 +59,7 @@ def _create_phone_verification_record(
     engine: Any,
     *,
     cfg: SMSProviderConfig,
-    activation: SMSActivation,
+    activation: Optional[SMSActivation],
     provider_slot: Optional[str],
     provider_quote: Optional[float],
     provider_count: Optional[int],
@@ -45,6 +69,7 @@ def _create_phone_verification_record(
 ) -> Optional[int]:
     account_id, account_email = _extract_account_identity(engine)
     try:
+        _ensure_phone_stats_schema()
         with get_db() as db:
             record = crud.create_phone_verification_attempt(
                 db,
@@ -57,12 +82,15 @@ def _create_phone_verification_record(
                 service=cfg.service,
                 country=cfg.country if cfg.country and int(cfg.country) > 0 else None,
                 country_key=str(cfg.country_key or "").strip() or None,
-                operator=str(getattr(activation, "activation_operator", "") or "") or (str(cfg.operator or "") if hasattr(cfg, "operator") else None),
-                phone_number=activation.phone_number,
-                activation_id=str(activation.activation_id or ""),
+                operator=(
+                    str(getattr(activation, "activation_operator", "") or "")
+                    or (str(cfg.operator or "") if hasattr(cfg, "operator") else None)
+                ),
+                phone_number=getattr(activation, "phone_number", None),
+                activation_id=str(getattr(activation, "activation_id", "") or ""),
                 requested_max_price=cfg.max_price,
                 requested_min_price=cfg.min_price,
-                activation_cost=activation.activation_cost,
+                activation_cost=getattr(activation, "activation_cost", None),
                 charged_cost=charged_cost,
                 original_activation_cost=original_activation_cost,
                 reused=reused,
@@ -71,7 +99,11 @@ def _create_phone_verification_record(
                 invalid=False,
             )
             return int(record.id)
-    except Exception:
+    except Exception as exc:
+        try:
+            engine._log(f"add-phone: 写入手机验证统计失败: {exc}", "warning")
+        except Exception:
+            logger.warning("写入手机验证统计失败: %s", exc)
         return None
 
 
@@ -90,15 +122,19 @@ def _update_phone_verification_record(attempt_id: Optional[int], **updates) -> N
             updates.setdefault("result_status", "invalid")
         updates.setdefault("failure_type", _classify_phone_failure_type(code, str(updates.get("error_message") or "")))
     try:
+        _ensure_phone_stats_schema()
         with get_db() as db:
             crud.update_phone_verification_attempt(db, int(attempt_id), **updates)
-    except Exception:
+    except Exception as exc:
+        logger.warning("更新手机验证统计失败 attempt_id=%s: %s", attempt_id, exc)
         return
 
 
 def _extract_error_code_from_text(error_text: str) -> Optional[str]:
     text = (error_text or "").lower()
     markers = [
+        "sms_code_timeout",
+        "等待短信验证码超时",
         "phone_max_usage_exceeded",
         "phone_number_in_use",
         "phone_number_blocked",
@@ -194,6 +230,7 @@ def _record_phone_reputation(
     if not phone_number:
         return
     try:
+        _ensure_phone_stats_schema()
         with get_db() as db:
             crud.upsert_phone_number_reputation(
                 db,
@@ -210,7 +247,8 @@ def _record_phone_reputation(
                 activation_cost=activation_cost,
                 result_label=result_label,
             )
-    except Exception:
+    except Exception as exc:
+        logger.warning("更新手机号码信誉失败 phone=%s: %s", phone_number, exc)
         return
 
 
@@ -458,6 +496,24 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                             last_request_error = exc
                             err_text = str(exc)
                             provider_slot_on_fail = provider_choice.get("provider_ids") or None
+                            request_attempt_id = _create_phone_verification_record(
+                                engine,
+                                cfg=cfg,
+                                activation=None,
+                                provider_slot=provider_slot_on_fail,
+                                provider_quote=provider_choice.get("price"),
+                                provider_count=provider_choice.get("count"),
+                                reused=False,
+                                charged_cost=None,
+                            )
+                            _update_phone_verification_record(
+                                request_attempt_id,
+                                invalid=True,
+                                result_status="provider_failed",
+                                failure_stage="request_number",
+                                error_code=_extract_error_code_from_text(err_text) or "request_number_failed",
+                                error_message=err_text[:1000],
+                            )
                             provider_rotation_index, provider_forced_price_floor = _register_provider_failure_and_maybe_rotate(
                                 engine,
                                 provider_failover_enabled=provider_failover_enabled,
@@ -686,10 +742,11 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             last_error = str(exc)
             error_code = _extract_error_code_from_text(last_error) or "runtime_error"
             engine._log(f"add-phone: 手机验证失败: {exc}", "error")
+            failure_stage = "wait_sms_code" if error_code == "sms_code_timeout" else "exception"
             _update_phone_verification_record(
                 verification_attempt_id,
                 invalid=True,
-                failure_stage="exception",
+                failure_stage=failure_stage,
                 error_code=error_code,
                 error_message=last_error[:1000],
             )
