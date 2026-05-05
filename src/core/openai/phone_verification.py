@@ -347,6 +347,18 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                         except Exception as exc:
                             last_request_error = exc
                             err_text = str(exc)
+                            provider_slot_on_fail = provider_choice.get("provider_ids") or None
+                            provider_rotation_index, provider_forced_price_floor = _register_provider_failure_and_maybe_rotate(
+                                engine,
+                                provider_failover_enabled=provider_failover_enabled,
+                                provider_slot_used=provider_slot_on_fail,
+                                provider_failure_counts=provider_failure_counts,
+                                provider_fail_threshold=provider_fail_threshold,
+                                provider_candidates=provider_candidates,
+                                provider_rotation_index=provider_rotation_index,
+                                provider_forced_price_floor=provider_forced_price_floor,
+                                max_price_cap=max_price_cap,
+                            )
                             if "NO_NUMBERS" in err_text and provider_try_index < len(provider_try_plan):
                                 engine._log(f"add-phone: 当前 provider 无号，自动切换下一个 provider 重试: {err_text}", "warning")
                                 continue
@@ -522,23 +534,17 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 error_code=_extract_error_code_from_text(last_error) or "runtime_error",
                 error_message=last_error[:1000],
             )
-            if provider_failover_enabled and provider_slot_used and activation:
-                provider_failure_counts[provider_slot_used] = int(provider_failure_counts.get(provider_slot_used, 0) or 0) + 1
-                failure_count = provider_failure_counts[provider_slot_used]
-                engine._log(f"add-phone: providerIds={provider_slot_used} 已连续失败 {failure_count}/{provider_fail_threshold}", "warning")
-                if failure_count >= provider_fail_threshold:
-                    rotation = _advance_provider_failover(
-                        engine,
-                        provider_candidates,
-                        provider_slot_used,
-                        provider_rotation_index,
-                        provider_forced_price_floor,
-                        cfg.max_price,
-                    )
-                    if rotation:
-                        provider_rotation_index = rotation["next_index"]
-                        provider_forced_price_floor = rotation["next_price"]
-                        provider_failure_counts[provider_slot_used] = 0
+            provider_rotation_index, provider_forced_price_floor = _register_provider_failure_and_maybe_rotate(
+                engine,
+                provider_failover_enabled=provider_failover_enabled,
+                provider_slot_used=provider_slot_used,
+                provider_failure_counts=provider_failure_counts,
+                provider_fail_threshold=provider_fail_threshold,
+                provider_candidates=provider_candidates,
+                provider_rotation_index=provider_rotation_index,
+                provider_forced_price_floor=provider_forced_price_floor,
+                max_price_cap=max_price_cap,
+            )
             if activation:
                 if reused_activation:
                     _release_failed_activation(client, activation.activation_id, last_error)
@@ -895,6 +901,39 @@ def _advance_provider_failover(
         "next_index": max(current_rotation_index, next_index),
         "next_price": forced_floor,
     }
+
+
+def _register_provider_failure_and_maybe_rotate(
+    engine: Any,
+    *,
+    provider_failover_enabled: bool,
+    provider_slot_used: Optional[str],
+    provider_failure_counts: dict[str, int],
+    provider_fail_threshold: int,
+    provider_candidates: list[dict],
+    provider_rotation_index: int,
+    provider_forced_price_floor: Optional[float],
+    max_price_cap: Optional[float],
+) -> tuple[int, Optional[float]]:
+    if not provider_failover_enabled or not provider_slot_used:
+        return provider_rotation_index, provider_forced_price_floor
+    provider_failure_counts[provider_slot_used] = int(provider_failure_counts.get(provider_slot_used, 0) or 0) + 1
+    failure_count = provider_failure_counts[provider_slot_used]
+    engine._log(f"add-phone: providerIds={provider_slot_used} 已连续失败 {failure_count}/{provider_fail_threshold}", "warning")
+    if failure_count < provider_fail_threshold:
+        return provider_rotation_index, provider_forced_price_floor
+    rotation = _advance_provider_failover(
+        engine,
+        provider_candidates,
+        provider_slot_used,
+        provider_rotation_index,
+        provider_forced_price_floor,
+        max_price_cap,
+    )
+    provider_failure_counts[provider_slot_used] = 0
+    if not rotation:
+        return provider_rotation_index, provider_forced_price_floor
+    return rotation["next_index"], rotation["next_price"]
 
 
 def _request_number_with_provider_options(
