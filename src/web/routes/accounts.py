@@ -19,7 +19,6 @@ from sqlalchemy import or_
 
 from ...config.constants import AccountStatus
 from ...config.settings import get_settings
-from ...core.dynamic_proxy import fetch_dynamic_proxy
 from ...core.openai.token_refresh import refresh_account_token as do_refresh
 from ...core.openai.token_refresh import validate_account_token as do_validate
 from ...core.register import RegistrationEngine
@@ -27,7 +26,7 @@ from ...core.upload.cpa_upload import generate_token_json, batch_upload_to_cpa, 
 from ...core.upload.team_manager_upload import upload_to_team_manager, batch_upload_to_team_manager
 from ...core.upload.sub2api_upload import batch_upload_to_sub2api, upload_to_sub2api
 
-from ...core.dynamic_proxy import get_proxy_url_for_task
+from ...core.dynamic_proxy import get_proxy_url_for_task, probe_proxy_http_basic, probe_proxy_https_openai
 from ...database import crud
 from ...database.models import Account, EmailService as EmailServiceModel, RegistrationTask
 from ...database.session import get_db
@@ -57,29 +56,136 @@ def _extra_data_bool_filter(column, key: str, value: bool):
     )
 
 
-def _get_proxy(request_proxy: Optional[str] = None, purpose: str = "general") -> Optional[str]:
-    """获取代理 URL。
+def _mask_proxy_url(proxy_url: Optional[str]) -> str:
+    text = str(proxy_url or "").strip()
+    if not text:
+        return "-"
+    if "@" not in text:
+        return text
+    scheme, rest = text.split("://", 1) if "://" in text else ("http", text)
+    auth, host = rest.rsplit("@", 1)
+    if ":" in auth:
+        user = auth.split(":", 1)[0]
+        return f"{scheme}://{user}:***@{host}"
+    return f"{scheme}://***@{host}"
 
-    优先级：请求指定代理 >（按操作开关判断）代理池 > 动态代理 > 静态代理。
-    purpose 支持: general / refresh / validate
-    """
+
+def _build_proxy_selection_result(
+    proxy_url: Optional[str],
+    source: str,
+    source_name: str,
+    *,
+    source_detail: str = "",
+    strict_selected: bool = False,
+) -> dict:
+    return {
+        "proxy_url": proxy_url,
+        "source": source,
+        "source_name": source_name,
+        "source_detail": source_detail,
+        "strict_selected": strict_selected,
+    }
+
+
+def _select_proxy(request_proxy: Optional[str] = None, purpose: str = "general") -> dict:
+    """按统一策略选择代理，并返回来源元信息。"""
     if request_proxy:
-        return request_proxy
+        return _build_proxy_selection_result(
+            request_proxy,
+            "request",
+            "请求指定代理",
+            source_detail="前端请求显式传入",
+            strict_selected=True,
+        )
 
     settings = get_settings()
     if purpose == "refresh" and not bool(getattr(settings, "proxy_refresh_use_proxy", False)):
-        return None
+        return _build_proxy_selection_result(None, "direct", "直连", source_detail="刷新任务已关闭代理")
     if purpose == "validate" and not bool(getattr(settings, "proxy_validate_use_proxy", False)):
-        return None
+        return _build_proxy_selection_result(None, "direct", "直连", source_detail="验证任务已关闭代理")
 
-    with get_db() as db:
-        proxy = crud.get_random_proxy(db)
-        if proxy:
-            return proxy.proxy_url
-    proxy_url = get_proxy_url_for_task()
-    if proxy_url:
-        return proxy_url
-    return settings.proxy_url
+    preference = str(getattr(settings, "proxy_preference_mode", "auto") or "auto").strip().lower()
+    preferred_fixed_id = int(getattr(settings, "proxy_preferred_fixed_id", 0) or 0)
+
+    def get_fixed_proxy() -> tuple[Optional[str], str]:
+        if preferred_fixed_id <= 0:
+            return None, "未指定固定代理"
+        try:
+            with get_db() as db:
+                proxy = crud.get_proxy_by_id(db, preferred_fixed_id)
+                if not proxy:
+                    return None, f"固定代理 #{preferred_fixed_id} 不存在"
+                if not proxy.enabled:
+                    return None, f"固定代理 #{preferred_fixed_id} 已禁用"
+                return proxy.proxy_url, f"固定代理 #{proxy.id} {proxy.name}"
+        except Exception as exc:
+            return None, f"读取固定代理失败: {exc}"
+
+    def get_pool_proxy() -> tuple[Optional[str], str]:
+        try:
+            with get_db() as db:
+                proxy = crud.get_random_proxy(db)
+                if proxy:
+                    return proxy.proxy_url, f"代理池命中 #{proxy.id} {proxy.name}"
+        except Exception as exc:
+            return None, f"读取代理池失败: {exc}"
+        return None, "代理池无可用代理"
+
+    dynamic_proxy = get_proxy_url_for_task() if settings.proxy_dynamic_enabled else None
+    fixed_proxy, fixed_detail = get_fixed_proxy()
+    pool_proxy, pool_detail = get_pool_proxy()
+    static_proxy = settings.proxy_url
+
+    if preference == "direct":
+        return _build_proxy_selection_result(None, "direct", "直连", source_detail="任务代理策略=direct", strict_selected=True)
+    if preference == "dynamic":
+        return _build_proxy_selection_result(dynamic_proxy, "dynamic", "动态代理", source_detail="任务代理策略=dynamic", strict_selected=True)
+    if preference == "fixed":
+        return _build_proxy_selection_result(fixed_proxy, "fixed", "固定代理", source_detail=fixed_detail, strict_selected=True)
+    if preference == "pool":
+        return _build_proxy_selection_result(pool_proxy, "pool", "代理池", source_detail=pool_detail, strict_selected=True)
+
+    if dynamic_proxy:
+        return _build_proxy_selection_result(dynamic_proxy, "dynamic", "动态代理", source_detail="auto 命中动态代理")
+    if fixed_proxy:
+        return _build_proxy_selection_result(fixed_proxy, "fixed", "固定代理", source_detail=fixed_detail)
+    if pool_proxy:
+        return _build_proxy_selection_result(pool_proxy, "pool", "代理池", source_detail=pool_detail)
+    if static_proxy:
+        return _build_proxy_selection_result(static_proxy, "static", "静态代理", source_detail="auto 命中静态代理")
+    return _build_proxy_selection_result(None, "direct", "直连", source_detail="auto 未命中任何代理")
+
+
+def _get_proxy(request_proxy: Optional[str] = None, purpose: str = "general") -> Optional[str]:
+    return _select_proxy(request_proxy, purpose).get("proxy_url")
+
+
+def _probe_proxy_or_raise(selection: dict, *, retries: int = 3) -> None:
+    proxy_url = selection.get("proxy_url")
+    if not proxy_url:
+        if selection.get("strict_selected"):
+            raise RuntimeError(f"已指定代理来源 {selection.get('source_name')}，但当前未获取到可用代理：{selection.get('source_detail') or '未返回代理'}")
+        return
+    last_detail = ""
+    for _ in range(max(1, retries)):
+        ok_http, detail_http = probe_proxy_http_basic(proxy_url, timeout=8)
+        if not ok_http:
+            last_detail = f"HTTP 不可达: {detail_http}"
+            continue
+        ok_https, detail_https = probe_proxy_https_openai(proxy_url, timeout=8)
+        if not ok_https:
+            last_detail = f"HTTPS 不可达: {detail_https}"
+            continue
+        return
+    raise RuntimeError(f"代理不可达（{selection.get('source_name')}）：{last_detail or '未知错误'}")
+
+
+def _get_proxy_connect_retry_count() -> int:
+    settings = get_settings()
+    try:
+        return max(1, min(10, int(getattr(settings, "proxy_connect_retry_count", 3) or 3)))
+    except Exception:
+        return 3
 
 
 def _detect_deleted_or_deactivated_account(engine) -> Optional[str]:
@@ -121,6 +227,9 @@ def _mark_account_deleted_or_deactivated(db, account: Account, reason: str, prox
         status=AccountStatus.BANNED.value,
         proxy_used=proxy_used or account.proxy_used,
         extra_data=extra,
+        openai_account_state="forbidden_or_banned",
+        oauth_recovery_required=False,
+        openai_auth_state=None,
     )
 
 
@@ -143,6 +252,8 @@ def _detect_mfa_required_account(engine) -> Optional[str]:
 
 def _mark_account_mfa_required(db, account: Account, reason: str, proxy_used: Optional[str] = None) -> None:
     extra = dict(account.extra_data or {})
+    if account.status == AccountStatus.BANNED.value or str(account.openai_account_state or "").strip().lower() == "forbidden_or_banned":
+        return
     extra["openai_auth_state"] = "mfa_required"
     extra["openai_auth_state_reason"] = reason
     extra["openai_auth_state_marked_at"] = datetime.utcnow().isoformat()
@@ -152,6 +263,7 @@ def _mark_account_mfa_required(db, account: Account, reason: str, proxy_used: Op
         status=AccountStatus.FAILED.value,
         proxy_used=proxy_used or account.proxy_used,
         extra_data=extra,
+        openai_auth_state="mfa_required",
     )
 
 
@@ -177,6 +289,9 @@ class AccountResponse(BaseModel):
     cookies: Optional[str] = None
     extra_data: Optional[dict] = None
     mfa_secret: Optional[str] = None
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
+    id_token: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -228,27 +343,16 @@ def resolve_account_ids(
         return ids
     query = db.query(Account.id)
     if status_filter:
-        if status_filter == "deleted_or_deactivated":
-            query = query.filter(
-                Account.extra_data.is_not(None),
-                _extra_data_flag_filter(Account.extra_data, "openai_account_state", "deleted_or_deactivated")
-            )
-        elif status_filter == "oauth_recovery_required":
-            query = query.filter(
-                Account.extra_data.is_not(None),
-                _extra_data_bool_filter(Account.extra_data, "oauth_recovery_required", True)
-            )
+        if status_filter == "oauth_recovery_required":
+            query = query.filter(Account.oauth_recovery_required.is_(True))
         elif status_filter == "mfa_required":
-            query = query.filter(
-                Account.extra_data.is_not(None),
-                _extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required")
-            )
+            query = query.filter(Account.openai_auth_state == "mfa_required")
         elif status_filter == "failed":
             query = query.filter(Account.status == status_filter)
             query = query.filter(
-                ~_extra_data_bool_filter(Account.extra_data, "oauth_recovery_required", True),
-                ~_extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required"),
-                ~_extra_data_flag_filter(Account.extra_data, "openai_account_state", "deleted_or_deactivated"),
+                Account.oauth_recovery_required.is_not(True),
+                or_(Account.openai_auth_state.is_(None), Account.openai_auth_state != "mfa_required"),
+                or_(Account.openai_account_state.is_(None), Account.openai_account_state != "forbidden_or_banned"),
             )
         else:
             query = query.filter(Account.status == status_filter)
@@ -265,6 +369,14 @@ def resolve_account_ids(
 def account_to_response(account: Account, include_mfa_secret: bool = False) -> AccountResponse:
     """转换 Account 模型为响应模型"""
     extra_data = dict(account.extra_data or {})
+    if account.oauth_recovery_required is not None:
+        extra_data["oauth_recovery_required"] = bool(account.oauth_recovery_required)
+    if account.openai_auth_state:
+        extra_data["openai_auth_state"] = account.openai_auth_state
+    if account.token_validation_state:
+        extra_data["token_validation_state"] = account.token_validation_state
+    if account.openai_account_state:
+        extra_data["openai_account_state"] = account.openai_account_state
     mfa_secret = str(extra_data.get("mfa_totp_secret") or "").strip()
     response_extra = dict(extra_data)
     response_extra.pop("mfa_totp_secret", None)
@@ -287,6 +399,9 @@ def account_to_response(account: Account, include_mfa_secret: bool = False) -> A
         cookies=account.cookies,
         extra_data=response_extra,
         mfa_secret=mfa_secret if include_mfa_secret else None,
+        access_token=account.access_token,
+        refresh_token=account.refresh_token,
+        id_token=account.id_token,
         created_at=account.created_at.isoformat() if account.created_at else None,
         updated_at=account.updated_at.isoformat() if account.updated_at else None,
     )
@@ -315,21 +430,15 @@ async def list_accounts(
         # 状态筛选
         if status:
             if status == "oauth_recovery_required":
-                query = query.filter(
-                    Account.extra_data.is_not(None),
-                    _extra_data_bool_filter(Account.extra_data, "oauth_recovery_required", True)
-                )
+                query = query.filter(Account.oauth_recovery_required.is_(True))
             elif status == "mfa_required":
-                query = query.filter(
-                    Account.extra_data.is_not(None),
-                    _extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required")
-                )
+                query = query.filter(Account.openai_auth_state == "mfa_required")
             elif status == "failed":
                 query = query.filter(Account.status == status)
                 query = query.filter(
-                    ~_extra_data_bool_filter(Account.extra_data, "oauth_recovery_required", True),
-                    ~_extra_data_flag_filter(Account.extra_data, "openai_auth_state", "mfa_required"),
-                    ~_extra_data_flag_filter(Account.extra_data, "openai_account_state", "forbidden_or_banned"),
+                    Account.oauth_recovery_required.is_not(True),
+                    or_(Account.openai_auth_state.is_(None), Account.openai_auth_state != "mfa_required"),
+                    or_(Account.openai_account_state.is_(None), Account.openai_account_state != "forbidden_or_banned"),
                 )
             else:
                 query = query.filter(Account.status == status)
@@ -468,17 +577,12 @@ async def batch_delete_accounts(request: BatchDeleteRequest):
             db, request.ids, request.select_all,
             request.status_filter, request.email_service_filter, request.search_filter
         )
-        deleted_count = 0
         errors = []
-
-        for account_id in ids:
-            try:
-                account = crud.get_account_by_id(db, account_id)
-                if account:
-                    crud.delete_account(db, account_id)
-                    deleted_count += 1
-            except Exception as e:
-                errors.append(f"ID {account_id}: {str(e)}")
+        try:
+            deleted_count = crud.delete_accounts_batch(db, ids)
+        except Exception as e:
+            deleted_count = 0
+            errors.append(str(e))
 
         return {
             "success": True,
@@ -494,17 +598,12 @@ async def batch_update_accounts(request: BatchUpdateRequest):
         raise HTTPException(status_code=400, detail="无效的状态值")
 
     with get_db() as db:
-        updated_count = 0
         errors = []
-
-        for account_id in request.ids:
-            try:
-                account = crud.get_account_by_id(db, account_id)
-                if account:
-                    crud.update_account(db, account_id, status=request.status)
-                    updated_count += 1
-            except Exception as e:
-                errors.append(f"ID {account_id}: {str(e)}")
+        try:
+            updated_count = crud.update_accounts_batch(db, request.ids, status=request.status)
+        except Exception as e:
+            updated_count = 0
+            errors.append(str(e))
 
         return {
             "success": True,
@@ -990,38 +1089,15 @@ class BatchValidateRequest(BaseModel):
 
 
 def _get_recovery_proxy(request_proxy: Optional[str] = None, log_callback=None) -> Optional[str]:
-    """补录 OAuth 的代理选择：手动代理 > 动态代理 > 代理池/静态配置。"""
-    if request_proxy:
-        if log_callback:
-            log_callback(f"[系统] 使用请求指定代理: {request_proxy}")
-        return request_proxy
-
-    settings = get_settings()
-    if settings.proxy_dynamic_enabled and settings.proxy_dynamic_api_url:
-        if log_callback:
-            log_callback("[系统] 检测到已启用动态代理，开始获取动态 IP...")
-
-        api_key = settings.proxy_dynamic_api_key.get_secret_value() if settings.proxy_dynamic_api_key else ""
-        proxy_url = fetch_dynamic_proxy(
-            api_url=settings.proxy_dynamic_api_url,
-            api_key=api_key,
-            api_key_header=settings.proxy_dynamic_api_key_header,
-            result_field=settings.proxy_dynamic_result_field,
-        )
-        if proxy_url:
-            if log_callback:
-                log_callback(f"[系统] 动态代理可用，将使用: {proxy_url}")
-            return proxy_url
-
-        if log_callback:
-            log_callback("[系统] 动态代理不可用，回退到代理池/静态代理")
-
-    fallback_proxy = _get_proxy(None)
-    if fallback_proxy and log_callback:
-        log_callback(f"[系统] 使用回退代理: {fallback_proxy}")
-    elif log_callback:
-        log_callback("[系统] 当前未配置可用代理，将直连补录")
-    return fallback_proxy
+    """补录 OAuth 的代理选择：统一走任务代理来源策略。"""
+    selection = _select_proxy(request_proxy, purpose="general")
+    if log_callback:
+        log_callback(f"[系统] 当前代理策略命中: {selection.get('source_name')} | {selection.get('source_detail') or '-'}")
+        if selection.get("proxy_url"):
+            log_callback(f"[系统] 本次补录实际代理: {_mask_proxy_url(selection.get('proxy_url'))}")
+        else:
+            log_callback("[系统] 本次补录将直连")
+    return selection.get("proxy_url")
 
 
 def _is_proxy_connect_aborted(error: Exception | str) -> bool:
@@ -1046,7 +1122,7 @@ def _has_available_proxy_source(request_proxy: Optional[str] = None) -> bool:
     if request_proxy:
         return True
     settings = get_settings()
-    if settings.proxy_dynamic_enabled and settings.proxy_dynamic_api_url:
+    if settings.proxy_dynamic_enabled:
         return True
     if settings.proxy_url:
         return True
@@ -1194,10 +1270,18 @@ def _run_sync_recover_oauth_task(
             max_proxy_retries = 3 if _has_available_proxy_source(proxy) else 1
             token_info = None
             actual_proxy = None
+            selection = None
             last_recover_error: Optional[Exception] = None
             engine = None
             for proxy_attempt in range(1, max_proxy_retries + 1):
-                actual_proxy = _get_recovery_proxy(proxy, log_callback=callback)
+                selection = _select_proxy(proxy, purpose="general")
+                actual_proxy = selection.get("proxy_url")
+                callback(f"{full_prefix}[系统] 当前代理策略命中: {selection.get('source_name')} | {selection.get('source_detail') or '-'}")
+                if actual_proxy:
+                    callback(f"{full_prefix}[系统] 本次补录实际代理: {_mask_proxy_url(actual_proxy)}")
+                else:
+                    callback(f"{full_prefix}[系统] 本次补录将直连")
+                _probe_proxy_or_raise(selection, retries=_get_proxy_connect_retry_count())
                 engine = RegistrationEngine(
                     email_service=email_service,
                     proxy_url=actual_proxy,
@@ -1285,6 +1369,9 @@ def _run_sync_recover_oauth_task(
                 "email": account.email,
                 "workspace_id": update_data.get("workspace_id"),
                 "has_access_token": bool(update_data.get("access_token")),
+                "proxy_source": selection.get("source") if selection else None,
+                "proxy_source_name": selection.get("source_name") if selection else None,
+                "proxy_used": actual_proxy,
             }
             crud.update_registration_task(
                 db,
@@ -1295,7 +1382,12 @@ def _run_sync_recover_oauth_task(
             )
 
         callback(f"{full_prefix}[成功] OAuth 补录完成")
-        task_manager.update_status(task_uuid, "completed", result={"account_id": account_id})
+        task_manager.update_status(task_uuid, "completed", result={
+            "account_id": account_id,
+            "proxy_source": selection.get("source") if selection else None,
+            "proxy_source_name": selection.get("source_name") if selection else None,
+            "proxy_used": actual_proxy,
+        })
     except Exception as e:
         error_message = str(e)
         logger.warning(f"补录任务失败: {task_uuid}, 原因: {error_message}")
@@ -1434,7 +1526,14 @@ async def run_batch_validate(batch_id: str, account_ids: List[int], request_prox
                 return
             task_manager.add_batch_log(batch_id, f"{prefix} 开始验证账号 ID={account_id}")
             try:
-                proxy = _get_proxy(request_proxy, purpose="validate")
+                selection = _select_proxy(request_proxy, purpose="validate")
+                proxy = selection.get("proxy_url")
+                task_manager.add_batch_log(batch_id, f"{prefix} 代理策略命中: {selection.get('source_name')} | {selection.get('source_detail') or '-'}")
+                if proxy:
+                    task_manager.add_batch_log(batch_id, f"{prefix} 实际代理: {_mask_proxy_url(proxy)}")
+                else:
+                    task_manager.add_batch_log(batch_id, f"{prefix} 本次将直连")
+                _probe_proxy_or_raise(selection, retries=_get_proxy_connect_retry_count())
                 ok, error = await loop.run_in_executor(task_manager.executor, _run_single_validate, account_id, proxy)
                 if ok:
                     validate_batches[batch_id]["success"] += 1
@@ -1477,17 +1576,23 @@ def _run_sync_refresh_task(task_uuid: str, account_id: int, request_proxy: Optio
     task_manager.update_status(task_uuid, "running")
     callback("[系统] 刷新任务开始")
     try:
-        proxy = _get_proxy(request_proxy, purpose="refresh")
+        selection = _select_proxy(request_proxy, purpose="refresh")
+        proxy = selection.get("proxy_url")
+        callback(f"[系统] 当前代理策略命中: {selection.get('source_name')} | {selection.get('source_detail') or '-'}")
         if proxy:
-            callback(f"[系统] 本次刷新将使用代理: {proxy}")
+            callback(f"[系统] 本次刷新实际代理: {_mask_proxy_url(proxy)}")
         else:
             callback("[系统] 本次刷新将直连")
+        _probe_proxy_or_raise(selection, retries=_get_proxy_connect_retry_count())
         result = do_refresh(account_id, proxy)
         if result.success:
             callback("[成功] Token 刷新完成")
             task_manager.update_status(task_uuid, "completed", result={
                 "account_id": account_id,
                 "expires_at": result.expires_at.isoformat() if result.expires_at else None,
+                "proxy_source": selection.get("source"),
+                "proxy_source_name": selection.get("source_name"),
+                "proxy_used": proxy,
             })
         else:
             callback(f"[失败] {result.error_message}")
@@ -1502,15 +1607,23 @@ def _run_sync_validate_task(task_uuid: str, account_id: int, request_proxy: Opti
     task_manager.update_status(task_uuid, "running")
     callback("[系统] 验证任务开始")
     try:
-        proxy = _get_proxy(request_proxy, purpose="validate")
+        selection = _select_proxy(request_proxy, purpose="validate")
+        proxy = selection.get("proxy_url")
+        callback(f"[系统] 当前代理策略命中: {selection.get('source_name')} | {selection.get('source_detail') or '-'}")
         if proxy:
-            callback(f"[系统] 本次验证将使用代理: {proxy}")
+            callback(f"[系统] 本次验证实际代理: {_mask_proxy_url(proxy)}")
         else:
             callback("[系统] 本次验证将直连")
+        _probe_proxy_or_raise(selection, retries=_get_proxy_connect_retry_count())
         ok, error = do_validate(account_id, proxy)
         if ok:
             callback("[成功] Token 验证通过")
-            task_manager.update_status(task_uuid, "completed", result={"account_id": account_id})
+            task_manager.update_status(task_uuid, "completed", result={
+                "account_id": account_id,
+                "proxy_source": selection.get("source"),
+                "proxy_source_name": selection.get("source_name"),
+                "proxy_used": proxy,
+            })
         else:
             callback(f"[失败] {error or 'Token 验证失败'}")
             task_manager.update_status(task_uuid, "failed", error=error or 'Token 验证失败')
@@ -1565,7 +1678,14 @@ async def run_batch_refresh(batch_id: str, account_ids: List[int], request_proxy
                 return
             task_manager.add_batch_log(batch_id, f"{prefix} 开始刷新账号 ID={account_id}")
             try:
-                proxy = _get_proxy(request_proxy, purpose="refresh")
+                selection = _select_proxy(request_proxy, purpose="refresh")
+                proxy = selection.get("proxy_url")
+                task_manager.add_batch_log(batch_id, f"{prefix} 代理策略命中: {selection.get('source_name')} | {selection.get('source_detail') or '-'}")
+                if proxy:
+                    task_manager.add_batch_log(batch_id, f"{prefix} 实际代理: {_mask_proxy_url(proxy)}")
+                else:
+                    task_manager.add_batch_log(batch_id, f"{prefix} 本次将直连")
+                _probe_proxy_or_raise(selection, retries=_get_proxy_connect_retry_count())
                 result = await loop.run_in_executor(task_manager.executor, _run_single_refresh, account_id, proxy)
                 ok = bool(result and result.success)
                 if ok:

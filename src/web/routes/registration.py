@@ -16,6 +16,7 @@ from ...database import crud
 from ...database.session import get_db
 from ...database.models import RegistrationTask, Proxy
 from ...core.register import RegistrationEngine, RegistrationResult
+from ...core.dynamic_proxy import get_proxy_url_for_task, probe_proxy_http_basic, probe_proxy_https_openai
 from ...core.registration_flow_templates import normalize_flow_template
 from ...services import EmailServiceFactory, EmailServiceType
 from ...config.settings import get_settings
@@ -32,30 +33,94 @@ batch_tasks: Dict[str, dict] = {}
 
 # ============== Proxy Helper Functions ==============
 
-def get_proxy_for_registration(db) -> Tuple[Optional[str], Optional[int]]:
-    """
-    获取用于注册的代理
+def _mask_proxy_url(proxy_url: Optional[str]) -> str:
+    text = str(proxy_url or "").strip()
+    if not text:
+        return "-"
+    if "@" not in text:
+        return text
+    scheme, rest = text.split("://", 1) if "://" in text else ("http", text)
+    auth, host = rest.rsplit("@", 1)
+    if ":" in auth:
+        user = auth.split(":", 1)[0]
+        return f"{scheme}://{user}:***@{host}"
+    return f"{scheme}://***@{host}"
 
-    策略：
-    1. 优先从代理列表中随机选择一个启用的代理
-    2. 如果代理列表为空且启用了动态代理，调用动态代理 API 获取
-    3. 否则使用系统设置中的静态默认代理
 
-    Returns:
-        Tuple[proxy_url, proxy_id]: 代理 URL 和代理 ID（如果来自代理列表）
-    """
-    # 先尝试从代理列表中获取
-    proxy = crud.get_random_proxy(db)
-    if proxy:
-        return proxy.proxy_url, proxy.id
+def _select_registration_proxy(db, request_proxy: Optional[str] = None) -> Tuple[Optional[str], Optional[int], str, str, bool]:
+    if request_proxy:
+        return request_proxy, None, "请求指定代理", "前端请求显式传入", True
 
-    # 代理列表为空，尝试动态代理或静态代理
-    from ...core.dynamic_proxy import get_proxy_url_for_task
-    proxy_url = get_proxy_url_for_task()
-    if proxy_url:
-        return proxy_url, None
+    settings = get_settings()
+    preference = str(getattr(settings, "proxy_preference_mode", "auto") or "auto").strip().lower()
+    preferred_fixed_id = int(getattr(settings, "proxy_preferred_fixed_id", 0) or 0)
 
-    return None, None
+    def get_fixed_proxy():
+        if preferred_fixed_id <= 0:
+            return None, None, "未指定固定代理"
+        proxy = crud.get_proxy_by_id(db, preferred_fixed_id)
+        if not proxy:
+            return None, None, f"固定代理 #{preferred_fixed_id} 不存在"
+        if not proxy.enabled:
+            return None, None, f"固定代理 #{preferred_fixed_id} 已禁用"
+        return proxy.proxy_url, proxy.id, f"固定代理 #{proxy.id} {proxy.name}"
+
+    def get_pool_proxy():
+        proxy = crud.get_random_proxy(db)
+        if not proxy:
+            return None, None, "代理池无可用代理"
+        return proxy.proxy_url, proxy.id, f"代理池命中 #{proxy.id} {proxy.name}"
+
+    dynamic_proxy = get_proxy_url_for_task() if settings.proxy_dynamic_enabled else None
+    fixed_proxy, fixed_proxy_id, fixed_detail = get_fixed_proxy()
+    pool_proxy, pool_proxy_id, pool_detail = get_pool_proxy()
+    static_proxy = settings.proxy_url
+
+    if preference == "direct":
+        return None, None, "直连", "任务代理策略=direct", True
+    if preference == "dynamic":
+        return dynamic_proxy, None, "动态代理", "任务代理策略=dynamic", True
+    if preference == "fixed":
+        return fixed_proxy, fixed_proxy_id, "固定代理", fixed_detail, True
+    if preference == "pool":
+        return pool_proxy, pool_proxy_id, "代理池", pool_detail, True
+
+    if dynamic_proxy:
+        return dynamic_proxy, None, "动态代理", "auto 命中动态代理", False
+    if fixed_proxy:
+        return fixed_proxy, fixed_proxy_id, "固定代理", fixed_detail, False
+    if pool_proxy:
+        return pool_proxy, pool_proxy_id, "代理池", pool_detail, False
+    if static_proxy:
+        return static_proxy, None, "静态代理", "auto 命中静态代理", False
+    return None, None, "直连", "auto 未命中任何代理", False
+
+
+def _probe_registration_proxy_or_raise(proxy_url: Optional[str], source_name: str, strict_selected: bool, *, retries: int = 3) -> None:
+    if not proxy_url:
+        if strict_selected:
+            raise RuntimeError(f"已指定代理来源 {source_name}，但当前未获取到可用代理")
+        return
+    last_detail = ""
+    for _ in range(max(1, retries)):
+        ok_http, detail_http = probe_proxy_http_basic(proxy_url, timeout=8)
+        if not ok_http:
+            last_detail = f"HTTP 不可达: {detail_http}"
+            continue
+        ok_https, detail_https = probe_proxy_https_openai(proxy_url, timeout=8)
+        if not ok_https:
+            last_detail = f"HTTPS 不可达: {detail_https}"
+            continue
+        return
+    raise RuntimeError(f"代理不可达（{source_name}）：{last_detail or '未知错误'}")
+
+
+def _get_proxy_connect_retry_count() -> int:
+    settings = get_settings()
+    try:
+        return max(1, min(10, int(getattr(settings, "proxy_connect_retry_count", 3) or 3)))
+    except Exception:
+        return 3
 
 
 def update_proxy_usage(db, proxy_id: Optional[int]):
@@ -241,12 +306,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 logger.info(f"任务 {task_uuid} 已取消，跳过执行")
                 return
 
-            # 更新任务状态为运行中
-            task = crud.update_registration_task(
-                db, task_uuid,
-                status="running",
-                started_at=datetime.utcnow()
-            )
+            task = crud.get_registration_task_by_uuid(db, task_uuid)
 
             if not task:
                 logger.error(f"任务不存在: {task_uuid}")
@@ -260,23 +320,13 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             # 更新 TaskManager 状态
             task_manager.update_status(task_uuid, "running")
 
-            # 确定使用的代理
-            # 如果前端传入了代理参数，使用传入的
-            # 否则从代理列表或系统设置中获取
-            actual_proxy_url = proxy
-            proxy_id = None
-
-            if not actual_proxy_url:
-                actual_proxy_url, proxy_id = get_proxy_for_registration(db)
-                if actual_proxy_url:
-                    logger.info(f"任务 {task_uuid} 使用代理: {actual_proxy_url[:50]}...")
-
-            # 更新任务的代理记录
-            crud.update_registration_task(db, task_uuid, proxy=actual_proxy_url)
+            # 确定使用的代理（统一任务代理策略）
+            actual_proxy_url, proxy_id, proxy_source_name, proxy_source_detail, strict_selected = _select_registration_proxy(db, proxy)
 
             # 创建邮箱服务
             service_type = EmailServiceType(email_service_type)
             settings = get_settings()
+            selected_email_service_id = email_service_id
 
             # 优先使用数据库中配置的邮箱服务
             if email_service_id:
@@ -289,8 +339,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 if db_service:
                     service_type = EmailServiceType(db_service.service_type)
                     config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                    # 更新任务关联的邮箱服务
-                    crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                    selected_email_service_id = db_service.id
                     logger.info(f"使用数据库邮箱服务: {db_service.name} (ID: {db_service.id}, 类型: {service_type.value})")
                 else:
                     raise ValueError(f"邮箱服务不存在或已禁用: {email_service_id}")
@@ -313,7 +362,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
                     if db_service and db_service.config:
                         config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                        selected_email_service_id = db_service.id
                         logger.info(f"使用数据库自定义域名服务: {db_service.name}")
                     elif settings.custom_domain_base_url and settings.custom_domain_api_key:
                         config = {
@@ -335,15 +384,18 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     if not outlook_services:
                         raise ValueError("没有可用的 Outlook 账户，请先在设置中导入账户")
 
+                    outlook_emails = [svc.config.get("email") for svc in outlook_services if svc.config and svc.config.get("email")]
+                    existing_emails = {
+                        row[0] for row in db.query(Account.email).filter(Account.email.in_(outlook_emails)).all()
+                    } if outlook_emails else set()
+
                     # 找到一个未注册的 Outlook 账户
                     selected_service = None
                     for svc in outlook_services:
                         email = svc.config.get("email") if svc.config else None
                         if not email:
                             continue
-                        # 检查是否已在 accounts 表中注册
-                        existing = db.query(Account).filter(Account.email == email).first()
-                        if not existing:
+                        if email not in existing_emails:
                             selected_service = svc
                             logger.info(f"选择未注册的 Outlook 账户: {email}")
                             break
@@ -352,7 +404,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
                     if selected_service and selected_service.config:
                         config = selected_service.config.copy()
-                        crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
+                        selected_email_service_id = selected_service.id
                         logger.info(f"使用数据库 Outlook 账户: {selected_service.name}")
                     else:
                         raise ValueError("所有 Outlook 账户都已注册过 OpenAI 账号，请添加新的 Outlook 账户")
@@ -367,13 +419,17 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     if not tuta_services:
                         raise ValueError("没有可用的 Tuta 账户，请先在邮箱服务页面导入账户")
 
+                    tuta_emails = [svc.config.get("email") for svc in tuta_services if svc.config and svc.config.get("email")]
+                    existing_emails = {
+                        row[0] for row in db.query(Account.email).filter(Account.email.in_(tuta_emails)).all()
+                    } if tuta_emails else set()
+
                     selected_service = None
                     for svc in tuta_services:
                         email = svc.config.get("email") if svc.config else None
                         if not email:
                             continue
-                        existing = db.query(Account).filter(Account.email == email).first()
-                        if not existing:
+                        if email not in existing_emails:
                             selected_service = svc
                             logger.info(f"选择未注册的 Tuta 账户: {email}")
                             break
@@ -382,7 +438,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
                     if selected_service and selected_service.config:
                         config = selected_service.config.copy()
-                        crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
+                        selected_email_service_id = selected_service.id
                         logger.info(f"使用数据库 Tuta 账户: {selected_service.name}")
                     else:
                         raise ValueError("所有 Tuta 账户都已注册过 OpenAI 账号，请添加新的 Tuta 账户")
@@ -396,7 +452,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
                     if db_service and db_service.config:
                         config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                        selected_email_service_id = db_service.id
                         logger.info(f"使用数据库 DuckMail 服务: {db_service.name}")
                     else:
                         raise ValueError("没有可用的 DuckMail 邮箱服务，请先在邮箱服务页面添加服务")
@@ -410,7 +466,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
                     if db_service and db_service.config:
                         config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                        selected_email_service_id = db_service.id
                         logger.info(f"使用数据库 Freemail 服务: {db_service.name}")
                     else:
                         raise ValueError("没有可用的 Freemail 邮箱服务，请先在邮箱服务页面添加服务")
@@ -424,17 +480,32 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
                     if db_service and db_service.config:
                         config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                        selected_email_service_id = db_service.id
                         logger.info(f"使用数据库 IMAP 邮箱服务: {db_service.name}")
                     else:
                         raise ValueError("没有可用的 IMAP 邮箱服务，请先在邮箱服务中添加")
                 else:
                     config = email_service_config or {}
 
+            crud.update_registration_task(
+                db,
+                task_uuid,
+                status="running",
+                started_at=datetime.utcnow(),
+                proxy=actual_proxy_url,
+                email_service_id=selected_email_service_id,
+            )
+
             email_service = EmailServiceFactory.create(service_type, config)
 
             # 创建注册引擎 - 使用 TaskManager 的日志回调
             log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
+            log_callback(f"[系统] 当前代理策略命中: {proxy_source_name} | {proxy_source_detail or '-'}")
+            if actual_proxy_url:
+                log_callback(f"[系统] 本次注册实际代理: {_mask_proxy_url(actual_proxy_url)}")
+            else:
+                log_callback("[系统] 本次注册将直连")
+            _probe_registration_proxy_or_raise(actual_proxy_url, proxy_source_name, strict_selected, retries=_get_proxy_connect_retry_count())
 
             selected_template = normalize_flow_template(
                 flow_template or settings.registration_flow_template
@@ -594,18 +665,16 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             logger.error(f"注册任务异常: {task_uuid}, 错误: {e}")
 
             try:
-                with get_db() as db:
-                    crud.update_registration_task(
-                        db, task_uuid,
-                        status="failed",
-                        completed_at=datetime.utcnow(),
-                        error_message=str(e)
-                    )
-
+                crud.update_registration_task(
+                    db, task_uuid,
+                    status="failed",
+                    completed_at=datetime.utcnow(),
+                    error_message=str(e)
+                )
                 # 更新 TaskManager 状态
                 task_manager.update_status(task_uuid, "failed", error=str(e))
-            except:
-                pass
+            except Exception:
+                logger.exception("更新注册任务失败状态时出错")
 
 
 async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, flow_template: Optional[str] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_recover_tokens: bool = False):
@@ -1092,7 +1161,7 @@ async def get_task(task_uuid: str):
 
 
 @router.get("/tasks/{task_uuid}/logs")
-async def get_task_logs(task_uuid: str):
+async def get_task_logs(task_uuid: str, since: int = Query(0, ge=0)):
     """获取任务日志"""
     with get_db() as db:
         task = crud.get_registration_task(db, task_uuid)
@@ -1100,10 +1169,12 @@ async def get_task_logs(task_uuid: str):
             raise HTTPException(status_code=404, detail="任务不存在")
 
         logs = task.logs or ""
+        all_logs = logs.split("\n") if logs else []
         return {
             "task_uuid": task_uuid,
             "status": task.status,
-            "logs": logs.split("\n") if logs else []
+            "logs": all_logs[since:],
+            "next_index": len(all_logs),
         }
 
 
