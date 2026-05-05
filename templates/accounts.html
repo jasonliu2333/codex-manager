@@ -388,6 +388,30 @@
                             <option value="false">无效/失败</option>
                         </select>
                     </div>
+                    <div>
+                        <label class="form-label">服务代码</label>
+                        <input type="text" id="phone-stats-service" class="form-input" placeholder="如 dr / facebook">
+                    </div>
+                    <div>
+                        <label class="form-label">国家代码</label>
+                        <input type="number" id="phone-stats-country" class="form-input" placeholder="如 52">
+                    </div>
+                    <div>
+                        <label class="form-label">国家 key</label>
+                        <input type="text" id="phone-stats-country-key" class="form-input" placeholder="如 england">
+                    </div>
+                    <div>
+                        <label class="form-label">providerIds</label>
+                        <input type="text" id="phone-stats-provider-slot" class="form-input" placeholder="如 2266">
+                    </div>
+                    <div>
+                        <label class="form-label">号码</label>
+                        <input type="text" id="phone-stats-phone" class="form-input" placeholder="如 +669...">
+                    </div>
+                    <div>
+                        <label class="form-label">错误码</label>
+                        <input type="text" id="phone-stats-error-code" class="form-input" placeholder="如 phone_max_usage_exceeded">
+                    </div>
                     <button class="btn btn-primary" id="reload-phone-stats-btn">🔄 刷新统计</button>
                     <button class="btn btn-secondary" id="reload-phone-live-counts-btn">📡 刷新当前库存</button>
                 </div>
@@ -400,6 +424,7 @@
                                     <tr>
                                         <th>平台</th>
                                         <th>国家</th>
+                                        <th>号码</th>
                                         <th>providerIds</th>
                                         <th>尝试</th>
                                         <th>通过</th>

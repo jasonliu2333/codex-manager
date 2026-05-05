@@ -285,3 +285,30 @@ class PhoneVerificationAttempt(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     account = relationship('Account')
+
+
+class PhoneNumberReputation(Base):
+    """号码历史记录与黑名单，用于下次遇到失败号码直接跳过。"""
+    __tablename__ = 'phone_number_reputations'
+    __table_args__ = (
+        Index("ix_phone_reputation_provider_phone", "sms_provider", "phone_number", unique=True),
+        Index("ix_phone_reputation_blacklisted", "blacklisted"),
+        Index("ix_phone_reputation_last_seen", "last_seen_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sms_provider = Column(String(32), nullable=False, index=True)
+    phone_number = Column(String(64), nullable=False, index=True)
+    service = Column(String(64), nullable=True)
+    country = Column(Integer, nullable=True, index=True)
+    country_key = Column(String(64), nullable=True, index=True)
+    provider_slot = Column(String(255), nullable=True)
+    success_count = Column(Integer, default=0)
+    failure_count = Column(Integer, default=0)
+    blacklisted = Column(Boolean, default=False, index=True)
+    last_result = Column(String(32), nullable=True)
+    last_error_code = Column(String(128), nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    last_activation_cost = Column(Float, nullable=True)
+    first_seen_at = Column(DateTime, default=datetime.utcnow)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

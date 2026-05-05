@@ -1931,19 +1931,42 @@ async def get_runtime_batch_logs(batch_id: str, since: int = Query(0, ge=0)):
 
 
 @router.get("/phone-verification/stats")
-async def get_phone_verification_stats(days: int = Query(30, ge=1, le=365)):
+async def get_phone_verification_stats(
+    days: int = Query(30, ge=1, le=365),
+    provider: Optional[str] = None,
+    success: Optional[bool] = None,
+    service: Optional[str] = None,
+    country: Optional[int] = None,
+    country_key: Optional[str] = None,
+    provider_slot: Optional[str] = None,
+    phone_number: Optional[str] = None,
+    error_code: Optional[str] = None,
+):
     since = datetime.utcnow() - timedelta(days=days)
     with get_db() as db:
         query = db.query(PhoneVerificationAttempt).filter(PhoneVerificationAttempt.created_at >= since)
+        if provider:
+            query = query.filter(PhoneVerificationAttempt.sms_provider == normalize_sms_provider_name(provider))
+        if success is not None:
+            query = query.filter(PhoneVerificationAttempt.success == success)
+        if service:
+            query = query.filter(PhoneVerificationAttempt.service.ilike(f"%{service.strip()}%"))
+        if country is not None:
+            query = query.filter(PhoneVerificationAttempt.country == country)
+        if country_key:
+            query = query.filter(PhoneVerificationAttempt.country_key.ilike(f"%{country_key.strip()}%"))
+        if provider_slot:
+            query = query.filter(PhoneVerificationAttempt.provider_slot.ilike(f"%{provider_slot.strip()}%"))
+        if phone_number:
+            query = query.filter(PhoneVerificationAttempt.phone_number.ilike(f"%{phone_number.strip()}%"))
+        if error_code:
+            query = query.filter(PhoneVerificationAttempt.error_code.ilike(f"%{error_code.strip()}%"))
         total = query.count()
         success = query.filter(PhoneVerificationAttempt.success == True).count()
         invalid = query.filter(PhoneVerificationAttempt.invalid == True).count()
-        total_cost = db.query(func.coalesce(func.sum(PhoneVerificationAttempt.charged_cost), 0.0)).filter(
-            PhoneVerificationAttempt.created_at >= since
-        ).scalar() or 0.0
-        total_activation_cost = db.query(func.coalesce(func.sum(PhoneVerificationAttempt.activation_cost), 0.0)).filter(
-            PhoneVerificationAttempt.created_at >= since
-        ).scalar() or 0.0
+        filtered = query.subquery()
+        total_cost = db.query(func.coalesce(func.sum(filtered.c.charged_cost), 0.0)).scalar() or 0.0
+        total_activation_cost = db.query(func.coalesce(func.sum(filtered.c.activation_cost), 0.0)).scalar() or 0.0
         grouped = db.query(
             PhoneVerificationAttempt.sms_provider,
             PhoneVerificationAttempt.country,
@@ -2001,8 +2024,12 @@ async def get_phone_verification_records(
     days: int = Query(30, ge=1, le=365),
     provider: Optional[str] = None,
     success: Optional[bool] = None,
+    service: Optional[str] = None,
     country: Optional[int] = None,
     country_key: Optional[str] = None,
+    provider_slot: Optional[str] = None,
+    phone_number: Optional[str] = None,
+    error_code: Optional[str] = None,
 ):
     since = datetime.utcnow() - timedelta(days=days)
     with get_db() as db:
@@ -2011,10 +2038,18 @@ async def get_phone_verification_records(
             query = query.filter(PhoneVerificationAttempt.sms_provider == normalize_sms_provider_name(provider))
         if success is not None:
             query = query.filter(PhoneVerificationAttempt.success == success)
+        if service:
+            query = query.filter(PhoneVerificationAttempt.service.ilike(f"%{service.strip()}%"))
         if country is not None:
             query = query.filter(PhoneVerificationAttempt.country == country)
         if country_key:
-            query = query.filter(PhoneVerificationAttempt.country_key == country_key)
+            query = query.filter(PhoneVerificationAttempt.country_key.ilike(f"%{country_key.strip()}%"))
+        if provider_slot:
+            query = query.filter(PhoneVerificationAttempt.provider_slot.ilike(f"%{provider_slot.strip()}%"))
+        if phone_number:
+            query = query.filter(PhoneVerificationAttempt.phone_number.ilike(f"%{phone_number.strip()}%"))
+        if error_code:
+            query = query.filter(PhoneVerificationAttempt.error_code.ilike(f"%{error_code.strip()}%"))
         total = query.count()
         records = query.order_by(desc(PhoneVerificationAttempt.created_at)).offset((page - 1) * page_size).limit(page_size).all()
         return {

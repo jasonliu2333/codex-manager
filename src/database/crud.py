@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, asc, func
 
-from .models import Account, EmailService, RegistrationTask, Setting, Proxy, CpaService, Sub2ApiService, PhoneVerificationAttempt
+from .models import Account, EmailService, RegistrationTask, Setting, Proxy, CpaService, Sub2ApiService, PhoneVerificationAttempt, PhoneNumberReputation
 
 
 # ============================================================================
@@ -427,6 +427,61 @@ def update_phone_verification_attempt(
     for key, value in kwargs.items():
         if hasattr(record, key):
             setattr(record, key, value)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def get_phone_number_reputation(db: Session, sms_provider: str, phone_number: str) -> Optional[PhoneNumberReputation]:
+    return db.query(PhoneNumberReputation).filter(
+        PhoneNumberReputation.sms_provider == sms_provider,
+        PhoneNumberReputation.phone_number == phone_number,
+    ).first()
+
+
+def upsert_phone_number_reputation(
+    db: Session,
+    *,
+    sms_provider: str,
+    phone_number: str,
+    service: Optional[str] = None,
+    country: Optional[int] = None,
+    country_key: Optional[str] = None,
+    provider_slot: Optional[str] = None,
+    success: bool = False,
+    blacklisted: bool = False,
+    error_code: Optional[str] = None,
+    error_message: Optional[str] = None,
+    activation_cost: Optional[float] = None,
+    result_label: Optional[str] = None,
+) -> PhoneNumberReputation:
+    record = get_phone_number_reputation(db, sms_provider, phone_number)
+    now = datetime.utcnow()
+    if not record:
+        record = PhoneNumberReputation(
+            sms_provider=sms_provider,
+            phone_number=phone_number,
+            first_seen_at=now,
+        )
+        db.add(record)
+    record.service = service or record.service
+    record.country = country if country is not None else record.country
+    record.country_key = country_key or record.country_key
+    record.provider_slot = provider_slot or record.provider_slot
+    record.last_seen_at = now
+    record.last_activation_cost = activation_cost if activation_cost is not None else record.last_activation_cost
+    if success:
+        record.success_count = int(record.success_count or 0) + 1
+        record.last_result = result_label or "success"
+    else:
+        record.failure_count = int(record.failure_count or 0) + 1
+        record.last_result = result_label or "failed"
+    if blacklisted:
+        record.blacklisted = True
+    if error_code:
+        record.last_error_code = error_code
+    if error_message:
+        record.last_error_message = error_message
     db.commit()
     db.refresh(record)
     return record

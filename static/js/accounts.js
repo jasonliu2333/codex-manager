@@ -71,6 +71,12 @@ const elements = {
     phoneStatsDays: document.getElementById('phone-stats-days'),
     phoneStatsProvider: document.getElementById('phone-stats-provider'),
     phoneStatsSuccess: document.getElementById('phone-stats-success'),
+    phoneStatsService: document.getElementById('phone-stats-service'),
+    phoneStatsCountry: document.getElementById('phone-stats-country'),
+    phoneStatsCountryKey: document.getElementById('phone-stats-country-key'),
+    phoneStatsProviderSlot: document.getElementById('phone-stats-provider-slot'),
+    phoneStatsPhone: document.getElementById('phone-stats-phone'),
+    phoneStatsErrorCode: document.getElementById('phone-stats-error-code'),
     reloadPhoneStatsBtn: document.getElementById('reload-phone-stats-btn'),
     reloadPhoneLiveCountsBtn: document.getElementById('reload-phone-live-counts-btn'),
     phoneStatsSummary: document.getElementById('phone-stats-summary'),
@@ -2271,9 +2277,24 @@ async function loadPhoneVerificationStats() {
     const days = parseInt(elements.phoneStatsDays?.value || '30', 10);
     const provider = elements.phoneStatsProvider?.value || '';
     const successRaw = elements.phoneStatsSuccess?.value || '';
-    const stats = await api.get(`/accounts/phone-verification/stats?days=${days}`);
+    const service = elements.phoneStatsService?.value?.trim() || '';
+    const country = elements.phoneStatsCountry?.value?.trim() || '';
+    const countryKey = elements.phoneStatsCountryKey?.value?.trim() || '';
+    const providerSlot = elements.phoneStatsProviderSlot?.value?.trim() || '';
+    const phone = elements.phoneStatsPhone?.value?.trim() || '';
+    const errorCode = elements.phoneStatsErrorCode?.value?.trim() || '';
+    const statsParams = new URLSearchParams({ days: String(days) });
+    if (provider) statsParams.set('provider', provider);
+    if (successRaw) statsParams.set('success', successRaw);
+    if (service) statsParams.set('service', service);
+    if (country) statsParams.set('country', country);
+    if (countryKey) statsParams.set('country_key', countryKey);
+    if (providerSlot) statsParams.set('provider_slot', providerSlot);
+    if (phone) statsParams.set('phone_number', phone);
+    if (errorCode) statsParams.set('error_code', errorCode);
+    const stats = await api.get(`/accounts/phone-verification/stats?${statsParams.toString()}`);
     renderPhoneStatsSummary(stats.summary || {});
-    renderPhoneStatsAggregate((stats.rows || []).filter(row => !provider || row.sms_provider === provider));
+    renderPhoneStatsAggregate(stats.rows || []);
 
     const params = new URLSearchParams({
         page: String(phoneStatsPage),
@@ -2282,6 +2303,12 @@ async function loadPhoneVerificationStats() {
     });
     if (provider) params.set('provider', provider);
     if (successRaw) params.set('success', successRaw);
+    if (service) params.set('service', service);
+    if (country) params.set('country', country);
+    if (countryKey) params.set('country_key', countryKey);
+    if (providerSlot) params.set('provider_slot', providerSlot);
+    if (phone) params.set('phone_number', phone);
+    if (errorCode) params.set('error_code', errorCode);
     const recordsResult = await api.get(`/accounts/phone-verification/records?${params.toString()}`);
     phoneStatsTotal = recordsResult.total || 0;
     renderPhoneStatsRecords(recordsResult.records || []);
@@ -2336,7 +2363,7 @@ function renderPhoneStatsAggregate(rows) {
 function renderPhoneStatsRecords(records) {
     if (!elements.phoneStatsRecords) return;
     if (!records.length) {
-        elements.phoneStatsRecords.innerHTML = '<tr><td colspan="11" style="text-align:center; color:var(--text-muted);">暂无记录</td></tr>';
+        elements.phoneStatsRecords.innerHTML = '<tr><td colspan="12" style="text-align:center; color:var(--text-muted);">暂无记录</td></tr>';
         return;
     }
     elements.phoneStatsRecords.innerHTML = records.map(item => `
@@ -2345,6 +2372,7 @@ function renderPhoneStatsRecords(records) {
             <td>${escapeHtml(item.account_email || '-')}</td>
             <td>${escapeHtml(item.sms_provider || '-')}</td>
             <td>${escapeHtml(item.country_key || (item.country != null ? String(item.country) : '-'))}</td>
+            <td>${escapeHtml(item.phone_number || '-')}</td>
             <td>${escapeHtml(item.provider_slot || '-')}</td>
             <td>${escapeHtml(String(item.provider_quote ?? '-'))}</td>
             <td>${escapeHtml(String(item.provider_count ?? '-'))}</td>

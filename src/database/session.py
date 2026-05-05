@@ -140,6 +140,9 @@ class DatabaseSessionManager:
             ("ix_accounts_openai_auth_state", "CREATE INDEX IF NOT EXISTS ix_accounts_openai_auth_state ON accounts(openai_auth_state)"),
             ("ix_accounts_token_validation_state", "CREATE INDEX IF NOT EXISTS ix_accounts_token_validation_state ON accounts(token_validation_state)"),
             ("ix_accounts_openai_account_state", "CREATE INDEX IF NOT EXISTS ix_accounts_openai_account_state ON accounts(openai_account_state)"),
+            ("ix_phone_reputation_provider_phone", "CREATE UNIQUE INDEX IF NOT EXISTS ix_phone_reputation_provider_phone ON phone_number_reputations(sms_provider, phone_number)"),
+            ("ix_phone_reputation_blacklisted", "CREATE INDEX IF NOT EXISTS ix_phone_reputation_blacklisted ON phone_number_reputations(blacklisted)"),
+            ("ix_phone_reputation_last_seen", "CREATE INDEX IF NOT EXISTS ix_phone_reputation_last_seen ON phone_number_reputations(last_seen_at)"),
         ]
 
         # 确保新表存在（create_tables 已处理，此处兜底）

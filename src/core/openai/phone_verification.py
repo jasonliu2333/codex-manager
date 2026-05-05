@@ -104,6 +104,59 @@ def _extract_error_code_from_text(error_text: str) -> Optional[str]:
     return None
 
 
+def _is_phone_blacklisted(provider_name: str, phone_number: str) -> Optional[dict]:
+    try:
+        with get_db() as db:
+            record = crud.get_phone_number_reputation(db, provider_name, phone_number)
+            if not record or not record.blacklisted:
+                return None
+            return {
+                "failure_count": int(record.failure_count or 0),
+                "last_error_code": record.last_error_code,
+                "last_error_message": record.last_error_message,
+            }
+    except Exception:
+        return None
+
+
+def _record_phone_reputation(
+    *,
+    provider_name: str,
+    phone_number: Optional[str],
+    service: str,
+    country: Optional[int],
+    country_key: Optional[str],
+    provider_slot: Optional[str],
+    success: bool,
+    blacklisted: bool,
+    error_code: Optional[str],
+    error_message: Optional[str],
+    activation_cost: Optional[float],
+    result_label: Optional[str],
+) -> None:
+    if not phone_number:
+        return
+    try:
+        with get_db() as db:
+            crud.upsert_phone_number_reputation(
+                db,
+                sms_provider=normalize_sms_provider_name(provider_name),
+                phone_number=str(phone_number).strip(),
+                service=service,
+                country=country,
+                country_key=country_key,
+                provider_slot=provider_slot,
+                success=success,
+                blacklisted=blacklisted,
+                error_code=error_code,
+                error_message=error_message,
+                activation_cost=activation_cost,
+                result_label=result_label,
+            )
+    except Exception:
+        return
+
+
 def is_add_phone_challenge(page_type: str = "", continue_url: str = "", payload: Any = None) -> bool:
     text = f"{page_type} {continue_url}".lower()
     if "add_phone" in text or "add-phone" in text or "phone_verification" in text:
@@ -372,6 +425,38 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     raise last_request_error
                 engine._log(f"add-phone: 取号成功 {activation.phone_number} (activation={activation.activation_id})")
 
+                blacklist_info = _is_phone_blacklisted(provider_name, activation.phone_number)
+                if blacklist_info:
+                    reason_text = (
+                        f"历史失败 {blacklist_info.get('failure_count')} 次，"
+                        f"last_code={blacklist_info.get('last_error_code') or '-'}, "
+                        f"last_error={blacklist_info.get('last_error_message') or '-'}"
+                    )
+                    engine._log(f"add-phone: 号码 {activation.phone_number} 命中历史失败黑名单，直接跳过: {reason_text}", "warning")
+                    _update_phone_verification_record(
+                        verification_attempt_id,
+                        invalid=True,
+                        failure_stage="history_blacklist_skip",
+                        error_code="history_blacklist_skip",
+                        error_message=reason_text[:1000],
+                    )
+                    _record_phone_reputation(
+                        provider_name=provider_name,
+                        phone_number=activation.phone_number,
+                        service=cfg.service,
+                        country=cfg.country if cfg.country and int(cfg.country) > 0 else None,
+                        country_key=cfg.country_key or None,
+                        provider_slot=provider_slot_used,
+                        success=False,
+                        blacklisted=True,
+                        error_code="history_blacklist_skip",
+                        error_message=reason_text,
+                        activation_cost=activation.activation_cost,
+                        result_label="history_blacklist_skip",
+                    )
+                    client.cancel_activation(activation.activation_id)
+                    continue
+
                 if number_attempt < target_number_index:
                     engine._log(f"add-phone: 当前为第 {number_attempt} 个号码，配置要求从第 {target_number_index} 个号码开始使用，跳过当前号码", "warning")
                     _update_phone_verification_record(
@@ -522,17 +607,46 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 error_message=None,
                 verified_at=datetime.utcnow(),
             )
+            _record_phone_reputation(
+                provider_name=provider_name,
+                phone_number=activation.phone_number if activation else None,
+                service=cfg.service,
+                country=cfg.country if cfg.country and int(cfg.country) > 0 else None,
+                country_key=cfg.country_key or None,
+                provider_slot=provider_slot_used,
+                success=True,
+                blacklisted=False,
+                error_code=None,
+                error_message=None,
+                activation_cost=activation.activation_cost if activation else None,
+                result_label="success",
+            )
             engine._log("add-phone: 手机验证完成")
             return next_url or "https://auth.openai.com/sign-in-with-chatgpt/codex/consent"
         except Exception as exc:
             last_error = str(exc)
+            error_code = _extract_error_code_from_text(last_error) or "runtime_error"
             engine._log(f"add-phone: 手机验证失败: {exc}", "error")
             _update_phone_verification_record(
                 verification_attempt_id,
                 invalid=True,
                 failure_stage="exception",
-                error_code=_extract_error_code_from_text(last_error) or "runtime_error",
+                error_code=error_code,
                 error_message=last_error[:1000],
+            )
+            _record_phone_reputation(
+                provider_name=provider_name,
+                phone_number=activation.phone_number if activation else None,
+                service=cfg.service,
+                country=cfg.country if cfg.country and int(cfg.country) > 0 else None,
+                country_key=cfg.country_key or None,
+                provider_slot=provider_slot_used,
+                success=False,
+                blacklisted=bool(activation and activation.phone_number),
+                error_code=error_code,
+                error_message=last_error,
+                activation_cost=activation.activation_cost if activation else None,
+                result_label="failed",
             )
             provider_rotation_index, provider_forced_price_floor = _register_provider_failure_and_maybe_rotate(
                 engine,
