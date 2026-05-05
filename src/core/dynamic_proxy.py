@@ -28,24 +28,51 @@ def build_seekproxy_api_url(
     valid_code: int = 0,
 ) -> str:
     from urllib.parse import urlencode
-    base = "http://api.seekproxy.com:8000/api/get-ips"
+    # SeekProxy 新版文档使用 HTTPS out-api。旧地址
+    # http://api.seekproxy.com:8000/api/get-ips 在部分远程机房会被 reset。
+    base = "https://www.seekproxy.com/out-api/get-ips"
     params = {
         "trade_no": trade_no,
         "key": key,
         "auth_type": int(auth_type or 2),
-        "ip_count": int(ip_count or 1),
-        "country": country or "",
-        "state": state or "",
-        "city": city or "",
-        "format": int(fmt or 1),
-        "break_type": int(break_type or 1),
-        "time": int(hold_time or 5),
     }
+    # 文档示例只有 trade_no/key/auth_type；以下参数为控制台兼容项，
+    # 仅在用户显式配置时追加，避免新接口因未知空参数拒绝请求。
+    if int(ip_count or 1) > 1:
+        params["ip_count"] = int(ip_count or 1)
+    if country:
+        params["country"] = country
+    if state:
+        params["state"] = state
+    if city:
+        params["city"] = city
+    if fmt not in (None, "", 1, "1"):
+        params["format"] = int(fmt or 1)
+    if break_type not in (None, "", 1, "1"):
+        params["break_type"] = int(break_type or 1)
+    if hold_time not in (None, "", 5, "5"):
+        params["time"] = int(hold_time or 5)
     if int(auth_type or 2) == 1:
         params["protocol"] = int(protocol or 0)
         params["pattern"] = int(pattern or 0)
         params["valid_code"] = int(valid_code or 0)
     return f"{base}?{urlencode(params)}"
+
+
+def _redact_url(url: str) -> str:
+    """日志用：脱敏 URL 里的 key/password/token。"""
+    try:
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+        parts = urlsplit(str(url or ""))
+        params = []
+        for key, value in parse_qsl(parts.query, keep_blank_values=True):
+            if key.lower() in {"key", "token", "password", "appkey", "api_key"} and value:
+                value = value[:3] + "***" + value[-3:] if len(value) > 8 else "***"
+            params.append((key, value))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), parts.fragment))
+    except Exception:
+        return re.sub(r'((?:key|token|password|appkey|api_key)=)[^&]+', r'\1***', str(url or ""), flags=re.I)
 
 
 def build_account_proxy_url(
@@ -82,10 +109,40 @@ def _normalize_proxy_url(proxy_url: str, *, default_scheme: str = "http") -> Opt
         return None
     if re.match(r'^(http|https|socks5|socks5h)://', proxy_url):
         return proxy_url
+    # SeekProxy 提取格式：host:port:username:password。
+    # requests 需要转换成：http://username:password@host:port
+    parts = proxy_url.split(":")
+    if len(parts) == 4 and "@" not in proxy_url:
+        host, port, username, password = parts
+        if host and port and username and password and port.isdigit():
+            safe_user = quote(username, safe="")
+            safe_password = quote(password, safe="")
+            return f"{default_scheme}://{safe_user}:{safe_password}@{host}:{int(port)}"
     scheme = (default_scheme or "http").strip().lower()
     if scheme not in {"http", "https", "socks5", "socks5h"}:
         scheme = "http"
     return f"{scheme}://{proxy_url}"
+
+
+def normalize_proxy_url_for_requests(proxy_url: str, *, default_scheme: str = "http") -> Optional[str]:
+    """
+    统一成 requests/curl_cffi proxies 可用格式。
+
+    HTTP 代理访问 HTTPS 站点时，proxies["https"] 仍然应该是
+    http://user:pass@host:port，由 requests 通过 CONNECT 建隧道；
+    只有 SOCKS5 代理才使用 socks5h://。
+    """
+    return _normalize_proxy_url(proxy_url, default_scheme=default_scheme)
+
+
+def build_proxy_requests_mapping(proxy_url: str, *, include_https: bool = True, default_scheme: str = "http") -> dict:
+    normalized = normalize_proxy_url_for_requests(proxy_url, default_scheme=default_scheme)
+    if not normalized:
+        return {}
+    proxies = {"http": normalized}
+    if include_https:
+        proxies["https"] = normalized
+    return proxies
 
 
 def _extract_proxy_from_json_text(text: str, result_field: str = "") -> Optional[str]:
@@ -130,6 +187,20 @@ def _parse_haiwaidaili_proxy_response(text: str) -> Optional[str]:
 
 
 def _parse_seekproxy_proxy_response(text: str) -> Optional[str]:
+    text = (text or "").strip()
+    if not text:
+        return None
+    if text.startswith("{") or text.startswith("["):
+        try:
+            import json
+            data = json.loads(text)
+            rows = data.get("data") if isinstance(data, dict) else data
+            if isinstance(rows, list) and rows:
+                return _parse_seekproxy_proxy_response(str(rows[0]))
+            if isinstance(rows, str):
+                return _parse_seekproxy_proxy_response(rows)
+        except Exception:
+            pass
     first_line = next((line.strip() for line in (text or "").splitlines() if line.strip()), "")
     if not first_line:
         return None
@@ -168,6 +239,23 @@ def parse_dynamic_proxy_candidates(
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
     candidates: list[str] = []
     if provider == "seekproxy":
+        raw_text = str(text or "").strip()
+        if raw_text.startswith("{") or raw_text.startswith("["):
+            try:
+                import json
+                data = json.loads(raw_text)
+                rows = data.get("data") if isinstance(data, dict) else data
+                if isinstance(rows, list):
+                    for row in rows:
+                        proxy = _parse_seekproxy_proxy_response(str(row))
+                        if proxy:
+                            candidates.append(proxy)
+                    return candidates
+                if isinstance(rows, str):
+                    proxy = _parse_seekproxy_proxy_response(rows)
+                    return [proxy] if proxy else []
+            except Exception:
+                pass
         for line in lines:
             proxy = _parse_seekproxy_proxy_response(line)
             if proxy:
@@ -205,8 +293,6 @@ def fetch_dynamic_proxy(
     Returns:
         代理 URL 字符串（如 http://user:pass@host:port），失败返回 None
     """
-    from curl_cffi import requests as cffi_requests
-
     headers = {}
     if api_key:
         headers[api_key_header] = api_key
@@ -215,11 +301,11 @@ def fetch_dynamic_proxy(
     max_attempts = max(1, int(retries or 1))
     for attempt in range(1, max_attempts + 1):
         try:
-            response = cffi_requests.get(
+            response = _http_get_dynamic_api(
                 api_url,
                 headers=headers,
                 timeout=10,
-                impersonate="chrome110"
+                attempt=attempt,
             )
 
             if response.status_code != 200:
@@ -245,7 +331,7 @@ def fetch_dynamic_proxy(
 
         except Exception as e:
             last_error = str(e)
-            logger.error(f"获取动态代理失败(第 {attempt}/{max_attempts} 次): {e}")
+            logger.error("获取动态代理失败(第 %s/%s 次): %s | url=%s", attempt, max_attempts, e, _redact_url(api_url))
             continue
 
     logger.error(f"获取动态代理最终失败: {last_error}")
@@ -262,8 +348,6 @@ def fetch_dynamic_proxy_candidates(
     provider: str = "generic",
     default_scheme: str = "http",
 ) -> list[str]:
-    from curl_cffi import requests as cffi_requests
-
     headers = {}
     if api_key:
         headers[api_key_header] = api_key
@@ -272,11 +356,11 @@ def fetch_dynamic_proxy_candidates(
     max_attempts = max(1, int(retries or 1))
     for attempt in range(1, max_attempts + 1):
         try:
-            response = cffi_requests.get(
+            response = _http_get_dynamic_api(
                 api_url,
                 headers=headers,
                 timeout=10,
-                impersonate="chrome110"
+                attempt=attempt,
             )
             if response.status_code != 200:
                 last_error = f"动态代理 API 返回错误状态码: {response.status_code}"
@@ -295,10 +379,36 @@ def fetch_dynamic_proxy_candidates(
             logger.warning(f"{last_error} (第 {attempt}/{max_attempts} 次)")
         except Exception as e:
             last_error = str(e)
-            logger.error(f"获取动态代理候选失败(第 {attempt}/{max_attempts} 次): {e}")
+            logger.error("获取动态代理候选失败(第 %s/%s 次): %s | url=%s", attempt, max_attempts, e, _redact_url(api_url))
             continue
     logger.error(f"获取动态代理候选最终失败: {last_error}")
     return []
+
+
+def _http_get_dynamic_api(api_url: str, *, headers: dict, timeout: int, attempt: int):
+    """
+    动态代理“提取 API”请求。
+    SeekProxy 文档示例是普通 HTTPS GET；这里优先用 requests，
+    若远程环境 requests 不兼容，再回退 curl_cffi。
+    """
+    last_error = None
+    for client_name in ("requests", "curl_cffi"):
+        try:
+            if client_name == "requests":
+                import requests
+                return requests.get(api_url, headers=headers, timeout=timeout)
+            from curl_cffi import requests as cffi_requests
+            return cffi_requests.get(api_url, headers=headers, timeout=timeout, impersonate="chrome110")
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "动态代理 API 请求失败，准备尝试下一个客户端: client=%s attempt=%s error=%s url=%s",
+                client_name,
+                attempt,
+                exc,
+                _redact_url(api_url),
+            )
+    raise last_error
 
 
 def fetch_public_ip() -> Optional[str]:
@@ -323,20 +433,18 @@ def fetch_public_ip() -> Optional[str]:
 
 
 def _build_proxy_test_mapping(proxy_url: str, *, include_https: bool) -> dict:
-    proxies = {"http": proxy_url}
-    if include_https:
-        proxies["https"] = proxy_url
-    return proxies
+    return build_proxy_requests_mapping(proxy_url, include_https=include_https)
 
 
 def probe_proxy_http_basic(proxy_url: str, timeout: int = 8) -> tuple[bool, str]:
-    from curl_cffi import requests as cffi_requests
+    import requests
     try:
-        resp = cffi_requests.get(
-            "http://ip234.in/ip.json",
-            proxies=_build_proxy_test_mapping(proxy_url, include_https=True),
+        resp = requests.get(
+            "http://api.ipify.org?format=json",
+            proxies=_build_proxy_test_mapping(proxy_url, include_https=False),
             timeout=timeout,
-            impersonate="chrome110",
+            headers={"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"},
+            verify=False,
         )
         return resp.status_code == 200, (resp.text or "")[:200]
     except Exception as exc:
@@ -344,14 +452,15 @@ def probe_proxy_http_basic(proxy_url: str, timeout: int = 8) -> tuple[bool, str]
 
 
 def probe_proxy_https_openai(proxy_url: str, timeout: int = 8) -> tuple[bool, str]:
-    from curl_cffi import requests as cffi_requests
+    import requests
     try:
-        resp = cffi_requests.get(
+        resp = requests.get(
             "https://auth.openai.com/",
             proxies=_build_proxy_test_mapping(proxy_url, include_https=True),
             timeout=timeout,
-            impersonate="chrome110",
+            headers={"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"},
             allow_redirects=False,
+            verify=False,
         )
         return True, str(resp.status_code)
     except Exception as exc:

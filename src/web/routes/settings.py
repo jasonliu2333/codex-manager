@@ -23,6 +23,7 @@ from ...config.settings import (
 )
 from ...core.registration_flow_templates import get_registration_flow_templates, normalize_flow_template
 from ...core.sms import SMSProviderConfig, get_sms_provider
+from ...core.dynamic_proxy import build_proxy_requests_mapping
 from ...database import crud
 from ...database.session import get_db
 
@@ -403,10 +404,7 @@ def _build_proxy_runtime_diagnostics() -> dict:
 
 
 def _build_proxy_test_mapping(proxy_url: str, *, include_https: bool) -> dict:
-    proxies = {"http": proxy_url}
-    if include_https:
-        proxies["https"] = proxy_url
-    return proxies
+    return build_proxy_requests_mapping(proxy_url, include_https=include_https)
 
 
 def _ensure_seekproxy_cache_dir() -> None:
@@ -564,14 +562,15 @@ def _search_seekproxy_geo_rows(rows: list[dict], keyword: str) -> list[dict]:
 
 def _test_proxy_http_basic(proxy_url: str) -> dict:
     import time
-    from curl_cffi import requests as cffi_requests
+    import requests
 
     start = time.time()
-    resp = cffi_requests.get(
+    resp = requests.get(
         "http://api.ipify.org?format=json",
         proxies=_build_proxy_test_mapping(proxy_url, include_https=False),
         timeout=10,
-        impersonate="chrome110",
+        headers={"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"},
+        verify=False,
     )
     elapsed = round((time.time() - start) * 1000)
     if resp.status_code != 200:
@@ -585,14 +584,15 @@ def _test_proxy_http_basic(proxy_url: str) -> dict:
 
 
 def _test_proxy_https_openai(proxy_url: str) -> dict:
-    from curl_cffi import requests as cffi_requests
+    import requests
     try:
-        resp = cffi_requests.get(
+        resp = requests.get(
             "https://auth.openai.com/",
             proxies=_build_proxy_test_mapping(proxy_url, include_https=True),
             timeout=10,
-            impersonate="chrome110",
+            headers={"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"},
             allow_redirects=False,
+            verify=False,
         )
         return {"success": True, "status_code": resp.status_code, "message": f"HTTPS CONNECT 可用（auth.openai.com 返回 {resp.status_code}）"}
     except Exception as exc:

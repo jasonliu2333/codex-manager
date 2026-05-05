@@ -1,6 +1,8 @@
 certifi>=2024.0.0
 cffi>=1.16.0
 curl_cffi>=0.14.0
+requests>=2.31.0
+PySocks>=1.7.1
 pycparser>=1.21
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
