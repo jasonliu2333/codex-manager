@@ -461,7 +461,7 @@ def _seekproxy_cache_set(section: str, cache_key: str, rows: list[dict]) -> None
 
 def _fetch_seekproxy_json(path: str, params: Optional[dict] = None) -> list[dict]:
     from urllib.parse import urlencode
-    from curl_cffi import requests as cffi_requests
+    import requests
 
     url = f"https://www.seekproxy.com{path}"
     if params:
@@ -469,7 +469,7 @@ def _fetch_seekproxy_json(path: str, params: Optional[dict] = None) -> list[dict
         if query:
             url = f"{url}?{query}"
 
-    response = cffi_requests.get(url, timeout=20, impersonate="chrome")
+    response = requests.get(url, timeout=20)
     response.raise_for_status()
     payload = response.json()
     if int(payload.get("code") or 0) != 200:
@@ -1075,6 +1075,7 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
         fetch_dynamic_proxy_candidates,
         build_account_proxy_url,
         ensure_haiwaidaili_whitelist,
+        ensure_seekproxy_whitelist,
         build_seekproxy_api_url,
         select_best_dynamic_proxy,
     )
@@ -1106,6 +1107,11 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
                     seekproxy_key = secret.get_secret_value().strip() if hasattr(secret, "get_secret_value") else str(secret).strip()
             if not request.seekproxy_trade_no.strip() or not seekproxy_key:
                 raise HTTPException(status_code=400, detail="请填写完整的 SeekProxy trade_no 和 key")
+            whitelist_message = ""
+            if int(request.seekproxy_auth_type or 2) == 2:
+                ok, whitelist_message = ensure_seekproxy_whitelist(request.seekproxy_trade_no.strip(), seekproxy_key)
+                if not ok:
+                    return {"success": False, "message": whitelist_message}
             api_url = build_seekproxy_api_url(
                 trade_no=request.seekproxy_trade_no,
                 key=seekproxy_key,
@@ -1131,7 +1137,7 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
             secret = getattr(settings, "proxy_dynamic_provider_appkey", None)
             if secret:
                 provider_appkey = secret.get_secret_value().strip() if hasattr(secret, "get_secret_value") else str(secret).strip()
-        whitelist_message = ""
+        whitelist_message = locals().get("whitelist_message", "")
         if provider == "haiwaidaili" and provider_appid and provider_appkey:
             ok, whitelist_message = ensure_haiwaidaili_whitelist(provider_appid, provider_appkey)
             if not ok:
@@ -1147,7 +1153,7 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
             api_key_header=request.api_key_header,
             result_field=request.result_field,
             provider=provider,
-            default_scheme=request.scheme,
+            default_scheme="socks5h" if provider == "seekproxy" and int(request.seekproxy_auth_type or 2) == 1 and int(request.seekproxy_protocol or 0) == 2 else request.scheme,
         )
         proxy_url = select_best_dynamic_proxy(candidates) if candidates else None
 

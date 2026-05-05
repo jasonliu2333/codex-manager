@@ -35,27 +35,24 @@ def build_seekproxy_api_url(
         "trade_no": trade_no,
         "key": key,
         "auth_type": int(auth_type or 2),
+        # 文档标注必需，最少 1 个。
+        "ip_count": max(1, int(ip_count or 1)),
     }
-    # 文档示例只有 trade_no/key/auth_type；以下参数为控制台兼容项，
-    # 仅在用户显式配置时追加，避免新接口因未知空参数拒绝请求。
-    if int(ip_count or 1) > 1:
-        params["ip_count"] = int(ip_count or 1)
     if country:
-        params["country"] = country
+        params["country"] = str(country).strip().upper()
     if state:
         params["state"] = state
     if city:
         params["city"] = city
-    if fmt not in (None, "", 1, "1"):
-        params["format"] = int(fmt or 1)
-    if break_type not in (None, "", 1, "1"):
-        params["break_type"] = int(break_type or 1)
-    if hold_time not in (None, "", 5, "5"):
-        params["time"] = int(hold_time or 5)
     if int(auth_type or 2) == 1:
+        # auth_type=1：账号密码模式，pattern/protocol/valid_code 生效。
         params["protocol"] = int(protocol or 0)
         params["pattern"] = int(pattern or 0)
         params["valid_code"] = int(valid_code or 0)
+    else:
+        # auth_type=2：白名单模式，time 生效，取值 5-30 分钟。
+        hold = int(hold_time or 5)
+        params["time"] = max(5, min(30, hold))
     return f"{base}?{urlencode(params)}"
 
 
@@ -186,7 +183,35 @@ def _parse_haiwaidaili_proxy_response(text: str) -> Optional[str]:
     return _normalize_proxy_url(first_line, default_scheme="http") if first_line else None
 
 
-def _parse_seekproxy_proxy_response(text: str) -> Optional[str]:
+def _parse_seekproxy_proxy_item(item, *, default_scheme: str = "http") -> Optional[str]:
+    """
+    兼容 SeekProxy 可能返回的多种 data 项：
+    - "host:port:username:password"
+    - "username:password@host:port"
+    - "host|port|username|password"
+    - {"ip": "host", "port": 10000}
+    - {"ip": "host", "port": 10000, "username": "...", "password": "..."}
+    """
+    if isinstance(item, dict):
+        for key in ("proxy", "proxy_url", "url", "addr", "address"):
+            value = item.get(key)
+            if value:
+                return _parse_seekproxy_proxy_response(str(value), default_scheme=default_scheme)
+        host = str(item.get("ip") or item.get("host") or "").strip()
+        port = str(item.get("port") or "").strip()
+        username = str(item.get("username") or item.get("user") or item.get("account") or "").strip()
+        password = str(item.get("password") or item.get("pass") or item.get("pwd") or "").strip()
+        if host and port:
+            if username and password:
+                safe_user = quote(username, safe="")
+                safe_password = quote(password, safe="")
+                return f"{default_scheme}://{safe_user}:{safe_password}@{host}:{int(port)}" if port.isdigit() else f"{default_scheme}://{safe_user}:{safe_password}@{host}:{port}"
+            return f"{default_scheme}://{host}:{int(port)}" if port.isdigit() else f"{default_scheme}://{host}:{port}"
+        return None
+    return _parse_seekproxy_proxy_response(str(item), default_scheme=default_scheme)
+
+
+def _parse_seekproxy_proxy_response(text: str, *, default_scheme: str = "http") -> Optional[str]:
     text = (text or "").strip()
     if not text:
         return None
@@ -196,21 +221,37 @@ def _parse_seekproxy_proxy_response(text: str) -> Optional[str]:
             data = json.loads(text)
             rows = data.get("data") if isinstance(data, dict) else data
             if isinstance(rows, list) and rows:
-                return _parse_seekproxy_proxy_response(str(rows[0]))
+                return _parse_seekproxy_proxy_item(rows[0], default_scheme=default_scheme)
             if isinstance(rows, str):
-                return _parse_seekproxy_proxy_response(rows)
+                return _parse_seekproxy_proxy_response(rows, default_scheme=default_scheme)
+            if isinstance(rows, dict):
+                return _parse_seekproxy_proxy_item(rows, default_scheme=default_scheme)
+            if isinstance(data, dict):
+                return _parse_seekproxy_proxy_item(data, default_scheme=default_scheme)
         except Exception:
             pass
     first_line = next((line.strip() for line in (text or "").splitlines() if line.strip()), "")
     if not first_line:
         return None
+    # pattern=2：代理服务器地址|端口|账号|密码
+    if "|" in first_line:
+        fields = first_line.split("|")
+        if len(fields) == 4:
+            first_line = ":".join(fields)
+    # pattern=1：账号:密码@代理服务器地址:端口
+    m = re.match(r'^([^:\s]+):([^@\s]+)@([^:\s]+):(\d+)$', first_line)
+    if m:
+        username, password, host, port = m.groups()
+        safe_user = quote(username, safe="")
+        safe_password = quote(password, safe="")
+        return f"{default_scheme}://{safe_user}:{safe_password}@{host}:{int(port)}"
     parts = first_line.split(":")
     if len(parts) == 4:
         host, port, username, password = parts
         safe_user = quote(username, safe="")
         safe_password = quote(password, safe="")
-        return f"http://{safe_user}:{safe_password}@{host}:{int(port)}"
-    return _normalize_proxy_url(first_line, default_scheme="http")
+        return f"{default_scheme}://{safe_user}:{safe_password}@{host}:{int(port)}"
+    return _normalize_proxy_url(first_line, default_scheme=default_scheme)
 
 
 def parse_dynamic_proxy_response(
@@ -222,7 +263,7 @@ def parse_dynamic_proxy_response(
 ) -> Optional[str]:
     provider = str(provider or "generic").strip().lower()
     if provider == "seekproxy":
-        return _parse_seekproxy_proxy_response(text)
+        return _parse_seekproxy_proxy_response(text, default_scheme=default_scheme)
     if provider == "haiwaidaili":
         return _parse_haiwaidaili_proxy_response(text)
     return _parse_generic_proxy_response(text, result_field=result_field, default_scheme=default_scheme)
@@ -247,17 +288,20 @@ def parse_dynamic_proxy_candidates(
                 rows = data.get("data") if isinstance(data, dict) else data
                 if isinstance(rows, list):
                     for row in rows:
-                        proxy = _parse_seekproxy_proxy_response(str(row))
+                        proxy = _parse_seekproxy_proxy_item(row, default_scheme=default_scheme)
                         if proxy:
                             candidates.append(proxy)
                     return candidates
                 if isinstance(rows, str):
-                    proxy = _parse_seekproxy_proxy_response(rows)
+                    proxy = _parse_seekproxy_proxy_response(rows, default_scheme=default_scheme)
+                    return [proxy] if proxy else []
+                if isinstance(rows, dict):
+                    proxy = _parse_seekproxy_proxy_item(rows, default_scheme=default_scheme)
                     return [proxy] if proxy else []
             except Exception:
                 pass
         for line in lines:
-            proxy = _parse_seekproxy_proxy_response(line)
+            proxy = _parse_seekproxy_proxy_response(line, default_scheme=default_scheme)
             if proxy:
                 candidates.append(proxy)
         return candidates
@@ -527,6 +571,77 @@ def ensure_haiwaidaili_whitelist(appid: str, appkey: str) -> tuple[bool, str]:
         return False, f"加入白名单失败: {exc}"
 
 
+def _seekproxy_api_json(method: str, path: str, *, params: Optional[dict] = None, data: Optional[dict] = None, timeout: int = 15) -> dict:
+    import requests
+
+    url = f"https://www.seekproxy.com{path}"
+    method = str(method or "GET").upper()
+    if method == "POST":
+        resp = requests.post(url, data={k: v for k, v in (data or {}).items() if v not in (None, "")}, timeout=timeout)
+    else:
+        resp = requests.get(url, params={k: v for k, v in (params or {}).items() if v not in (None, "")}, timeout=timeout)
+    resp.raise_for_status()
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        raise ValueError(f"SeekProxy 返回非 JSON: {(resp.text or '')[:200]}") from exc
+    if int(payload.get("code") or 0) != 200:
+        raise ValueError(payload.get("msg") or f"SeekProxy 返回错误 code={payload.get('code')}")
+    return payload
+
+
+def get_seekproxy_white_list(trade_no: str, key: str) -> list[str]:
+    payload = _seekproxy_api_json(
+        "GET",
+        "/out-api/white-ip-list",
+        params={"trade_no": trade_no, "key": key},
+    )
+    data = payload.get("data") or []
+    return [str(x).strip() for x in data if str(x).strip()] if isinstance(data, list) else []
+
+
+def add_seekproxy_white_ip(trade_no: str, key: str, ip: str) -> bool:
+    payload = _seekproxy_api_json(
+        "POST",
+        "/out-api/add-white-ip",
+        data={"trade_no": trade_no, "key": key, "ip": ip},
+    )
+    msg = str(payload.get("msg") or "")
+    return int(payload.get("code") or 0) == 200 or "成功" in msg
+
+
+def delete_seekproxy_white_ip(trade_no: str, key: str, ip: str) -> bool:
+    payload = _seekproxy_api_json(
+        "POST",
+        "/out-api/del-white-ip",
+        data={"trade_no": trade_no, "key": key, "ip": ip},
+    )
+    msg = str(payload.get("msg") or "")
+    return int(payload.get("code") or 0) == 200 or "成功" in msg
+
+
+def ensure_seekproxy_whitelist(trade_no: str, key: str) -> tuple[bool, str]:
+    """
+    SeekProxy auth_type=2 为白名单模式，需要先将当前出口 IP 加入白名单。
+    """
+    ip = fetch_public_ip()
+    if not ip:
+        return False, "无法获取当前外网 IP"
+    try:
+        current = get_seekproxy_white_list(trade_no, key)
+    except Exception as exc:
+        return False, f"获取 SeekProxy 白名单失败: {exc}"
+    if ip in current:
+        return True, f"当前外网 IP 已在 SeekProxy 白名单中: {ip}"
+    try:
+        ok = add_seekproxy_white_ip(trade_no, key, ip)
+        if ok:
+            return True, f"已加入 SeekProxy 白名单: {ip}，通常约 30 秒后生效"
+        return False, f"加入 SeekProxy 白名单失败: {ip}"
+    except Exception as exc:
+        return False, f"加入 SeekProxy 白名单失败: {exc}"
+
+
 def get_proxy_url_for_task() -> Optional[str]:
     """
     为注册任务获取代理 URL。
@@ -571,6 +686,15 @@ def get_proxy_url_for_task() -> Optional[str]:
                         logger.warning("动态代理白名单检查失败: %s", msg)
                     else:
                         logger.info("动态代理白名单检查成功: %s", msg)
+            elif provider == "seekproxy" and int(request_cfg.get("auth_type") or 2) == 2:
+                trade_no = str(request_cfg.get("trade_no") or "").strip()
+                key = str(request_cfg.get("seekproxy_key") or "").strip()
+                if trade_no and key:
+                    ok, msg = ensure_seekproxy_whitelist(trade_no, key)
+                    if not ok:
+                        logger.warning("SeekProxy 白名单检查失败: %s", msg)
+                    else:
+                        logger.info("SeekProxy 白名单检查成功: %s", msg)
             candidates = fetch_dynamic_proxy_candidates(
                 api_url=request_cfg["api_url"],
                 api_key=request_cfg["api_key"],
@@ -606,12 +730,15 @@ def build_dynamic_api_provider_request(settings) -> dict:
         if not seekproxy_key:
             secret = getattr(settings, "proxy_dynamic_seekproxy_key", None)
             seekproxy_key = secret.get_secret_value().strip() if secret else ""
+        auth_type = int(profile_or_compat("auth_type", "proxy_dynamic_seekproxy_auth_type", 2) or 2)
+        protocol = int(profile_or_compat("protocol", "proxy_dynamic_seekproxy_protocol", 0) or 0)
+        trade_no = profile_or_compat("trade_no", "proxy_dynamic_seekproxy_trade_no", "")
         return {
             "provider": "seekproxy",
             "api_url": build_seekproxy_api_url(
-                trade_no=profile_or_compat("trade_no", "proxy_dynamic_seekproxy_trade_no", ""),
+                trade_no=trade_no,
                 key=seekproxy_key,
-                auth_type=profile_or_compat("auth_type", "proxy_dynamic_seekproxy_auth_type", 2),
+                auth_type=auth_type,
                 ip_count=profile_or_compat("ip_count", "proxy_dynamic_seekproxy_ip_count", 1),
                 country=profile_or_compat("country", "proxy_dynamic_country", ""),
                 state=profile_or_compat("state", "proxy_dynamic_seekproxy_state", ""),
@@ -619,14 +746,17 @@ def build_dynamic_api_provider_request(settings) -> dict:
                 fmt=1,
                 break_type=profile_or_compat("break_type", "proxy_dynamic_seekproxy_break_type", 1),
                 hold_time=profile_or_compat("time", "proxy_dynamic_seekproxy_time", 5),
-                protocol=profile_or_compat("protocol", "proxy_dynamic_seekproxy_protocol", 0),
+                protocol=protocol,
                 pattern=profile_or_compat("pattern", "proxy_dynamic_seekproxy_pattern", 0),
                 valid_code=profile_or_compat("valid_code", "proxy_dynamic_seekproxy_valid_code", 0),
             ),
             "api_key": "",
             "api_key_header": "X-API-Key",
             "result_field": "",
-            "default_scheme": "http",
+            "default_scheme": "socks5h" if auth_type == 1 and protocol == 2 else "http",
+            "auth_type": auth_type,
+            "trade_no": trade_no,
+            "seekproxy_key": seekproxy_key,
         }
     if provider == "haiwaidaili":
         api_key = profile.get("api_key") if isinstance(profile, dict) else None
