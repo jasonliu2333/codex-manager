@@ -83,6 +83,7 @@ const elements = {
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
+    restorePendingTaskContext();
     loadStats();
     loadAccounts();
     initEventListeners();
@@ -735,6 +736,7 @@ async function refreshToken(id) {
         updateStoredTaskContext({
             id: result.task_uuid,
             kind: 'task',
+            mode: 'refresh_task',
             title: `刷新 Token 日志 · 账号 ${id}`,
             status: 'pending',
             logUrl: `/accounts/task-logs/${result.task_uuid}`,
@@ -796,6 +798,34 @@ function persistTaskContext(context) {
     localStorage.setItem(key, JSON.stringify(filtered.slice(0, 20)));
 }
 
+function getWatcherByMode(mode) {
+    const mapping = {
+        refresh_task: watchRefreshTask,
+        validate_task: watchValidateTask,
+        subscription_task: watchSubscriptionTask,
+        recovery_task: watchRecoveryTask,
+        refresh_batch: watchRefreshBatch,
+        validate_batch: watchValidateBatch,
+        subscription_batch: watchSubscriptionBatch,
+        recovery_batch: watchRecoveryBatch,
+    };
+    return mapping[mode] || null;
+}
+
+function restorePendingTaskContext() {
+    const items = JSON.parse(localStorage.getItem('accounts_recent_tasks') || '[]');
+    const pending = items.find(item => !item.finished);
+    if (!pending) {
+        renderResumeTaskButton();
+        return;
+    }
+    currentTaskContext = {
+        ...pending,
+        watcher: getWatcherByMode(pending.mode),
+    };
+    renderResumeTaskButton();
+}
+
 function updateStoredTaskContext(context) {
     if (!context || !context.id) return;
     currentTaskContext = { ...(currentTaskContext || {}), ...context };
@@ -827,7 +857,7 @@ async function loadExistingTaskLogs(logUrl) {
 async function reopenTaskContext(context) {
     if (!context) return;
     openRecoveryLogModal(context.title || '任务日志');
-    currentTaskContext = { ...context };
+    currentTaskContext = { ...context, watcher: context.watcher || getWatcherByMode(context.mode) };
     renderResumeTaskButton();
     await loadExistingTaskLogs(context.logUrl);
     const cancelBtn = document.getElementById('recovery-log-cancel-btn');
@@ -836,8 +866,8 @@ async function reopenTaskContext(context) {
         cancelBtn.style.display = context.cancelEndpoint ? 'inline-flex' : 'none';
         cancelBtn.disabled = false;
     }
-    if (typeof context.watcher === 'function') {
-        context.watcher(context.id, true);
+    if (typeof currentTaskContext.watcher === 'function') {
+        currentTaskContext.watcher(context.id, true);
     }
 }
 
@@ -1144,6 +1174,7 @@ async function recoverOAuth(id) {
         updateStoredTaskContext({
             id: result.task_uuid,
             kind: 'task',
+            mode: 'recovery_task',
             title: `OAuth 补录日志 · 账号 ${id}`,
             status: 'pending',
             logUrl: `/accounts/task-logs/${result.task_uuid}`,
@@ -1183,6 +1214,7 @@ async function handleBatchRefresh() {
         updateStoredTaskContext({
             id: result.batch_id,
             kind: 'batch',
+            mode: 'refresh_batch',
             title: `批量刷新 Token 日志 (${count})`,
             status: 'running',
             logUrl: `/accounts/batch-logs/${result.batch_id}`,
@@ -1223,6 +1255,7 @@ async function handleBatchRecoverOAuth() {
         updateStoredTaskContext({
             id: result.batch_id,
             kind: 'batch',
+            mode: 'recovery_batch',
             title: `批量 OAuth 补录日志 (${count})`,
             status: 'running',
             logUrl: `/accounts/batch-logs/${result.batch_id}`,
@@ -1266,6 +1299,7 @@ async function handleBatchValidate() {
         updateStoredTaskContext({
             id: result.batch_id,
             kind: 'batch',
+            mode: 'validate_batch',
             title: `批量验证 Token 日志 (${count})`,
             status: 'running',
             logUrl: `/accounts/batch-logs/${result.batch_id}`,
@@ -1812,6 +1846,7 @@ async function validateToken(id) {
         updateStoredTaskContext({
             id: result.task_uuid,
             kind: 'task',
+            mode: 'validate_task',
             title: `验证 Token 日志 · 账号 ${id}`,
             status: 'pending',
             logUrl: `/accounts/task-logs/${result.task_uuid}`,
@@ -1837,6 +1872,7 @@ async function checkSubscription(id) {
         updateStoredTaskContext({
             id: result.task_uuid,
             kind: 'task',
+            mode: 'subscription_task',
             title: `订阅检测日志 · 账号 ${id}`,
             status: 'pending',
             logUrl: `/accounts/task-logs/${result.task_uuid}`,
@@ -1893,6 +1929,7 @@ async function handleBatchCheckSubscription() {
         updateStoredTaskContext({
             id: result.batch_id,
             kind: 'batch',
+            mode: 'subscription_batch',
             title: `批量订阅检测日志 (${count})`,
             status: 'running',
             logUrl: `/accounts/batch-logs/${result.batch_id}`,

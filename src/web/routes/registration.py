@@ -98,6 +98,8 @@ def _select_registration_proxy(db, request_proxy: Optional[str] = None) -> Tuple
 
 def _probe_registration_proxy_or_raise(proxy_url: Optional[str], source_name: str, strict_selected: bool, *, retries: int = 3) -> None:
     if not proxy_url:
+        if source_name == "直连":
+            return
         if strict_selected:
             raise RuntimeError(f"已指定代理来源 {source_name}，但当前未获取到可用代理")
         return

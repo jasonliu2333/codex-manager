@@ -225,6 +225,8 @@ def _get_proxy(request_proxy: Optional[str] = None, purpose: str = "general") ->
 def _probe_proxy_or_raise(selection: dict, *, retries: int = 3) -> None:
     proxy_url = selection.get("proxy_url")
     if not proxy_url:
+        if selection.get("source") == "direct":
+            return
         if selection.get("strict_selected"):
             raise RuntimeError(f"已指定代理来源 {selection.get('source_name')}，但当前未获取到可用代理：{selection.get('source_detail') or '未返回代理'}")
         return
@@ -1419,6 +1421,10 @@ def _run_sync_recover_oauth_task(
                 "status": AccountStatus.ACTIVE.value,
                 "proxy_used": actual_proxy,
                 "extra_data": extra,
+                "oauth_recovery_required": False,
+                "openai_auth_state": None,
+                "token_validation_state": None,
+                "openai_account_state": None,
             }
             expires_at = token_info.get("expires_at")
             if expires_at:
@@ -1454,6 +1460,31 @@ def _run_sync_recover_oauth_task(
         error_message = str(e)
         logger.warning(f"补录任务失败: {task_uuid}, 原因: {error_message}")
         with get_db() as db:
+            try:
+                account = crud.get_account_by_id(db, account_id)
+                if account:
+                    normalized = error_message.lower()
+                    if (
+                        "deleted or deactivated" in normalized
+                        or "账号已被删除或停用" in normalized
+                    ):
+                        _mark_account_deleted_or_deactivated(db, account, "OpenAI 返回账号已被删除或停用", proxy_used=getattr(account, "proxy_used", None))
+                    elif "forbidden_or_banned" in normalized or "账号可能被封禁" in normalized:
+                        extra = dict(account.extra_data or {})
+                        extra["openai_account_state"] = "forbidden_or_banned"
+                        extra["openai_account_state_reason"] = error_message
+                        extra["openai_account_state_marked_at"] = datetime.utcnow().isoformat()
+                        crud.update_account(
+                            db,
+                            account.id,
+                            status=AccountStatus.BANNED.value,
+                            extra_data=extra,
+                            openai_account_state="forbidden_or_banned",
+                            oauth_recovery_required=False,
+                            openai_auth_state=None,
+                        )
+            except Exception:
+                pass
             crud.update_registration_task(
                 db,
                 task_uuid,
