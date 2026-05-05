@@ -953,6 +953,21 @@
                                 </div>
                             </div>
 
+                            <div class="form-row provider-group provider-smsbower">
+                                <div class="form-group">
+                                    <label style="display:flex;align-items:center;gap:8px;">
+                                        <input type="checkbox" id="sms-provider-failover-enabled" name="provider_failover_enabled" checked>
+                                        同 provider 连续失败后自动切换下一个 providerIds
+                                    </label>
+                                    <span class="hint">适用于 SMSBower 自动 provider 报价模式。达到阈值后会跳到下一档 provider 报价，且不会突破设置的最大价格。</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="sms-provider-fail-threshold">同 provider 连续失败阈值</label>
+                                    <input type="number" id="sms-provider-fail-threshold" name="provider_fail_threshold" value="3" min="1" max="10">
+                                    <span class="hint">例如填 3：同一个 providerIds 连续 3 次号码无效/失败，则自动切换到下一 providerIds。</span>
+                                </div>
+                            </div>
+
                             <div class="form-row">
                                 <div class="form-group">
                                     <label style="display:flex;align-items:center;gap:8px;">

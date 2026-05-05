@@ -1,0 +1,1921 @@
+时效列表
+import http.client
+
+conn = http.client.HTTPSConnection("www.seekproxy.com")
+payload = ''
+headers = {}
+conn.request("GET", "/out-api/valid-list", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
+
+返回响应
+🟢200
+成功
+application/json
+code
+integer 
+返回码：200成功
+必需
+msg
+string 
+必需
+返回信息：success表示成功
+data
+array [object] 
+返回信息
+必需
+code
+string 
+时效编码
+必需
+desc
+string 
+时效描述
+必需
+示例
+{
+    "code": 200,
+    "msg": "success",
+    "data": [
+        {
+            "code": "0",
+            "desc": "IP粘性5-30分钟"
+        },
+        {
+            "code": "2",
+            "desc": "IP粘性1-6小时"
+        },
+        {
+            "code": "1",
+            "desc": "每次请求更换IP"
+        }
+    ]
+}
+
+返回格式列表
+import http.client
+
+conn = http.client.HTTPSConnection("www.seekproxy.com")
+payload = ''
+headers = {}
+conn.request("GET", "/out-api/patterns-list", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
+
+返回响应
+🟢200
+成功
+application/json
+code
+integer 
+返回码
+必需
+msg
+string 
+返回信息
+必需
+data
+array [object] 
+返回数据
+必需
+code
+string 
+返回数据格式编码
+必需
+desc
+string 
+返回数据格式描述
+必需
+示例
+{
+    "code": 200,
+    "msg": "success",
+    "data": [
+        {
+            "code": "0",
+            "desc": "代理服务器地址:端口:账号:密码"
+        },
+        {
+            "code": "1",
+            "desc": "账号:密码@代理服务器地址:端口"
+        },
+        {
+            "code": "2",
+            "desc": "代理服务器地址|端口|账号|密码"
+        }
+    ]
+}
+
+国家编码列表
+import http.client
+
+conn = http.client.HTTPSConnection("www.seekproxy.com")
+payload = ''
+headers = {}
+conn.request("GET", "/out-api/country-list", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
+
+
+返回响应
+🟢200
+成功
+application/json
+code
+integer 
+返回码
+必需
+msg
+string 
+返回信息
+必需
+data
+array [object] 
+返回数据
+必需
+code
+string 
+国家编码
+必需
+name
+string 
+国家名称
+必需
+示例
+{
+    "code": 200,
+    "msg": "success",
+    "data": [
+        {
+            "code": "AE",
+            "name": "阿拉伯联合酋长国"
+        },
+        {
+            "code": "AF",
+            "name": "阿富汗"
+        },
+        {
+            "code": "AG",
+            "name": "安提瓜和巴布达"
+        },
+        {
+            "code": "AI",
+            "name": "安圭拉"
+        },
+        {
+            "code": "AL",
+            "name": "阿尔巴尼亚"
+        },
+        {
+            "code": "AM",
+            "name": "亚美尼亚"
+        },
+        {
+            "code": "AO",
+            "name": "安哥拉"
+        },
+        {
+            "code": "AR",
+            "name": "阿根廷"
+        },
+        {
+            "code": "AT",
+            "name": "奥地利"
+        },
+        {
+            "code": "AU",
+            "name": "澳大利亚"
+        },
+        {
+            "code": "AW",
+            "name": "阿鲁巴"
+        },
+        {
+            "code": "AZ",
+            "name": "阿塞拜疆"
+        },
+        {
+            "code": "BA",
+            "name": "波斯尼亚和黑塞哥维那"
+        },
+        {
+            "code": "BB",
+            "name": "巴巴多斯"
+        },
+        {
+            "code": "BD",
+            "name": "孟加拉国"
+        },
+        {
+            "code": "BE",
+            "name": "比利时"
+        },
+        {
+            "code": "BF",
+            "name": "布基纳法索"
+        },
+        {
+            "code": "BG",
+            "name": "保加利亚"
+        },
+        {
+            "code": "BH",
+            "name": "巴林"
+        },
+        {
+            "code": "BI",
+            "name": "布隆迪"
+        },
+        {
+            "code": "BJ",
+            "name": "贝宁"
+        },
+        {
+            "code": "BM",
+            "name": "百慕大"
+        },
+        {
+            "code": "BN",
+            "name": "文莱"
+        },
+        {
+            "code": "BO",
+            "name": "玻利维亚"
+        },
+        {
+            "code": "BR",
+            "name": "巴西"
+        },
+        {
+            "code": "BS",
+            "name": "巴哈马"
+        },
+        {
+            "code": "BT",
+            "name": "不丹"
+        },
+        {
+            "code": "BW",
+            "name": "博茨瓦纳"
+        },
+        {
+            "code": "BY",
+            "name": "白俄罗斯"
+        },
+        {
+            "code": "BZ",
+            "name": "伯利兹"
+        },
+        {
+            "code": "CA",
+            "name": "加拿大"
+        },
+        {
+            "code": "CD",
+            "name": "刚果（金）"
+        },
+        {
+            "code": "CG",
+            "name": "刚果（布）"
+        },
+        {
+            "code": "CH",
+            "name": "瑞士"
+        },
+        {
+            "code": "CI",
+            "name": "科特迪瓦"
+        },
+        {
+            "code": "CL",
+            "name": "智利"
+        },
+        {
+            "code": "CM",
+            "name": "喀麦隆"
+        },
+        {
+            "code": "CO",
+            "name": "哥伦比亚"
+        },
+        {
+            "code": "CR",
+            "name": "哥斯达黎加"
+        },
+        {
+            "code": "CU",
+            "name": "古巴"
+        },
+        {
+            "code": "CV",
+            "name": "佛得角"
+        },
+        {
+            "code": "CW",
+            "name": "库拉索"
+        },
+        {
+            "code": "CY",
+            "name": "塞浦路斯"
+        },
+        {
+            "code": "CZ",
+            "name": "捷克"
+        },
+        {
+            "code": "DE",
+            "name": "德国"
+        },
+        {
+            "code": "DK",
+            "name": "丹麦"
+        },
+        {
+            "code": "DM",
+            "name": "多米尼克"
+        },
+        {
+            "code": "DO",
+            "name": "多米尼加共和国"
+        },
+        {
+            "code": "DZ",
+            "name": "阿尔及利亚"
+        },
+        {
+            "code": "EC",
+            "name": "厄瓜多尔"
+        },
+        {
+            "code": "EE",
+            "name": "爱沙尼亚"
+        },
+        {
+            "code": "EG",
+            "name": "埃及"
+        },
+        {
+            "code": "ES",
+            "name": "西班牙"
+        },
+        {
+            "code": "ET",
+            "name": "埃塞俄比亚"
+        },
+        {
+            "code": "FI",
+            "name": "芬兰"
+        },
+        {
+            "code": "FJ",
+            "name": "斐济"
+        },
+        {
+            "code": "FR",
+            "name": "法国"
+        },
+        {
+            "code": "GA",
+            "name": "加蓬"
+        },
+        {
+            "code": "GD",
+            "name": "格林纳达"
+        },
+        {
+            "code": "GE",
+            "name": "格鲁吉亚"
+        },
+        {
+            "code": "GF",
+            "name": "法属圭亚那"
+        },
+        {
+            "code": "GH",
+            "name": "加纳"
+        },
+        {
+            "code": "GI",
+            "name": "直布罗陀"
+        },
+        {
+            "code": "GM",
+            "name": "冈比亚"
+        },
+        {
+            "code": "GN",
+            "name": "几内亚"
+        },
+        {
+            "code": "GR",
+            "name": "希腊"
+        },
+        {
+            "code": "GT",
+            "name": "危地马拉"
+        },
+        {
+            "code": "GY",
+            "name": "圭亚那"
+        },
+        {
+            "code": "HK",
+            "name": "中国香港特别行政区"
+        },
+        {
+            "code": "HN",
+            "name": "洪都拉斯"
+        },
+        {
+            "code": "HR",
+            "name": "克罗地亚"
+        },
+        {
+            "code": "HT",
+            "name": "海地"
+        },
+        {
+            "code": "HU",
+            "name": "匈牙利"
+        },
+        {
+            "code": "ID",
+            "name": "印度尼西亚"
+        },
+        {
+            "code": "IE",
+            "name": "爱尔兰"
+        },
+        {
+            "code": "IL",
+            "name": "以色列"
+        },
+        {
+            "code": "IM",
+            "name": "马恩岛"
+        },
+        {
+            "code": "IN",
+            "name": "印度"
+        },
+        {
+            "code": "IQ",
+            "name": "伊拉克"
+        },
+        {
+            "code": "IR",
+            "name": "伊朗"
+        },
+        {
+            "code": "IT",
+            "name": "意大利"
+        },
+        {
+            "code": "JE",
+            "name": "泽西岛"
+        },
+        {
+            "code": "JM",
+            "name": "牙买加"
+        },
+        {
+            "code": "JO",
+            "name": "约旦"
+        },
+        {
+            "code": "JP",
+            "name": "日本"
+        },
+        {
+            "code": "KE",
+            "name": "肯尼亚"
+        },
+        {
+            "code": "KG",
+            "name": "吉尔吉斯斯坦"
+        },
+        {
+            "code": "KH",
+            "name": "柬埔寨"
+        },
+        {
+            "code": "KN",
+            "name": "圣基茨和尼维斯"
+        },
+        {
+            "code": "KR",
+            "name": "韩国"
+        },
+        {
+            "code": "KW",
+            "name": "科威特"
+        },
+        {
+            "code": "KY",
+            "name": "开曼群岛"
+        },
+        {
+            "code": "KZ",
+            "name": "哈萨克斯坦"
+        },
+        {
+            "code": "LA",
+            "name": "老挝"
+        },
+        {
+            "code": "LB",
+            "name": "黎巴嫩"
+        },
+        {
+            "code": "LC",
+            "name": "圣卢西亚"
+        },
+        {
+            "code": "LK",
+            "name": "斯里兰卡"
+        },
+        {
+            "code": "LR",
+            "name": "利比里亚"
+        },
+        {
+            "code": "LS",
+            "name": "莱索托"
+        },
+        {
+            "code": "LT",
+            "name": "立陶宛"
+        },
+        {
+            "code": "LU",
+            "name": "卢森堡"
+        },
+        {
+            "code": "LV",
+            "name": "拉脱维亚"
+        },
+        {
+            "code": "LY",
+            "name": "利比亚"
+        },
+        {
+            "code": "MA",
+            "name": "摩洛哥"
+        },
+        {
+            "code": "MD",
+            "name": "摩尔多瓦"
+        },
+        {
+            "code": "ME",
+            "name": "黑山"
+        },
+        {
+            "code": "MG",
+            "name": "马达加斯加"
+        },
+        {
+            "code": "MK",
+            "name": "北马其顿"
+        },
+        {
+            "code": "ML",
+            "name": "马里"
+        },
+        {
+            "code": "MM",
+            "name": "缅甸"
+        },
+        {
+            "code": "MN",
+            "name": "蒙古"
+        },
+        {
+            "code": "MR",
+            "name": "毛里塔尼亚"
+        },
+        {
+            "code": "MT",
+            "name": "马耳他"
+        },
+        {
+            "code": "MU",
+            "name": "毛里求斯"
+        },
+        {
+            "code": "MV",
+            "name": "马尔代夫"
+        },
+        {
+            "code": "MW",
+            "name": "马拉维"
+        },
+        {
+            "code": "MX",
+            "name": "墨西哥"
+        },
+        {
+            "code": "MY",
+            "name": "马来西亚"
+        },
+        {
+            "code": "MZ",
+            "name": "莫桑比克"
+        },
+        {
+            "code": "NA",
+            "name": "纳米比亚"
+        },
+        {
+            "code": "NE",
+            "name": "尼日尔"
+        },
+        {
+            "code": "NG",
+            "name": "尼日利亚"
+        },
+        {
+            "code": "NI",
+            "name": "尼加拉瓜"
+        },
+        {
+            "code": "NL",
+            "name": "荷兰"
+        },
+        {
+            "code": "NO",
+            "name": "挪威"
+        },
+        {
+            "code": "NP",
+            "name": "尼泊尔"
+        },
+        {
+            "code": "NZ",
+            "name": "新西兰"
+        },
+        {
+            "code": "OM",
+            "name": "阿曼"
+        },
+        {
+            "code": "PA",
+            "name": "巴拿马"
+        },
+        {
+            "code": "PE",
+            "name": "秘鲁"
+        },
+        {
+            "code": "PG",
+            "name": "巴布亚新几内亚"
+        },
+        {
+            "code": "PH",
+            "name": "菲律宾"
+        },
+        {
+            "code": "PK",
+            "name": "巴基斯坦"
+        },
+        {
+            "code": "PL",
+            "name": "波兰"
+        },
+        {
+            "code": "PR",
+            "name": "波多黎各"
+        },
+        {
+            "code": "PS",
+            "name": "巴勒斯坦领土"
+        },
+        {
+            "code": "PT",
+            "name": "葡萄牙"
+        },
+        {
+            "code": "PY",
+            "name": "巴拉圭"
+        },
+        {
+            "code": "QA",
+            "name": "卡塔尔"
+        },
+        {
+            "code": "RE",
+            "name": "留尼汪"
+        },
+        {
+            "code": "RO",
+            "name": "罗马尼亚"
+        },
+        {
+            "code": "ROW",
+            "name": "ROW"
+        },
+        {
+            "code": "RS",
+            "name": "塞尔维亚"
+        },
+        {
+            "code": "RU",
+            "name": "俄罗斯"
+        },
+        {
+            "code": "RW",
+            "name": "卢旺达"
+        },
+        {
+            "code": "SA",
+            "name": "沙特阿拉伯"
+        },
+        {
+            "code": "SC",
+            "name": "塞舌尔"
+        },
+        {
+            "code": "SD",
+            "name": "苏丹"
+        },
+        {
+            "code": "SE",
+            "name": "瑞典"
+        },
+        {
+            "code": "SG",
+            "name": "新加坡"
+        },
+        {
+            "code": "SI",
+            "name": "斯洛文尼亚"
+        },
+        {
+            "code": "SK",
+            "name": "斯洛伐克"
+        },
+        {
+            "code": "SL",
+            "name": "塞拉利昂"
+        },
+        {
+            "code": "SN",
+            "name": "塞内加尔"
+        },
+        {
+            "code": "SO",
+            "name": "索马里"
+        },
+        {
+            "code": "SR",
+            "name": "苏里南"
+        },
+        {
+            "code": "SS",
+            "name": "南苏丹"
+        },
+        {
+            "code": "ST",
+            "name": "圣多美和普林西比"
+        },
+        {
+            "code": "SV",
+            "name": "萨尔瓦多"
+        },
+        {
+            "code": "SX",
+            "name": "荷属圣马丁"
+        },
+        {
+            "code": "SY",
+            "name": "叙利亚"
+        },
+        {
+            "code": "SZ",
+            "name": "斯威士兰"
+        },
+        {
+            "code": "TC",
+            "name": "特克斯和凯科斯群岛"
+        },
+        {
+            "code": "TG",
+            "name": "多哥"
+        },
+        {
+            "code": "TH",
+            "name": "泰国"
+        },
+        {
+            "code": "TJ",
+            "name": "塔吉克斯坦"
+        },
+        {
+            "code": "TL",
+            "name": "东帝汶"
+        },
+        {
+            "code": "TN",
+            "name": "突尼斯"
+        },
+        {
+            "code": "TR",
+            "name": "土耳其"
+        },
+        {
+            "code": "TT",
+            "name": "特立尼达和多巴哥"
+        },
+        {
+            "code": "TW",
+            "name": "中国台湾地区"
+        },
+        {
+            "code": "TZ",
+            "name": "坦桑尼亚"
+        },
+        {
+            "code": "UA",
+            "name": "乌克兰"
+        },
+        {
+            "code": "UG",
+            "name": "乌干达"
+        },
+        {
+            "code": "UK",
+            "name": "UK"
+        },
+        {
+            "code": "US",
+            "name": "美国"
+        },
+        {
+            "code": "UY",
+            "name": "乌拉圭"
+        },
+        {
+            "code": "UZ",
+            "name": "乌兹别克斯坦"
+        },
+        {
+            "code": "VC",
+            "name": "圣文森特和格林纳丁斯"
+        },
+        {
+            "code": "VE",
+            "name": "委内瑞拉"
+        },
+        {
+            "code": "VG",
+            "name": "英属维尔京群岛"
+        },
+        {
+            "code": "VI",
+            "name": "美属维尔京群岛"
+        },
+        {
+            "code": "VN",
+            "name": "越南"
+        },
+        {
+            "code": "XK",
+            "name": "科索沃"
+        },
+        {
+            "code": "YE",
+            "name": "也门"
+        },
+        {
+            "code": "ZA",
+            "name": "南非"
+        },
+        {
+            "code": "ZM",
+            "name": "赞比亚"
+        },
+        {
+            "code": "ZW",
+            "name": "津巴布韦"
+        }
+    ]
+}
+
+获取州省列表
+import http.client
+
+conn = http.client.HTTPSConnection("www.seekproxy.com")
+payload = ''
+headers = {}
+conn.request("GET", "/out-api/state-list?code=US", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
+
+返回响应
+🟢200
+成功
+application/json
+code
+integer 
+返回码
+必需
+msg
+string 
+返回信息
+必需
+data
+array [object] 
+返回结果
+必需
+code
+string 
+国家编码
+必需
+state
+string 
+州/省编码
+必需
+name
+string 
+州/省名称
+必需
+示例
+成功示例
+成功示例
+{
+    "code": 200,
+    "msg": "success",
+    "data": [
+        {
+            "code": "US",
+            "state": "Alabama",
+            "name": "Alabama"
+        },
+        {
+            "code": "US",
+            "state": "Arizona",
+            "name": "Arizona"
+        },
+        {
+            "code": "US",
+            "state": "Arkansas",
+            "name": "Arkansas"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "name": "California"
+        },
+        {
+            "code": "US",
+            "state": "Colorado",
+            "name": "Colorado"
+        },
+        {
+            "code": "US",
+            "state": "Connecticut",
+            "name": "Connecticut"
+        },
+        {
+            "code": "US",
+            "state": "Delaware",
+            "name": "Delaware"
+        },
+        {
+            "code": "US",
+            "state": "Districtofcolumbia",
+            "name": "Districtofcolumbia"
+        },
+        {
+            "code": "US",
+            "state": "Florida",
+            "name": "Florida"
+        },
+        {
+            "code": "US",
+            "state": "Georgia",
+            "name": "Georgia"
+        },
+        {
+            "code": "US",
+            "state": "Illinois",
+            "name": "Illinois"
+        },
+        {
+            "code": "US",
+            "state": "Indiana",
+            "name": "Indiana"
+        },
+        {
+            "code": "US",
+            "state": "Iowa",
+            "name": "Iowa"
+        },
+        {
+            "code": "US",
+            "state": "Kansas",
+            "name": "Kansas"
+        },
+        {
+            "code": "US",
+            "state": "Kentucky",
+            "name": "Kentucky"
+        },
+        {
+            "code": "US",
+            "state": "Louisiana",
+            "name": "Louisiana"
+        },
+        {
+            "code": "US",
+            "state": "Maryland",
+            "name": "Maryland"
+        },
+        {
+            "code": "US",
+            "state": "Massachusetts",
+            "name": "Massachusetts"
+        },
+        {
+            "code": "US",
+            "state": "Michigan",
+            "name": "Michigan"
+        },
+        {
+            "code": "US",
+            "state": "Minnesota",
+            "name": "Minnesota"
+        },
+        {
+            "code": "US",
+            "state": "Mississippi",
+            "name": "Mississippi"
+        },
+        {
+            "code": "US",
+            "state": "Missouri",
+            "name": "Missouri"
+        },
+        {
+            "code": "US",
+            "state": "Nebraska",
+            "name": "Nebraska"
+        },
+        {
+            "code": "US",
+            "state": "Nevada",
+            "name": "Nevada"
+        },
+        {
+            "code": "US",
+            "state": "Newhampshire",
+            "name": "Newhampshire"
+        },
+        {
+            "code": "US",
+            "state": "Newjersey",
+            "name": "Newjersey"
+        },
+        {
+            "code": "US",
+            "state": "Newmexico",
+            "name": "Newmexico"
+        },
+        {
+            "code": "US",
+            "state": "Newyork",
+            "name": "Newyork"
+        },
+        {
+            "code": "US",
+            "state": "Northcarolina",
+            "name": "Northcarolina"
+        },
+        {
+            "code": "US",
+            "state": "Ohio",
+            "name": "Ohio"
+        },
+        {
+            "code": "US",
+            "state": "Oklahoma",
+            "name": "Oklahoma"
+        },
+        {
+            "code": "US",
+            "state": "Pennsylvania",
+            "name": "Pennsylvania"
+        },
+        {
+            "code": "US",
+            "state": "Rhodeisland",
+            "name": "Rhodeisland"
+        },
+        {
+            "code": "US",
+            "state": "Southcarolina",
+            "name": "Southcarolina"
+        },
+        {
+            "code": "US",
+            "state": "Tennessee",
+            "name": "Tennessee"
+        },
+        {
+            "code": "US",
+            "state": "Texas",
+            "name": "Texas"
+        },
+        {
+            "code": "US",
+            "state": "Utah",
+            "name": "Utah"
+        },
+        {
+            "code": "US",
+            "state": "Virginia",
+            "name": "Virginia"
+        },
+        {
+            "code": "US",
+            "state": "Washington",
+            "name": "Washington"
+        },
+        {
+            "code": "US",
+            "state": "Wisconsin",
+            "name": "Wisconsin"
+        }
+    ]
+}
+
+获取城市列表
+
+import http.client
+
+conn = http.client.HTTPSConnection("www.seekproxy.com")
+payload = ''
+headers = {}
+conn.request("GET", "/out-api/city-list?code=US&state=California", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
+
+返回响应
+🟢200
+成功
+application/json
+code
+integer 
+必需
+msg
+string 
+必需
+data
+array [object] 
+必需
+code
+string 
+必需
+state
+string 
+必需
+city
+string 
+必需
+示例
+{
+    "code": 200,
+    "msg": "success",
+    "data": [
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Bakersfield"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Bellflower"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Eastranchodominguez"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Florin"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Fontana"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Fresno"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Hesperia"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Irvine"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Longbeach"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Losangeles"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Montereypark"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Morenovalley"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Ontario"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Palmdale"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Pittsburg"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Pomona"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Riverside"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Sacramento"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Sanbernardino"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Sandiego"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Sanfernando"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Sanjose"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Santaana"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Santaclara"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Stockton"
+        },
+        {
+            "code": "US",
+            "state": "California",
+            "city": "Vista"
+        }
+    ]
+}
+
+提取IP
+请求参数
+Query 参数
+trade_no
+string 
+必需
+业务号(在API获取或者个人中心获取最新开通的业务号)
+示例:
+DH2306666666
+key
+string 
+必需
+业务对应的秘钥(在API获取或者个人中心获取最新开通的业务号对应的秘钥)
+示例:
+0dkw3FF7Nh666666
+auth_type
+string 
+必需
+提取类型：1账号密码模式 2白名单模式
+示例:
+2
+ip_count
+string 
+必需
+提取数量：最少提取1个
+示例:
+2
+country
+string 
+要提取的国家编码
+可选
+示例:
+US
+state
+string 
+要提取的州省编码
+可选
+示例:
+California
+city
+string 
+要提取的城市编码
+可选
+示例:
+Bakersfield
+pattern
+string 
+可选
+返回的数据格式：默认值为0（该字段在auth_type=1时生效）
+示例:
+2
+protocol
+string 
+可选
+协议类型：0:http（默认）, 2:socks5（该字段在auth_type=1时生效）
+示例:
+2
+valid_code
+string 
+可选
+时效编码：默认值为0（该字段在auth_type=1时生效）
+示例:
+2
+time
+string 
+可选
+IP时效：可选范围是5-30分钟（该字段在auth_type=2时生效）
+示例:
+10
+
+import http.client
+
+conn = http.client.HTTPSConnection("www.seekproxy.com")
+payload = ''
+headers = {}
+conn.request("GET", "/out-api/get-ips?trade_no=DH2306666666&key=0dkw3FF7Nh666666&auth_type=2", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
+
+返回响应
+🟢200
+成功
+application/json
+code
+integer 
+返回码
+必需
+msg
+string 
+返回信息
+必需
+data
+array[string]
+返回信息
+必需
+示例
+成功示例(auth_type=1)
+成功示例(auth_type=2)
+{
+    "code": 200,
+    "msg": "success",
+    "data": [
+        "proxy.seekproxy.com:1000:6Hbxxxxxxxx-res-any-sid-66325905:5Wj8xxxxxxxxx"
+    ]
+}
+
+添加白名单
+POST
+https://www.seekproxy.com/out-api/add-white-ip
+请求参数
+Body 参数multipart/form-data
+trade_no
+string 
+业务号
+必需
+示例:
+DH216736666666
+key
+string 
+业务对应的密钥
+必需
+示例:
+LKdXeUCB56666666
+ip
+string 
+必需
+需要添加的IP地址（港澳台及海外IP）
+示例:
+89.213.42.197
+
+import http.client
+import mimetypes
+from codecs import encode
+
+conn = http.client.HTTPSConnection("www.seekproxy.com")
+dataList = []
+boundary = 'wL36Yn8afVp8Ag7AmP8qZ0SA4n1v9T'
+dataList.append(encode('--' + boundary))
+dataList.append(encode('Content-Disposition: form-data; name=trade_no;'))
+
+dataList.append(encode('Content-Type: {}'.format('text/plain')))
+dataList.append(encode(''))
+
+dataList.append(encode("DH216736666666"))
+dataList.append(encode('--' + boundary))
+dataList.append(encode('Content-Disposition: form-data; name=key;'))
+
+dataList.append(encode('Content-Type: {}'.format('text/plain')))
+dataList.append(encode(''))
+
+dataList.append(encode("LKdXeUCB56666666"))
+dataList.append(encode('--' + boundary))
+dataList.append(encode('Content-Disposition: form-data; name=ip;'))
+
+dataList.append(encode('Content-Type: {}'.format('text/plain')))
+dataList.append(encode(''))
+
+dataList.append(encode("89.213.42.197"))
+dataList.append(encode('--'+boundary+'--'))
+dataList.append(encode(''))
+body = b'\r\n'.join(dataList)
+payload = body
+headers = {
+    'Content-type': 'multipart/form-data; boundary={}'.format(boundary) 
+}
+conn.request("POST", "/out-api/add-white-ip", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
+
+返回响应
+🟢200
+成功
+application/json
+code
+integer 
+必需
+msg
+string 
+必需
+data
+array[string]
+必需
+示例
+{
+    "code": 200,
+    "msg": "Ip白名单添加成功，30秒后白名单生效",
+    "data": []
+}
+
+删除白名单
+
+POST
+https://www.seekproxy.com/out-api/del-white-ip
+请求参数
+Body 参数multipart/form-data
+trade_no
+string 
+可选
+示例:
+DH2167366666
+key
+string 
+可选
+示例:
+LKdXeUCB66666
+ip
+string 
+可选
+示例:
+89.213.42.197
+import http.client
+import mimetypes
+from codecs import encode
+
+conn = http.client.HTTPSConnection("www.seekproxy.com")
+dataList = []
+boundary = 'wL36Yn8afVp8Ag7AmP8qZ0SA4n1v9T'
+dataList.append(encode('--' + boundary))
+dataList.append(encode('Content-Disposition: form-data; name=trade_no;'))
+
+dataList.append(encode('Content-Type: {}'.format('text/plain')))
+dataList.append(encode(''))
+
+dataList.append(encode("DH2167366666"))
+dataList.append(encode('--' + boundary))
+dataList.append(encode('Content-Disposition: form-data; name=key;'))
+
+dataList.append(encode('Content-Type: {}'.format('text/plain')))
+dataList.append(encode(''))
+
+dataList.append(encode("LKdXeUCB66666"))
+dataList.append(encode('--' + boundary))
+dataList.append(encode('Content-Disposition: form-data; name=ip;'))
+
+dataList.append(encode('Content-Type: {}'.format('text/plain')))
+dataList.append(encode(''))
+
+dataList.append(encode("89.213.42.197"))
+dataList.append(encode('--'+boundary+'--'))
+dataList.append(encode(''))
+body = b'\r\n'.join(dataList)
+payload = body
+headers = {
+    'Content-type': 'multipart/form-data; boundary={}'.format(boundary) 
+}
+conn.request("POST", "/out-api/del-white-ip", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
+
+返回响应
+🟢200
+成功
+application/json
+code
+integer 
+必需
+msg
+string 
+必需
+data
+array[string]
+必需
+示例
+{
+    "code": 200,
+    "msg": "Ip白名单删除成功，30秒后白名单生效",
+    "data": []
+}
+
+获取白名单
+开发中
+GET
+https://www.seekproxy.com/out-api/white-ip-list
+请求参数
+Query 参数
+trade_no
+string 
+业务号
+可选
+示例:
+DH216766666666
+key
+string 
+业务对应的密钥
+可选
+示例:
+LKdXeUC66666666555
+
+import http.client
+
+conn = http.client.HTTPSConnection("www.seekproxy.com")
+payload = ''
+headers = {}
+conn.request("GET", "/out-api/white-ip-list?trade_no=DH216766666666&key=LKdXeUC66666666555", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
+
+返回响应
+🟢200
+成功
+application/json
+code
+integer 
+必需
+msg
+string 
+必需
+data
+array[string]
+必需
+示例
+{
+    "code": 200,
+    "msg": "success",
+    "data": [
+        "89.213.42.197",
+        "89.213.42.198",
+        "89.213.42.199"
+    ]
+}
+requests调用HTTP代理
+Python3使用requests调用Http代理IP的代码样例
+温馨提示：
+1.
+requests的代码样例支持访问http,https网页
+2.
+"用户名+密码"授权时，"用户名"为提取时获取的用户名(不是你的登录账户名)，"密码"则是提取时一起返回的密码（不是你的登录密码）
+3.
+使用requests时，需要安装才能使用: pip install requests
+4.
+代码样例中的代理IP和端口均为虚构，请通过seekproxy的API提取链接获取代理IP后使用，避免报错
+HTTP 使用代码示例#
+
+import requests
+import urllib3
+
+# 抑制 InsecureRequestWarning 警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+#用户名密码认证
+username="username"
+password="password"
+proxy_ip="ip:port" 
+proxies = {
+    "http": f"http://{username}:{password}@{proxy_ip}",
+    "https": f"http://{username}:{password}@{proxy_ip}",
+}
+
+#白名单方式（需提前绑定终端IP）
+#proxies={
+#	"http":f"http://{proxy_ip}",
+#	"https":f"http://{proxy_ip}",
+# }
+
+#要访问的目标网页
+target_url="http://myip.ipip.net"
+
+# 设置请求头
+headers = {
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
+}
+#使用代理IP发送请求
+response=requests.get(target_url,proxies=proxies, headers=headers, timeout=5, verify=False)
+
+#获取页面内容
+if response.status_code==200:
+	print(response.text)
+
+
+Aiohttp调用Http代理
+Python3使用aiohttp调用Http代理IP的代码样例
+温馨提示：
+1.
+aiohttp的代码样例支持访问http,https网页
+2.
+aiohttp不是python原生库，需要安装才能使用: pip install aiohttp
+3.
+如Windows系统使用aiohttp访问https网站抛出异常，在import asyncio后调asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())即可解决
+4.
+aiohttp只支持Python3.5及以上
+使用代码示例
+
+
+import asyncio
+import aiohttp
+import requests
+
+# python的3.13.5以下版本如果不可用可按照下面的方案修改
+# aiohttp目录下找到Lib\site-packages\aiohttp\ 找到 connector.py然后# 注释如下行
+# #runtime_has_start_tls = self._loop_supports_start_tls()
+# # 新增
+# runtime_has_start_tls = False if req.proxy.scheme != "https" else self._loop_supports_start_tls()
+
+
+async def fetch(session, url):
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    }
+    #账号密码认证模式  
+    #username = "username"
+    #password = "password"
+    #proxy_auth = aiohttp.BasicAuth(username, password)
+    #proxy = "http://ip:port" 
+    #async with session.get(url, headers=headers, ssl=False, proxy=proxy, proxy_auth=proxy_auth, timeout=10) as response:
+    
+    #白名单模式  
+    proxy = "http://51.79.78.230:10011"
+    async with session.get(url, headers=headers, ssl=False, proxy=proxy, timeout=10) as response:
+        return await response.text(), response.status
+
+
+async def main():
+    try:
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), trust_env=True) as session:
+            content, status = await fetch(session, 'https://myip.ipip.net/')
+            print(f"status: {status}")
+            print(f"content: {content}")
+    except aiohttp.client_exceptions.ClientConnectorError as e:
+        print(f'连接代理或目标服务器时发生错误: {e}')
+
+
+if __name__ == '__main__':
+    policy = asyncio.WindowsSelectorEventLoopPolicy()
+    asyncio.set_event_loop_policy(policy)
+    asyncio.run(main())
+        
+        
+
+Httpx调用HTTP代理
+Python3使用httpx调用http代理IP的代码样例
+温馨提示：
+1.
+httpx的代码样例支持访问http,https网页
+2.
+httpx不是python原生库，需要安装才能使用: pip install httpx
+3.
+httpx暂时还不支持SOCKS代理
+
+
+import random
+import asyncio
+
+import httpx
+import requests
+
+target_url="http://myip.ipip.net"	#要访问的目标网页
+
+#用户名密码授权
+username="username"
+password="password"
+proxy_ip="ip:port"
+
+
+def fetch(url):
+    # httpx的版本是0.27.2
+    #proxies={
+        #"http":f"http://{username}:{password}@{proxy_ip}"
+	#"https":f"http://{username}:{password}@{proxy_ip}"
+    #}
+    #response = httpx.get(target_url, headers=headers, proxies=proxies, verify=False):
+    #print(f"status_code:{response.status_code},content:{response.content}")
+        
+    # # 这是 httpx的0.28.0的版本写法
+    proxy = httpx.Proxy(
+        url=f"http://{proxy_ip}",
+        auth=(username, password),
+    )
+    with httpx.Client(proxy=proxy, headers=headers, verify=False) as client:
+    response = client.get(target_url)
+    print(f"status_code:{response.status_code},content:{response.content}")
+
+if__name__=='__main__':
+	fetch()
+        
+
+HttpClient调用HTTP代理
+Python3使用httpclient调用Http代理IP的代码样例
+温馨提示：
+1.
+httpclient的代码样例同时支持访问http和https网页
+2.
+此样例为终端IP授权
+使用代码示例
+
+
+import http.client
+import ssl
+
+
+# 自定义 SSL 上下文
+ssl_context = ssl.create_default_context()
+ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE  # 不验证证书（测试用）
+
+# 代理服务器的地址和端口
+proxy_host = "36.134.55.149:25577"
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
+}
+
+# 目标服务器的地址
+target_host = "https://myip.ipip.net/"
+
+# 创建连接对象并指定 SSL 上下文
+conn = http.client.HTTPSConnection(proxy_host, context=ssl_context)
+
+# 设置代理隧道
+conn.set_tunnel(target_host)
+
+# 发送请求
+conn.request("GET", "/", headers=headers)
+
+# 获取响应
+response = conn.getresponse()
+print(response.status, response.reason)
+print(response.read().decode('utf-8'))
+
+# 关闭连接
+conn.close()
+
+
+
+Websocket调用HTTP代理
+Python3使用websocket调用Http代理IP的代码样例
+温馨提示：
+1.
+安装运行所需的客户端: pip install websocket-client
+2.
+使用HTTP代理发送websocket请求
+3.
+在IP可用的情况下，客户端长时间不发送消息，服务端会断开连接
+4.
+运行环境要求 python3.x
+5.
+代码样例中的代理IP和端口均为虚构，请通过seekproxy的API提取链接获取代理IP使用，避免报错
+使用代码示例
+
+
+#!/usr/bin/env python
+# -*- encoding: utf-8 -*-
+import ssl
+import websocket
+
+
+def on_message(ws, message):
+    print('响应数据:', message)
+
+
+def on_error(ws, error):
+    print(error)
+
+
+def on_open(ws):
+    data = '{}'  # 此处填入您需要传给目标网站的json格式参数，如{"type":"web","data":{"_id":"xxxx"}}
+    ws.send(data)
+
+
+def on_close(*args):
+    print("### closed ###")
+
+
+def start():
+    websocket.enableTrace(True)
+    target_url = 'ws://myip.ipip.net'  # 此处替换您的目标网站
+    ws = websocket.WebSocketApp(
+        url=target_url,
+        header=[
+            "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36"
+        ],
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+    )
+    ws.on_open = on_open
+    ws.run_forever(
+        sslopt={"cert_reqs": ssl.CERT_NONE},
+        http_proxy_host="103.43.135.4",
+        http_proxy_port=45815,
+        proxy_type="http",
+    )
+
+
+if __name__ == "__main__":
+    start()
+
+                
+                

@@ -15,12 +15,13 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body, File, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import or_, func, case, desc
 
 from ...config.constants import AccountStatus
-from ...config.settings import get_settings
+from ...config.settings import get_settings, normalize_sms_provider_name, get_sms_provider_api_key_db_key, get_sms_provider_api_key_field
 from ...core.openai.token_refresh import refresh_account_token as do_refresh
 from ...core.openai.token_refresh import validate_account_token as do_validate
+from ...core.sms import SMSProviderConfig, get_sms_provider
 from ...core.register import RegistrationEngine
 from ...core.upload.cpa_upload import generate_token_json, batch_upload_to_cpa, upload_to_cpa
 from ...core.upload.team_manager_upload import upload_to_team_manager, batch_upload_to_team_manager
@@ -28,7 +29,7 @@ from ...core.upload.sub2api_upload import batch_upload_to_sub2api, upload_to_sub
 
 from ...core.dynamic_proxy import get_proxy_url_for_task, probe_proxy_http_basic, probe_proxy_https_openai
 from ...database import crud
-from ...database.models import Account, EmailService as EmailServiceModel, RegistrationTask
+from ...database.models import Account, EmailService as EmailServiceModel, RegistrationTask, PhoneVerificationAttempt
 from ...database.session import get_db
 from ...services import EmailServiceFactory, EmailServiceType
 from ..task_manager import task_manager
@@ -68,6 +69,67 @@ def _mask_proxy_url(proxy_url: Optional[str]) -> str:
         user = auth.split(":", 1)[0]
         return f"{scheme}://{user}:***@{host}"
     return f"{scheme}://***@{host}"
+
+
+def _get_saved_sms_provider_api_key(provider_name: str) -> str:
+    provider_name = normalize_sms_provider_name(provider_name or "herosms")
+    db_key = get_sms_provider_api_key_db_key(provider_name)
+    settings_field = get_sms_provider_api_key_field(provider_name)
+    try:
+        with get_db() as db:
+            setting = crud.get_setting(db, db_key)
+            value = str(setting.value or "").strip() if setting else ""
+            if value:
+                return value
+    except Exception:
+        pass
+    try:
+        settings = get_settings()
+        secret = getattr(settings, settings_field, None)
+        if secret:
+            return secret.get_secret_value() if hasattr(secret, "get_secret_value") else str(secret)
+    except Exception:
+        pass
+    return ""
+
+
+def _load_live_provider_metrics(record: PhoneVerificationAttempt) -> dict:
+    provider_name = normalize_sms_provider_name(record.sms_provider or "herosms")
+    api_key = _get_saved_sms_provider_api_key(provider_name)
+    if not api_key:
+        return {"current_provider_count": None, "current_provider_quote": None, "live_error": "未配置当前平台 API Key"}
+    try:
+        cfg = SMSProviderConfig(
+            api_key=api_key,
+            provider=provider_name,
+            service=record.service or "",
+            country=int(record.country or 0),
+            country_key=str(record.country_key or ""),
+            timeout=30,
+        )
+        provider = get_sms_provider(cfg)
+        provider_slot = str(record.provider_slot or "").strip()
+        if provider_slot and hasattr(provider, "get_provider_price_options"):
+            options = provider.get_provider_price_options(record.service or "", int(record.country or 0))
+            for item in options or []:
+                if str(item.get("provider_id") or "").strip() == provider_slot:
+                    return {
+                        "current_provider_count": item.get("count"),
+                        "current_provider_quote": item.get("price"),
+                        "live_error": None,
+                    }
+        if hasattr(provider, "get_operator_quote_options"):
+            options = provider.get_operator_quote_options(record.service or "", int(record.country or 0))
+            if options:
+                best = options[0]
+                return {
+                    "current_provider_count": best.get("count"),
+                    "current_provider_quote": best.get("price"),
+                    "live_error": None,
+                }
+    except Exception as exc:
+        return {"current_provider_count": None, "current_provider_quote": None, "live_error": str(exc)}
+    return {"current_provider_count": None, "current_provider_quote": None, "live_error": None}
 
 
 def _build_proxy_selection_result(
@@ -1089,7 +1151,7 @@ class BatchValidateRequest(BaseModel):
 
 
 def _get_recovery_proxy(request_proxy: Optional[str] = None, log_callback=None) -> Optional[str]:
-    """补录 OAuth 的代理选择：统一走任务代理来源策略。"""
+    """补录 OAuth 的代理选择：手动代理 > 动态代理 > 代理池/静态配置。"""
     selection = _select_proxy(request_proxy, purpose="general")
     if log_callback:
         log_callback(f"[系统] 当前代理策略命中: {selection.get('source_name')} | {selection.get('source_detail') or '-'}")
@@ -1811,6 +1873,173 @@ async def get_refresh_task(task_uuid: str):
         "task_uuid": task_uuid,
         **status,
     }
+
+
+@router.get("/task-logs/{task_uuid}")
+async def get_runtime_task_logs(task_uuid: str, since: int = Query(0, ge=0)):
+    logs = task_manager.get_logs(task_uuid)
+    status = task_manager.get_status(task_uuid) or {}
+    return {
+        "task_uuid": task_uuid,
+        "logs": logs[since:],
+        "next_index": len(logs),
+        "status": status,
+    }
+
+
+@router.get("/batch-logs/{batch_id}")
+async def get_runtime_batch_logs(batch_id: str, since: int = Query(0, ge=0)):
+    logs = task_manager.get_batch_logs(batch_id)
+    status = task_manager.get_batch_status(batch_id) or {}
+    return {
+        "batch_id": batch_id,
+        "logs": logs[since:],
+        "next_index": len(logs),
+        "status": status,
+    }
+
+
+@router.get("/phone-verification/stats")
+async def get_phone_verification_stats(days: int = Query(30, ge=1, le=365)):
+    since = datetime.utcnow() - timedelta(days=days)
+    with get_db() as db:
+        query = db.query(PhoneVerificationAttempt).filter(PhoneVerificationAttempt.created_at >= since)
+        total = query.count()
+        success = query.filter(PhoneVerificationAttempt.success == True).count()
+        invalid = query.filter(PhoneVerificationAttempt.invalid == True).count()
+        total_cost = db.query(func.coalesce(func.sum(PhoneVerificationAttempt.charged_cost), 0.0)).filter(
+            PhoneVerificationAttempt.created_at >= since
+        ).scalar() or 0.0
+        total_activation_cost = db.query(func.coalesce(func.sum(PhoneVerificationAttempt.activation_cost), 0.0)).filter(
+            PhoneVerificationAttempt.created_at >= since
+        ).scalar() or 0.0
+        grouped = db.query(
+            PhoneVerificationAttempt.sms_provider,
+            PhoneVerificationAttempt.country,
+            PhoneVerificationAttempt.country_key,
+            PhoneVerificationAttempt.provider_slot,
+            func.count(PhoneVerificationAttempt.id).label("attempts"),
+            func.sum(case((PhoneVerificationAttempt.success == True, 1), else_=0)).label("success_count"),
+            func.sum(case((PhoneVerificationAttempt.invalid == True, 1), else_=0)).label("invalid_count"),
+            func.avg(PhoneVerificationAttempt.charged_cost).label("avg_cost"),
+            func.avg(PhoneVerificationAttempt.provider_quote).label("avg_provider_quote"),
+            func.max(PhoneVerificationAttempt.provider_count).label("max_provider_count"),
+        ).filter(
+            PhoneVerificationAttempt.created_at >= since
+        ).group_by(
+            PhoneVerificationAttempt.sms_provider,
+            PhoneVerificationAttempt.country,
+            PhoneVerificationAttempt.country_key,
+            PhoneVerificationAttempt.provider_slot,
+        ).order_by(desc("attempts"), desc("success_count")).limit(200).all()
+        rows = []
+        for row in grouped:
+            attempts = int(row.attempts or 0)
+            success_count = int(row.success_count or 0)
+            rows.append({
+                "sms_provider": row.sms_provider,
+                "country": row.country,
+                "country_key": row.country_key,
+                "provider_slot": row.provider_slot,
+                "attempts": attempts,
+                "success_count": success_count,
+                "invalid_count": int(row.invalid_count or 0),
+                "pass_rate": round(success_count / attempts, 4) if attempts else 0,
+                "avg_cost": round(float(row.avg_cost or 0), 6),
+                "avg_provider_quote": round(float(row.avg_provider_quote or 0), 6),
+                "recorded_provider_count": int(row.max_provider_count or 0),
+            })
+        return {
+            "days": days,
+            "summary": {
+                "total": total,
+                "success": success,
+                "invalid": invalid,
+                "pass_rate": round(success / total, 4) if total else 0,
+                "total_cost": round(float(total_cost), 6),
+                "total_activation_cost": round(float(total_activation_cost), 6),
+            },
+            "rows": rows,
+        }
+
+
+@router.get("/phone-verification/records")
+async def get_phone_verification_records(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    days: int = Query(30, ge=1, le=365),
+    provider: Optional[str] = None,
+    success: Optional[bool] = None,
+    country: Optional[int] = None,
+    country_key: Optional[str] = None,
+):
+    since = datetime.utcnow() - timedelta(days=days)
+    with get_db() as db:
+        query = db.query(PhoneVerificationAttempt).filter(PhoneVerificationAttempt.created_at >= since)
+        if provider:
+            query = query.filter(PhoneVerificationAttempt.sms_provider == normalize_sms_provider_name(provider))
+        if success is not None:
+            query = query.filter(PhoneVerificationAttempt.success == success)
+        if country is not None:
+            query = query.filter(PhoneVerificationAttempt.country == country)
+        if country_key:
+            query = query.filter(PhoneVerificationAttempt.country_key == country_key)
+        total = query.count()
+        records = query.order_by(desc(PhoneVerificationAttempt.created_at)).offset((page - 1) * page_size).limit(page_size).all()
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "records": [
+                {
+                    "id": item.id,
+                    "created_at": item.created_at.isoformat() if item.created_at else None,
+                    "account_email": item.account_email,
+                    "sms_provider": item.sms_provider,
+                    "provider_slot": item.provider_slot,
+                    "provider_quote": item.provider_quote,
+                    "provider_count": item.provider_count,
+                    "service": item.service,
+                    "country": item.country,
+                    "country_key": item.country_key,
+                    "operator": item.operator,
+                    "phone_number": item.phone_number,
+                    "activation_id": item.activation_id,
+                    "charged_cost": item.charged_cost,
+                    "activation_cost": item.activation_cost,
+                    "original_activation_cost": item.original_activation_cost,
+                    "reused": item.reused,
+                    "success": item.success,
+                    "invalid": item.invalid,
+                    "failure_stage": item.failure_stage,
+                    "error_code": item.error_code,
+                    "error_message": item.error_message,
+                    "sms_code": item.sms_code,
+                    "sms_received_at": item.sms_received_at.isoformat() if item.sms_received_at else None,
+                    "verified_at": item.verified_at.isoformat() if item.verified_at else None,
+                }
+                for item in records
+            ]
+        }
+
+
+@router.get("/phone-verification/live-counts")
+async def get_phone_verification_live_counts(record_ids: str = Query(...)):
+    ids = [int(x) for x in str(record_ids).split(",") if str(x).strip().isdigit()]
+    if not ids:
+        return {"items": []}
+    with get_db() as db:
+        records = db.query(PhoneVerificationAttempt).filter(PhoneVerificationAttempt.id.in_(ids)).all()
+        items = []
+        for record in records:
+            live = _load_live_provider_metrics(record)
+            items.append({
+                "id": record.id,
+                "current_provider_count": live.get("current_provider_count"),
+                "current_provider_quote": live.get("current_provider_quote"),
+                "live_error": live.get("live_error"),
+            })
+        return {"items": items}
 
 
 @router.post("/batch-recover-oauth")

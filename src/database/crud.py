@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, asc, func
 
-from .models import Account, EmailService, RegistrationTask, Setting, Proxy, CpaService, Sub2ApiService
+from .models import Account, EmailService, RegistrationTask, Setting, Proxy, CpaService, Sub2ApiService, PhoneVerificationAttempt
 
 
 # ============================================================================
@@ -109,12 +109,29 @@ def update_account(
         return None
 
     for key, value in kwargs.items():
-        if hasattr(db_account, key) and value is not None:
+        if hasattr(db_account, key):
             setattr(db_account, key, value)
 
     db.commit()
     db.refresh(db_account)
     return db_account
+
+
+def update_accounts_batch(
+    db: Session,
+    account_ids: List[int],
+    **fields
+) -> int:
+    """批量更新账户信息"""
+    clean_fields = {key: value for key, value in fields.items() if value is not None}
+    if not clean_fields or not account_ids:
+        return 0
+    result = db.query(Account).filter(Account.id.in_(account_ids)).update(
+        clean_fields,
+        synchronize_session=False,
+    )
+    db.commit()
+    return result
 
 
 def delete_account(db: Session, account_id: int) -> bool:
@@ -382,6 +399,37 @@ def delete_setting(db: Session, key: str) -> bool:
     db.delete(db_setting)
     db.commit()
     return True
+
+
+# ============================================================================
+# 手机验证统计 CRUD
+# ============================================================================
+
+def create_phone_verification_attempt(
+    db: Session,
+    **kwargs
+) -> PhoneVerificationAttempt:
+    record = PhoneVerificationAttempt(**kwargs)
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def update_phone_verification_attempt(
+    db: Session,
+    attempt_id: int,
+    **kwargs
+) -> Optional[PhoneVerificationAttempt]:
+    record = db.query(PhoneVerificationAttempt).filter(PhoneVerificationAttempt.id == attempt_id).first()
+    if not record:
+        return None
+    for key, value in kwargs.items():
+        if hasattr(record, key):
+            setattr(record, key, value)
+    db.commit()
+    db.refresh(record)
+    return record
 
 
 # ============================================================================

@@ -566,6 +566,8 @@ async function loadSettings() {
             document.getElementById('sms-voice').checked = !!data.herosms.voice;
             document.getElementById('sms-forwarding').checked = !!data.herosms.forwarding;
             document.getElementById('sms-forwarding-number').value = data.herosms.forwarding_number || '';
+            document.getElementById('sms-provider-failover-enabled').checked = data.herosms.provider_failover_enabled !== false;
+            document.getElementById('sms-provider-fail-threshold').value = data.herosms.provider_fail_threshold || 3;
             document.getElementById('sms-enabled').checked = !!data.herosms.enabled;
             document.getElementById('sms-service').value = data.herosms.service || 'dr';
             document.getElementById('sms-country').value = data.herosms.country || 187;
@@ -790,6 +792,8 @@ async function handleSaveSmsSettings(e) {
         voice: document.getElementById('sms-voice').checked,
         forwarding: document.getElementById('sms-forwarding').checked,
         forwarding_number: document.getElementById('sms-forwarding-number').value.trim(),
+        provider_failover_enabled: document.getElementById('sms-provider-failover-enabled').checked,
+        provider_fail_threshold: parseInt(document.getElementById('sms-provider-fail-threshold').value) || 3,
         enabled: document.getElementById('sms-enabled').checked,
         api_key: document.getElementById('sms-api-key').value || null,
         service: document.getElementById('sms-service').value.trim() || 'dr',
@@ -830,6 +834,10 @@ async function handleSaveSmsSettings(e) {
     }
     if (data.price_relax_max_multiplier < 1 || data.price_relax_max_multiplier > 20) {
         toast.error('价格放宽最大倍数必须在 1-20 之间');
+        return;
+    }
+    if (data.provider_fail_threshold < 1 || data.provider_fail_threshold > 10) {
+        toast.error('同 provider 连续失败阈值必须在 1-10 之间');
         return;
     }
     if (data.reuse_max_uses < 1 || data.reuse_max_uses > 5) {

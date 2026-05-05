@@ -125,6 +125,12 @@
                         <button class="btn btn-ghost" id="refresh-btn" title="刷新">
                             🔄 刷新
                         </button>
+                        <button class="btn btn-secondary" id="phone-stats-btn" title="手机验证统计">
+                            📱 手机统计
+                        </button>
+                        <button class="btn btn-secondary" id="recent-tasks-btn" title="最近任务">
+                            🕘 最近任务
+                        </button>
                         <button class="btn btn-warning" id="batch-refresh-btn" disabled title="批量刷新Token">
                             🔄 刷新Token
                         </button>
@@ -328,7 +334,117 @@
             </div>
             <div class="modal-body">
                 <div style="margin-bottom: 12px; display:flex; align-items:center; justify-content:space-between; gap:12px;"><div id="recovery-log-status" style="color: var(--text-muted); font-size: 0.9rem;">等待开始...</div><button class="btn btn-danger btn-sm" id="recovery-log-cancel-btn" onclick="cancelCurrentBatchTask()" style="display:none;">取消任务</button></div>
-                <pre id="recovery-log-output" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; min-height: 320px; max-height: 60vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.82rem; line-height: 1.55;"></pre>
+                <div id="recovery-log-output" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; min-height: 320px; max-height: 60vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.82rem; line-height: 1.55; font-family: var(--font-mono, monospace);"></div>
+            </div>
+        </div>
+    </div>
+
+    <button id="resume-task-btn" class="btn btn-primary" style="display:none; position:fixed; right:24px; bottom:24px; z-index:1200; box-shadow: var(--shadow-lg);">
+        🔁 继续查看任务日志
+    </button>
+
+    <div class="modal" id="task-history-modal">
+        <div class="modal-content" style="max-width: 760px;">
+            <div class="modal-header">
+                <h3>🕘 最近任务</h3>
+                <button class="modal-close" id="close-task-history-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="task-history-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="phone-stats-modal">
+        <div class="modal-content" style="max-width: 1180px;">
+            <div class="modal-header">
+                <h3>📱 手机验证统计分析</h3>
+                <button class="modal-close" id="close-phone-stats-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end; margin-bottom:16px;">
+                    <div>
+                        <label class="form-label">统计天数</label>
+                        <select id="phone-stats-days" class="form-select">
+                            <option value="7">7 天</option>
+                            <option value="30" selected>30 天</option>
+                            <option value="90">90 天</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">平台</label>
+                        <select id="phone-stats-provider" class="form-select">
+                            <option value="">全部平台</option>
+                            <option value="herosms">HeroSMS</option>
+                            <option value="smsbower">SMSBower</option>
+                            <option value="5sim">5SIM</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">结果</label>
+                        <select id="phone-stats-success" class="form-select">
+                            <option value="">全部结果</option>
+                            <option value="true">通过</option>
+                            <option value="false">无效/失败</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" id="reload-phone-stats-btn">🔄 刷新统计</button>
+                    <button class="btn btn-secondary" id="reload-phone-live-counts-btn">📡 刷新当前库存</button>
+                </div>
+                <div id="phone-stats-summary" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:16px;"></div>
+                <div class="card" style="margin-bottom:16px;">
+                    <div class="card-body" style="padding:0;">
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>平台</th>
+                                        <th>国家</th>
+                                        <th>providerIds</th>
+                                        <th>尝试</th>
+                                        <th>通过</th>
+                                        <th>通过率</th>
+                                        <th>均扣费</th>
+                                        <th>记录报价</th>
+                                        <th>记录库存</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="phone-stats-aggregate"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-body" style="padding:0;">
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>时间</th>
+                                        <th>账号</th>
+                                        <th>平台</th>
+                                        <th>国家</th>
+                                        <th>providerIds</th>
+                                        <th>记录报价</th>
+                                        <th>记录库存</th>
+                                        <th>当前库存</th>
+                                        <th>费用</th>
+                                        <th>结果</th>
+                                        <th>原因</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="phone-stats-records"></tbody>
+                            </table>
+                        </div>
+                        <div class="pagination" style="justify-content: space-between; gap:12px; flex-wrap:wrap;">
+                            <span id="phone-stats-page-info">第 1 页</span>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-secondary btn-sm" id="phone-stats-prev-page" disabled>← 上一页</button>
+                                <button class="btn btn-secondary btn-sm" id="phone-stats-next-page" disabled>下一页 →</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

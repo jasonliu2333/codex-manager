@@ -23,6 +23,9 @@ def build_seekproxy_api_url(
     fmt: int = 1,
     break_type: int = 1,
     hold_time: int = 5,
+    protocol: int = 0,
+    pattern: int = 0,
+    valid_code: int = 0,
 ) -> str:
     from urllib.parse import urlencode
     base = "http://api.seekproxy.com:8000/api/get-ips"
@@ -38,6 +41,10 @@ def build_seekproxy_api_url(
         "break_type": int(break_type or 1),
         "time": int(hold_time or 5),
     }
+    if int(auth_type or 2) == 1:
+        params["protocol"] = int(protocol or 0)
+        params["pattern"] = int(pattern or 0)
+        params["valid_code"] = int(valid_code or 0)
     return f"{base}?{urlencode(params)}"
 
 
@@ -425,14 +432,20 @@ def get_proxy_url_for_task() -> Optional[str]:
     # 优先使用动态代理
     if settings.proxy_dynamic_enabled:
         if getattr(settings, "proxy_dynamic_mode", "api") == "account":
-            password = settings.proxy_dynamic_password.get_secret_value() if settings.proxy_dynamic_password else ""
+            profiles = dict(getattr(settings, "proxy_dynamic_profiles", {}) or {})
+            provider = str(getattr(settings, "proxy_dynamic_provider", "generic") or "generic").strip().lower()
+            mode = str(getattr(settings, "proxy_dynamic_mode", "account") or "account").strip().lower()
+            profile = profiles.get(f"{provider}::{mode}", {}) if profiles else {}
+            password = profile.get("password") if isinstance(profile, dict) else None
+            if not password:
+                password = settings.proxy_dynamic_password.get_secret_value() if settings.proxy_dynamic_password else ""
             proxy_url = build_account_proxy_url(
-                scheme=getattr(settings, "proxy_dynamic_scheme", "http"),
-                host=getattr(settings, "proxy_dynamic_host", ""),
-                port=getattr(settings, "proxy_dynamic_port", 1456),
-                username=getattr(settings, "proxy_dynamic_username", ""),
+                scheme=profile.get("scheme") if isinstance(profile, dict) and profile.get("scheme") else getattr(settings, "proxy_dynamic_scheme", "http"),
+                host=profile.get("host") if isinstance(profile, dict) and profile.get("host") else getattr(settings, "proxy_dynamic_host", ""),
+                port=profile.get("port") if isinstance(profile, dict) and profile.get("port") else getattr(settings, "proxy_dynamic_port", 1456),
+                username=profile.get("username") if isinstance(profile, dict) and profile.get("username") else getattr(settings, "proxy_dynamic_username", ""),
                 password=password,
-                country=getattr(settings, "proxy_dynamic_country", ""),
+                country=profile.get("country") if isinstance(profile, dict) and profile.get("country") else getattr(settings, "proxy_dynamic_country", ""),
             )
             if proxy_url:
                 return proxy_url
@@ -467,23 +480,39 @@ def get_proxy_url_for_task() -> Optional[str]:
 
 
 def build_dynamic_api_provider_request(settings) -> dict:
+    profiles = dict(getattr(settings, "proxy_dynamic_profiles", {}) or {})
+    provider = str(getattr(settings, "proxy_dynamic_provider", "generic") or "generic").strip().lower()
+    mode = str(getattr(settings, "proxy_dynamic_mode", "api") or "api").strip().lower()
+    profile = profiles.get(f"{provider}::{mode}", {}) if profiles else {}
+
+    def profile_or_compat(key: str, compat_attr: str, default=None):
+        value = profile.get(key) if isinstance(profile, dict) else None
+        if value not in (None, ""):
+            return value
+        return getattr(settings, compat_attr, default)
+
     provider = str(getattr(settings, "proxy_dynamic_provider", "generic") or "generic").strip().lower()
     if provider == "seekproxy":
-        secret = getattr(settings, "proxy_dynamic_seekproxy_key", None)
-        seekproxy_key = secret.get_secret_value().strip() if secret else ""
+        seekproxy_key = profile.get("key") if isinstance(profile, dict) else None
+        if not seekproxy_key:
+            secret = getattr(settings, "proxy_dynamic_seekproxy_key", None)
+            seekproxy_key = secret.get_secret_value().strip() if secret else ""
         return {
             "provider": "seekproxy",
             "api_url": build_seekproxy_api_url(
-                trade_no=getattr(settings, "proxy_dynamic_seekproxy_trade_no", ""),
+                trade_no=profile_or_compat("trade_no", "proxy_dynamic_seekproxy_trade_no", ""),
                 key=seekproxy_key,
-                auth_type=getattr(settings, "proxy_dynamic_seekproxy_auth_type", 2),
-                ip_count=getattr(settings, "proxy_dynamic_seekproxy_ip_count", 1),
-                country=getattr(settings, "proxy_dynamic_country", ""),
-                state=getattr(settings, "proxy_dynamic_seekproxy_state", ""),
-                city=getattr(settings, "proxy_dynamic_seekproxy_city", ""),
+                auth_type=profile_or_compat("auth_type", "proxy_dynamic_seekproxy_auth_type", 2),
+                ip_count=profile_or_compat("ip_count", "proxy_dynamic_seekproxy_ip_count", 1),
+                country=profile_or_compat("country", "proxy_dynamic_country", ""),
+                state=profile_or_compat("state", "proxy_dynamic_seekproxy_state", ""),
+                city=profile_or_compat("city", "proxy_dynamic_seekproxy_city", ""),
                 fmt=1,
-                break_type=getattr(settings, "proxy_dynamic_seekproxy_break_type", 1),
-                hold_time=getattr(settings, "proxy_dynamic_seekproxy_time", 5),
+                break_type=profile_or_compat("break_type", "proxy_dynamic_seekproxy_break_type", 1),
+                hold_time=profile_or_compat("time", "proxy_dynamic_seekproxy_time", 5),
+                protocol=profile_or_compat("protocol", "proxy_dynamic_seekproxy_protocol", 0),
+                pattern=profile_or_compat("pattern", "proxy_dynamic_seekproxy_pattern", 0),
+                valid_code=profile_or_compat("valid_code", "proxy_dynamic_seekproxy_valid_code", 0),
             ),
             "api_key": "",
             "api_key_header": "X-API-Key",
@@ -491,23 +520,27 @@ def build_dynamic_api_provider_request(settings) -> dict:
             "default_scheme": "http",
         }
     if provider == "haiwaidaili":
-        secret = getattr(settings, "proxy_dynamic_api_key", None)
-        api_key = secret.get_secret_value().strip() if secret else ""
+        api_key = profile.get("api_key") if isinstance(profile, dict) else None
+        if not api_key:
+            secret = getattr(settings, "proxy_dynamic_api_key", None)
+            api_key = secret.get_secret_value().strip() if secret else ""
         return {
             "provider": "haiwaidaili",
-            "api_url": getattr(settings, "proxy_dynamic_api_url", ""),
+            "api_url": profile_or_compat("api_url", "proxy_dynamic_api_url", ""),
             "api_key": api_key,
-            "api_key_header": getattr(settings, "proxy_dynamic_api_key_header", "X-API-Key"),
-            "result_field": getattr(settings, "proxy_dynamic_result_field", ""),
-            "default_scheme": getattr(settings, "proxy_dynamic_scheme", "http"),
+            "api_key_header": profile_or_compat("api_key_header", "proxy_dynamic_api_key_header", "X-API-Key"),
+            "result_field": profile_or_compat("result_field", "proxy_dynamic_result_field", ""),
+            "default_scheme": profile_or_compat("scheme", "proxy_dynamic_scheme", "http"),
         }
-    secret = getattr(settings, "proxy_dynamic_api_key", None)
-    api_key = secret.get_secret_value().strip() if secret else ""
+    api_key = profile.get("api_key") if isinstance(profile, dict) else None
+    if not api_key:
+        secret = getattr(settings, "proxy_dynamic_api_key", None)
+        api_key = secret.get_secret_value().strip() if secret else ""
     return {
         "provider": "generic",
-        "api_url": getattr(settings, "proxy_dynamic_api_url", ""),
+        "api_url": profile_or_compat("api_url", "proxy_dynamic_api_url", ""),
         "api_key": api_key,
-        "api_key_header": getattr(settings, "proxy_dynamic_api_key_header", "X-API-Key"),
-        "result_field": getattr(settings, "proxy_dynamic_result_field", ""),
-        "default_scheme": getattr(settings, "proxy_dynamic_scheme", "http"),
+        "api_key_header": profile_or_compat("api_key_header", "proxy_dynamic_api_key_header", "X-API-Key"),
+        "result_field": profile_or_compat("result_field", "proxy_dynamic_result_field", ""),
+        "default_scheme": profile_or_compat("scheme", "proxy_dynamic_scheme", "http"),
     }

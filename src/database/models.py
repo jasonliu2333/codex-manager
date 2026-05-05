@@ -5,7 +5,7 @@ SQLAlchemy ORM 模型定义
 from datetime import datetime
 from typing import Optional, Dict, Any
 import json
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import relationship
@@ -238,3 +238,50 @@ class Proxy(Base):
             auth = f"{self.username}:{self.password}@"
 
         return f"{scheme}://{auth}{self.host}:{self.port}"
+
+
+class PhoneVerificationAttempt(Base):
+    """手机验证尝试记录，用于统计国家/平台/provider 通过率与成本。"""
+    __tablename__ = 'phone_verification_attempts'
+    __table_args__ = (
+        Index("ix_phone_verify_created_at", "created_at"),
+        Index("ix_phone_verify_provider", "sms_provider"),
+        Index("ix_phone_verify_country", "country"),
+        Index("ix_phone_verify_country_key", "country_key"),
+        Index("ix_phone_verify_success", "success"),
+        Index("ix_phone_verify_invalid", "invalid"),
+        Index("ix_phone_verify_provider_country", "sms_provider", "country"),
+        Index("ix_phone_verify_provider_country_key", "sms_provider", "country_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=True, index=True)
+    account_email = Column(String(255), nullable=True, index=True)
+    sms_provider = Column(String(32), nullable=False, index=True)
+    provider_slot = Column(String(255), nullable=True, index=True)
+    provider_quote = Column(Float, nullable=True)
+    provider_count = Column(Integer, nullable=True)
+    service = Column(String(64), nullable=True)
+    country = Column(Integer, nullable=True, index=True)
+    country_key = Column(String(64), nullable=True, index=True)
+    operator = Column(String(128), nullable=True)
+    phone_number = Column(String(64), nullable=True)
+    activation_id = Column(String(128), nullable=True, index=True)
+    requested_max_price = Column(Float, nullable=True)
+    requested_min_price = Column(Float, nullable=True)
+    activation_cost = Column(Float, nullable=True)
+    charged_cost = Column(Float, nullable=True)
+    original_activation_cost = Column(Float, nullable=True)
+    reused = Column(Boolean, default=False)
+    success = Column(Boolean, default=False, index=True)
+    invalid = Column(Boolean, default=False, index=True)
+    failure_stage = Column(String(64), nullable=True)
+    error_code = Column(String(128), nullable=True)
+    error_message = Column(Text, nullable=True)
+    sms_code = Column(String(32), nullable=True)
+    sms_received_at = Column(DateTime, nullable=True)
+    verified_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = relationship('Account')

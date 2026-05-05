@@ -12,8 +12,13 @@ from pydantic import BaseModel
 from ...database.session import get_db
 from ...database.models import Account
 from ...database import crud
-from ...config.settings import get_settings
-from .accounts import resolve_account_ids
+from .accounts import (
+    resolve_account_ids,
+    _select_proxy,
+    _mask_proxy_url,
+    _probe_proxy_or_raise,
+    _get_proxy_connect_retry_count,
+)
 from ..task_manager import task_manager
 from ...core.openai.payment import (
     generate_plus_link,
@@ -67,17 +72,26 @@ def _run_sync_check_subscription_task(task_uuid: str, account_id: int, request_p
             account = db.query(Account).filter(Account.id == account_id).first()
             if not account:
                 raise ValueError("账号不存在")
-            proxy = request_proxy or get_settings().proxy_url
+            selection = _select_proxy(request_proxy, purpose="general")
+            proxy = selection.get("proxy_url")
+            callback(f"[系统] 当前代理策略命中: {selection.get('source_name')} | {selection.get('source_detail') or '-'}")
             if proxy:
-                callback(f"[系统] 本次检测将使用代理: {proxy}")
+                callback(f"[系统] 本次订阅检测实际代理: {_mask_proxy_url(proxy)}")
             else:
-                callback("[系统] 本次检测将直连")
+                callback("[系统] 本次订阅检测将直连")
+            _probe_proxy_or_raise(selection, retries=_get_proxy_connect_retry_count())
             status = check_subscription_status(account, proxy)
             account.subscription_type = None if status == "free" else status
             account.subscription_at = datetime.utcnow() if status != "free" else account.subscription_at
             db.commit()
         callback(f"[成功] 订阅检测完成: {status}")
-        task_manager.update_status(task_uuid, "completed", result={"account_id": account_id, "subscription_type": status})
+        task_manager.update_status(task_uuid, "completed", result={
+            "account_id": account_id,
+            "subscription_type": status,
+            "proxy_source": selection.get("source"),
+            "proxy_source_name": selection.get("source_name"),
+            "proxy_used": proxy,
+        })
     except Exception as exc:
         callback(f"[失败] {exc}")
         task_manager.update_status(task_uuid, "failed", error=str(exc))
@@ -121,6 +135,14 @@ async def run_batch_check_subscription(batch_id: str, account_ids: List[int], re
                 return
             task_manager.add_batch_log(batch_id, f"{prefix} 开始检测订阅 ID={account_id}")
             try:
+                selection = _select_proxy(request_proxy, purpose="general")
+                proxy = selection.get("proxy_url")
+                task_manager.add_batch_log(batch_id, f"{prefix} 代理策略命中: {selection.get('source_name')} | {selection.get('source_detail') or '-'}")
+                if proxy:
+                    task_manager.add_batch_log(batch_id, f"{prefix} 实际代理: {_mask_proxy_url(proxy)}")
+                else:
+                    task_manager.add_batch_log(batch_id, f"{prefix} 本次将直连")
+                _probe_proxy_or_raise(selection, retries=_get_proxy_connect_retry_count())
                 await loop.run_in_executor(task_manager.executor, _run_sync_check_subscription_task, f"batch-{batch_id}-{index}", account_id, request_proxy)
                 with get_db() as db:
                     account = db.query(Account).filter(Account.id == account_id).first()

@@ -170,11 +170,16 @@ async function loadServiceSelect(apiPath, container, checkbox, selectGroup) {
         container.querySelectorAll('.msd-item input').forEach(cb => {
             cb.addEventListener('change', () => updateMsdLabel(container.id + '-dd'));
         });
-        // 点击外部关闭
-        document.addEventListener('click', (e) => {
+        // 点击外部关闭（避免重复绑定）
+        const handlerKey = `__msdCloseHandler_${container.id}`;
+        if (window[handlerKey]) {
+            document.removeEventListener('click', window[handlerKey], true);
+        }
+        window[handlerKey] = (e) => {
             const dd = document.getElementById(container.id + '-dd');
             if (dd && !dd.contains(e.target)) dd.classList.remove('open');
-        }, true);
+        };
+        document.addEventListener('click', window[handlerKey], true);
     }
 
     // 联动显示/隐藏服务选择区
@@ -890,7 +895,7 @@ function startLogPolling(taskUuid) {
 
     logPollingInterval = setInterval(async () => {
         try {
-            const data = await api.get(`/registration/tasks/${taskUuid}/logs`);
+            const data = await api.get(`/registration/tasks/${taskUuid}/logs?since=${lastLogIndex}`);
 
             // 更新任务状态
             updateTaskStatus(data.status);
@@ -905,12 +910,12 @@ function startLogPolling(taskUuid) {
 
             // 添加新日志
             const logs = data.logs || [];
-            for (let i = lastLogIndex; i < logs.length; i++) {
+            for (let i = 0; i < logs.length; i++) {
                 const log = logs[i];
                 const logType = getLogType(log);
                 addLog(logType, log);
             }
-            lastLogIndex = logs.length;
+            lastLogIndex = data.next_index || (lastLogIndex + logs.length);
 
             // 检查任务是否完成
             if (['completed', 'failed', 'cancelled'].includes(data.status)) {

@@ -16,6 +16,11 @@ let isBatchValidating = false;
 let recoverySocket = null;
 let recoveryStatusTimer = null;
 let currentBatchCancelEndpoint = null;
+let currentTaskContext = null;
+let recentTaskCache = [];
+let phoneStatsPage = 1;
+const phoneStatsPageSize = 20;
+let phoneStatsTotal = 0;
 
 // DOM 元素
 const elements = {
@@ -29,6 +34,8 @@ const elements = {
     filterToken: document.getElementById('filter-token'),
     searchInput: document.getElementById('search-input'),
     refreshBtn: document.getElementById('refresh-btn'),
+    phoneStatsBtn: document.getElementById('phone-stats-btn'),
+    recentTasksBtn: document.getElementById('recent-tasks-btn'),
     batchRefreshBtn: document.getElementById('batch-refresh-btn'),
     batchValidateBtn: document.getElementById('batch-validate-btn'),
     batchUploadBtn: document.getElementById('batch-upload-btn'),
@@ -54,7 +61,24 @@ const elements = {
     recoveryLogModal: document.getElementById('recovery-log-modal'),
     recoveryLogOutput: document.getElementById('recovery-log-output'),
     recoveryLogStatus: document.getElementById('recovery-log-status'),
-    closeRecoveryLogModal: document.getElementById('close-recovery-log-modal')
+    closeRecoveryLogModal: document.getElementById('close-recovery-log-modal'),
+    resumeTaskBtn: document.getElementById('resume-task-btn'),
+    taskHistoryModal: document.getElementById('task-history-modal'),
+    taskHistoryList: document.getElementById('task-history-list'),
+    closeTaskHistoryModal: document.getElementById('close-task-history-modal'),
+    phoneStatsModal: document.getElementById('phone-stats-modal'),
+    closePhoneStatsModal: document.getElementById('close-phone-stats-modal'),
+    phoneStatsDays: document.getElementById('phone-stats-days'),
+    phoneStatsProvider: document.getElementById('phone-stats-provider'),
+    phoneStatsSuccess: document.getElementById('phone-stats-success'),
+    reloadPhoneStatsBtn: document.getElementById('reload-phone-stats-btn'),
+    reloadPhoneLiveCountsBtn: document.getElementById('reload-phone-live-counts-btn'),
+    phoneStatsSummary: document.getElementById('phone-stats-summary'),
+    phoneStatsAggregate: document.getElementById('phone-stats-aggregate'),
+    phoneStatsRecords: document.getElementById('phone-stats-records'),
+    phoneStatsPageInfo: document.getElementById('phone-stats-page-info'),
+    phoneStatsPrevPage: document.getElementById('phone-stats-prev-page'),
+    phoneStatsNextPage: document.getElementById('phone-stats-next-page')
 };
 
 // 初始化
@@ -109,6 +133,32 @@ function initEventListeners() {
         loadStats();
         loadAccounts();
         toast.info('已刷新');
+    });
+    elements.phoneStatsBtn?.addEventListener('click', () => {
+        phoneStatsPage = 1;
+        openPhoneStatsModal();
+    });
+    elements.recentTasksBtn?.addEventListener('click', openTaskHistoryModal);
+    elements.resumeTaskBtn?.addEventListener('click', resumeCurrentTaskLog);
+    elements.closeTaskHistoryModal?.addEventListener('click', closeTaskHistoryModal);
+    elements.closePhoneStatsModal?.addEventListener('click', closePhoneStatsModal);
+    elements.reloadPhoneStatsBtn?.addEventListener('click', () => {
+        phoneStatsPage = 1;
+        loadPhoneVerificationStats();
+    });
+    elements.reloadPhoneLiveCountsBtn?.addEventListener('click', refreshPhoneStatsLiveCounts);
+    elements.phoneStatsPrevPage?.addEventListener('click', () => {
+        if (phoneStatsPage > 1) {
+            phoneStatsPage -= 1;
+            loadPhoneVerificationStats();
+        }
+    });
+    elements.phoneStatsNextPage?.addEventListener('click', () => {
+        const totalPages = Math.max(1, Math.ceil(phoneStatsTotal / phoneStatsPageSize));
+        if (phoneStatsPage < totalPages) {
+            phoneStatsPage += 1;
+            loadPhoneVerificationStats();
+        }
     });
 
     // 批量刷新Token
@@ -682,6 +732,17 @@ async function refreshToken(id) {
     try {
         const result = await api.post(`/accounts/${id}/refresh`, {}, { timeoutMs: 120000 });
         appendRecoveryLog(`[系统] 刷新任务已创建: ${result.task_uuid}`);
+        updateStoredTaskContext({
+            id: result.task_uuid,
+            kind: 'task',
+            title: `刷新 Token 日志 · 账号 ${id}`,
+            status: 'pending',
+            logUrl: `/accounts/task-logs/${result.task_uuid}`,
+            statusUrl: `/accounts/refresh/task/${result.task_uuid}`,
+            wsPath: `/api/ws/task/${result.task_uuid}`,
+            watcher: watchRefreshTask,
+            finished: false,
+        });
         watchRefreshTask(result.task_uuid);
     } catch (error) {
         appendRecoveryLog(`[失败] 创建刷新任务失败: ${error.message}`);
@@ -693,7 +754,12 @@ async function refreshToken(id) {
 
 function appendRecoveryLog(message) {
     if (!elements.recoveryLogOutput) return;
-    elements.recoveryLogOutput.textContent += `${message}\n`;
+    const line = document.createElement('div');
+    line.textContent = message;
+    elements.recoveryLogOutput.appendChild(line);
+    while (elements.recoveryLogOutput.childElementCount > 500) {
+        elements.recoveryLogOutput.firstChild.remove();
+    }
     elements.recoveryLogOutput.scrollTop = elements.recoveryLogOutput.scrollHeight;
 }
 
@@ -711,11 +777,118 @@ function cleanupRecoveryWatchers() {
 function openRecoveryLogModal(title = '任务日志') {
     cleanupRecoveryWatchers();
     currentBatchCancelEndpoint = null;
-    elements.recoveryLogOutput.textContent = '';
+    elements.recoveryLogOutput.replaceChildren();
     elements.recoveryLogStatus.textContent = title;
     const cancelBtn = document.getElementById('recovery-log-cancel-btn');
     if (cancelBtn) cancelBtn.style.display = 'none';
     elements.recoveryLogModal.classList.add('active');
+}
+
+function persistTaskContext(context) {
+    if (!context || !context.id) return;
+    const key = 'accounts_recent_tasks';
+    const existing = JSON.parse(localStorage.getItem(key) || '[]');
+    const filtered = existing.filter(item => !(item.id === context.id && item.kind === context.kind));
+    filtered.unshift({
+        ...context,
+        updatedAt: new Date().toISOString(),
+    });
+    localStorage.setItem(key, JSON.stringify(filtered.slice(0, 20)));
+}
+
+function updateStoredTaskContext(context) {
+    if (!context || !context.id) return;
+    currentTaskContext = { ...(currentTaskContext || {}), ...context };
+    persistTaskContext(currentTaskContext);
+    renderResumeTaskButton();
+}
+
+function renderResumeTaskButton() {
+    if (!elements.resumeTaskBtn) return;
+    const visible = currentTaskContext && !currentTaskContext.finished;
+    elements.resumeTaskBtn.style.display = visible ? 'inline-flex' : 'none';
+    if (visible) {
+        elements.resumeTaskBtn.textContent = `🔁 继续查看：${currentTaskContext.title || currentTaskContext.kind}`;
+    }
+}
+
+async function loadExistingTaskLogs(logUrl) {
+    if (!logUrl) return;
+    try {
+        const result = await api.get(logUrl);
+        const logs = Array.isArray(result.logs) ? result.logs : [];
+        elements.recoveryLogOutput.replaceChildren();
+        logs.forEach(line => appendRecoveryLog(line));
+    } catch (error) {
+        appendRecoveryLog(`[系统] 读取已有日志失败: ${error.message}`);
+    }
+}
+
+async function reopenTaskContext(context) {
+    if (!context) return;
+    openRecoveryLogModal(context.title || '任务日志');
+    currentTaskContext = { ...context };
+    renderResumeTaskButton();
+    await loadExistingTaskLogs(context.logUrl);
+    const cancelBtn = document.getElementById('recovery-log-cancel-btn');
+    currentBatchCancelEndpoint = context.cancelEndpoint || null;
+    if (cancelBtn) {
+        cancelBtn.style.display = context.cancelEndpoint ? 'inline-flex' : 'none';
+        cancelBtn.disabled = false;
+    }
+    if (typeof context.watcher === 'function') {
+        context.watcher(context.id, true);
+    }
+}
+
+function resumeCurrentTaskLog() {
+    if (!currentTaskContext) {
+        toast.info('当前没有可继续查看的任务');
+        return;
+    }
+    reopenTaskContext(currentTaskContext);
+}
+
+function openTaskHistoryModal() {
+    const items = JSON.parse(localStorage.getItem('accounts_recent_tasks') || '[]');
+    recentTaskCache = items;
+    if (!elements.taskHistoryList) return;
+    if (!items.length) {
+        elements.taskHistoryList.innerHTML = '<div style="color: var(--text-muted); text-align:center; padding:24px;">暂无最近任务</div>';
+    } else {
+        elements.taskHistoryList.innerHTML = items.map(item => `
+            <div class="card" style="margin:0;">
+                <div class="card-body" style="display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 16px;">
+                    <div>
+                        <div style="font-weight:600;">${escapeHtml(item.title || item.kind || item.id)}</div>
+                        <div style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">
+                            ID: ${escapeHtml(item.id)} · 最近更新: ${escapeHtml(item.updatedAt || '-')} · 状态: ${escapeHtml(item.status || 'running')}
+                        </div>
+                    </div>
+                    <button class="btn btn-primary btn-sm" data-task-id="${escapeHtml(item.id)}">继续查看</button>
+                </div>
+            </div>
+        `).join('');
+        elements.taskHistoryList.querySelectorAll('button[data-task-id]').forEach((btn, index) => {
+            btn.addEventListener('click', () => resumeRecentTask(index));
+        });
+    }
+    elements.taskHistoryModal?.classList.add('active');
+}
+
+function closeTaskHistoryModal() {
+    elements.taskHistoryModal?.classList.remove('active');
+}
+
+function resumeRecentTask(index) {
+    try {
+        const item = recentTaskCache[index];
+        if (!item) throw new Error('任务已不存在');
+        closeTaskHistoryModal();
+        reopenTaskContext(item);
+    } catch (error) {
+        toast.error('恢复任务失败: ' + error.message);
+    }
 }
 
 async function cancelCurrentBatchTask() {
@@ -733,6 +906,10 @@ async function cancelCurrentBatchTask() {
 function closeRecoveryLogModal() {
     cleanupRecoveryWatchers();
     elements.recoveryLogModal.classList.remove('active');
+    if (currentTaskContext && !currentTaskContext.finished) {
+        appendRecoveryLog('[系统] 日志窗口已关闭，后台任务仍会继续执行，可稍后继续查看。');
+        renderResumeTaskButton();
+    }
 }
 
 function connectRecoverySocket(path) {
@@ -755,6 +932,7 @@ function watchRefreshTask(taskUuid) {
         try {
             const task = await api.get(`/accounts/refresh/task/${taskUuid}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${task.status}`;
+            updateStoredTaskContext({ id: taskUuid, status: task.status, finished: ['completed', 'failed', 'cancelled'].includes(task.status) });
             if (task.status === 'completed') {
                 appendRecoveryLog('[系统] 刷新任务完成');
                 cleanupRecoveryWatchers();
@@ -785,6 +963,7 @@ function watchValidateTask(taskUuid) {
         try {
             const task = await api.get(`/accounts/validate/task/${taskUuid}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${task.status}`;
+            updateStoredTaskContext({ id: taskUuid, status: task.status, finished: ['completed', 'failed', 'cancelled'].includes(task.status) });
             if (task.status === 'completed') {
                 appendRecoveryLog('[系统] 验证任务完成');
                 cleanupRecoveryWatchers();
@@ -813,6 +992,7 @@ function watchSubscriptionTask(taskUuid) {
         try {
             const task = await api.get(`/payment/accounts/check-subscription/task/${taskUuid}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${task.status}`;
+            updateStoredTaskContext({ id: taskUuid, status: task.status, finished: ['completed', 'failed', 'cancelled'].includes(task.status) });
             if (task.status === 'completed') {
                 appendRecoveryLog('[系统] 订阅检测任务完成');
                 cleanupRecoveryWatchers();
@@ -840,6 +1020,7 @@ function watchRecoveryTask(taskUuid) {
         try {
             const task = await api.get(`/accounts/recover-oauth/task/${taskUuid}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${task.status}`;
+            updateStoredTaskContext({ id: taskUuid, status: task.status, finished: ['completed', 'failed', 'cancelled'].includes(task.status) });
             if (task.status === 'completed') {
                 appendRecoveryLog('[系统] 补录任务完成');
                 cleanupRecoveryWatchers();
@@ -867,6 +1048,7 @@ function watchRecoveryBatch(batchId) {
         try {
             const batch = await api.get(`/accounts/recover-oauth/batch/${batchId}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            updateStoredTaskContext({ id: batchId, status: batch.status, finished: !!batch.finished });
             if (batch.finished) {
                 appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量补录任务已取消' : '[系统] 批量补录任务已结束');
                 cleanupRecoveryWatchers();
@@ -888,6 +1070,7 @@ function watchValidateBatch(batchId) {
         try {
             const batch = await api.get(`/accounts/batch-validate/${batchId}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            updateStoredTaskContext({ id: batchId, status: batch.status, finished: !!batch.finished });
             if (batch.finished) {
                 appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量验证任务已取消' : '[系统] 批量验证任务已结束');
                 cleanupRecoveryWatchers();
@@ -910,6 +1093,7 @@ function watchSubscriptionBatch(batchId) {
         try {
             const batch = await api.get(`/payment/accounts/batch-check-subscription/${batchId}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            updateStoredTaskContext({ id: batchId, status: batch.status, finished: !!batch.finished });
             if (batch.finished) {
                 appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量订阅检测任务已取消' : '[系统] 批量订阅检测任务已结束');
                 cleanupRecoveryWatchers();
@@ -931,6 +1115,7 @@ function watchRefreshBatch(batchId) {
         try {
             const batch = await api.get(`/accounts/batch-refresh/${batchId}`);
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
+            updateStoredTaskContext({ id: batchId, status: batch.status, finished: !!batch.finished });
             if (batch.finished) {
                 appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量刷新任务已取消' : '[系统] 批量刷新任务已结束');
                 cleanupRecoveryWatchers();
@@ -956,6 +1141,17 @@ async function recoverOAuth(id) {
     try {
         const result = await api.post(`/accounts/${id}/recover-oauth`, {}, { timeoutMs: 120000 });
         appendRecoveryLog(`[系统] 补录任务已创建: ${result.task_uuid}`);
+        updateStoredTaskContext({
+            id: result.task_uuid,
+            kind: 'task',
+            title: `OAuth 补录日志 · 账号 ${id}`,
+            status: 'pending',
+            logUrl: `/accounts/task-logs/${result.task_uuid}`,
+            statusUrl: `/accounts/recover-oauth/task/${result.task_uuid}`,
+            wsPath: `/api/ws/task/${result.task_uuid}`,
+            watcher: watchRecoveryTask,
+            finished: false,
+        });
         watchRecoveryTask(result.task_uuid);
     } catch (error) {
         appendRecoveryLog(`[失败] 创建补录任务失败: ${error.message}`);
@@ -984,6 +1180,18 @@ async function handleBatchRefresh() {
         currentBatchCancelEndpoint = `/accounts/batch-refresh/${result.batch_id}/cancel`;
         const cancelBtn = document.getElementById('recovery-log-cancel-btn');
         if (cancelBtn) { cancelBtn.style.display = 'inline-flex'; cancelBtn.disabled = false; }
+        updateStoredTaskContext({
+            id: result.batch_id,
+            kind: 'batch',
+            title: `批量刷新 Token 日志 (${count})`,
+            status: 'running',
+            logUrl: `/accounts/batch-logs/${result.batch_id}`,
+            statusUrl: `/accounts/batch-refresh/${result.batch_id}`,
+            wsPath: `/api/ws/batch/${result.batch_id}`,
+            cancelEndpoint: `/accounts/batch-refresh/${result.batch_id}/cancel`,
+            watcher: watchRefreshBatch,
+            finished: false,
+        });
         watchRefreshBatch(result.batch_id);
     } catch (error) {
         appendRecoveryLog(`[失败] 创建批量刷新任务失败: ${error.message}`);
@@ -1012,6 +1220,18 @@ async function handleBatchRecoverOAuth() {
         currentBatchCancelEndpoint = `/accounts/recover-oauth/batch/${result.batch_id}/cancel`;
         const cancelBtn = document.getElementById('recovery-log-cancel-btn');
         if (cancelBtn) { cancelBtn.style.display = 'inline-flex'; cancelBtn.disabled = false; }
+        updateStoredTaskContext({
+            id: result.batch_id,
+            kind: 'batch',
+            title: `批量 OAuth 补录日志 (${count})`,
+            status: 'running',
+            logUrl: `/accounts/batch-logs/${result.batch_id}`,
+            statusUrl: `/accounts/recover-oauth/batch/${result.batch_id}`,
+            wsPath: `/api/ws/batch/${result.batch_id}`,
+            cancelEndpoint: `/accounts/recover-oauth/batch/${result.batch_id}/cancel`,
+            watcher: watchRecoveryBatch,
+            finished: false,
+        });
         watchRecoveryBatch(result.batch_id);
     } catch (error) {
         appendRecoveryLog(`[失败] 创建批量补录任务失败: ${error.message}`);
@@ -1043,6 +1263,18 @@ async function handleBatchValidate() {
         currentBatchCancelEndpoint = `/accounts/batch-validate/${result.batch_id}/cancel`;
         const cancelBtn = document.getElementById('recovery-log-cancel-btn');
         if (cancelBtn) { cancelBtn.style.display = 'inline-flex'; cancelBtn.disabled = false; }
+        updateStoredTaskContext({
+            id: result.batch_id,
+            kind: 'batch',
+            title: `批量验证 Token 日志 (${count})`,
+            status: 'running',
+            logUrl: `/accounts/batch-logs/${result.batch_id}`,
+            statusUrl: `/accounts/batch-validate/${result.batch_id}`,
+            wsPath: `/api/ws/batch/${result.batch_id}`,
+            cancelEndpoint: `/accounts/batch-validate/${result.batch_id}/cancel`,
+            watcher: watchValidateBatch,
+            finished: false,
+        });
         watchValidateBatch(result.batch_id);
     } catch (error) {
         appendRecoveryLog(`[失败] 创建批量验证任务失败: ${error.message}`);
@@ -1057,7 +1289,7 @@ async function handleBatchValidate() {
 async function viewAccount(id) {
     try {
         const account = await api.get(`/accounts/${id}`);
-        const tokens = await api.get(`/accounts/${id}/tokens`);
+        const tokens = account;
         const openaiState = account.extra_data?.openai_account_state || '';
         const openaiStateReason = account.extra_data?.openai_account_state_reason || '';
         const openaiStateMarkedAt = account.extra_data?.openai_account_state_marked_at || '';
@@ -1577,6 +1809,17 @@ async function validateToken(id) {
     try {
         const result = await api.post(`/accounts/${id}/validate`, {}, { timeoutMs: 120000 });
         appendRecoveryLog(`[系统] 验证任务已创建: ${result.task_uuid}`);
+        updateStoredTaskContext({
+            id: result.task_uuid,
+            kind: 'task',
+            title: `验证 Token 日志 · 账号 ${id}`,
+            status: 'pending',
+            logUrl: `/accounts/task-logs/${result.task_uuid}`,
+            statusUrl: `/accounts/validate/task/${result.task_uuid}`,
+            wsPath: `/api/ws/task/${result.task_uuid}`,
+            watcher: watchValidateTask,
+            finished: false,
+        });
         watchValidateTask(result.task_uuid);
     } catch (error) {
         appendRecoveryLog(`[失败] 创建验证任务失败: ${error.message}`);
@@ -1591,6 +1834,17 @@ async function checkSubscription(id) {
     try {
         const result = await api.post(`/payment/accounts/${id}/check-subscription`, {}, { timeoutMs: 120000 });
         appendRecoveryLog(`[系统] 订阅检测任务已创建: ${result.task_uuid}`);
+        updateStoredTaskContext({
+            id: result.task_uuid,
+            kind: 'task',
+            title: `订阅检测日志 · 账号 ${id}`,
+            status: 'pending',
+            logUrl: `/accounts/task-logs/${result.task_uuid}`,
+            statusUrl: `/payment/accounts/check-subscription/task/${result.task_uuid}`,
+            wsPath: `/api/ws/task/${result.task_uuid}`,
+            watcher: watchSubscriptionTask,
+            finished: false,
+        });
         watchSubscriptionTask(result.task_uuid);
     } catch (error) {
         appendRecoveryLog(`[失败] 创建订阅检测任务失败: ${error.message}`);
@@ -1636,6 +1890,18 @@ async function handleBatchCheckSubscription() {
         currentBatchCancelEndpoint = `/payment/accounts/batch-check-subscription/${result.batch_id}/cancel`;
         const cancelBtn = document.getElementById('recovery-log-cancel-btn');
         if (cancelBtn) { cancelBtn.style.display = 'inline-flex'; cancelBtn.disabled = false; }
+        updateStoredTaskContext({
+            id: result.batch_id,
+            kind: 'batch',
+            title: `批量订阅检测日志 (${count})`,
+            status: 'running',
+            logUrl: `/accounts/batch-logs/${result.batch_id}`,
+            statusUrl: `/payment/accounts/batch-check-subscription/${result.batch_id}`,
+            wsPath: `/api/ws/batch/${result.batch_id}`,
+            cancelEndpoint: `/payment/accounts/batch-check-subscription/${result.batch_id}/cancel`,
+            watcher: watchSubscriptionBatch,
+            finished: false,
+        });
         watchSubscriptionBatch(result.batch_id);
     } catch (e) {
         appendRecoveryLog(`[失败] 创建批量订阅检测任务失败: ${e.message}`);
@@ -1953,4 +2219,128 @@ function showInboxCodeResult(code, email) {
         </div>
     `;
     elements.detailModal.classList.add('active');
+}
+
+function openPhoneStatsModal() {
+    elements.phoneStatsModal?.classList.add('active');
+    loadPhoneVerificationStats();
+}
+
+function closePhoneStatsModal() {
+    elements.phoneStatsModal?.classList.remove('active');
+}
+
+async function loadPhoneVerificationStats() {
+    const days = parseInt(elements.phoneStatsDays?.value || '30', 10);
+    const provider = elements.phoneStatsProvider?.value || '';
+    const successRaw = elements.phoneStatsSuccess?.value || '';
+    const stats = await api.get(`/accounts/phone-verification/stats?days=${days}`);
+    renderPhoneStatsSummary(stats.summary || {});
+    renderPhoneStatsAggregate((stats.rows || []).filter(row => !provider || row.sms_provider === provider));
+
+    const params = new URLSearchParams({
+        page: String(phoneStatsPage),
+        page_size: String(phoneStatsPageSize),
+        days: String(days),
+    });
+    if (provider) params.set('provider', provider);
+    if (successRaw) params.set('success', successRaw);
+    const recordsResult = await api.get(`/accounts/phone-verification/records?${params.toString()}`);
+    phoneStatsTotal = recordsResult.total || 0;
+    renderPhoneStatsRecords(recordsResult.records || []);
+    await refreshPhoneStatsLiveCounts();
+    const totalPages = Math.max(1, Math.ceil(phoneStatsTotal / phoneStatsPageSize));
+    if (elements.phoneStatsPageInfo) {
+        elements.phoneStatsPageInfo.textContent = `第 ${phoneStatsPage} 页 / 共 ${totalPages} 页 · 共 ${phoneStatsTotal} 条`;
+    }
+    if (elements.phoneStatsPrevPage) elements.phoneStatsPrevPage.disabled = phoneStatsPage <= 1;
+    if (elements.phoneStatsNextPage) elements.phoneStatsNextPage.disabled = phoneStatsPage >= totalPages;
+}
+
+function renderPhoneStatsSummary(summary) {
+    if (!elements.phoneStatsSummary) return;
+    const cards = [
+        ['总尝试', summary.total ?? 0],
+        ['成功', summary.success ?? 0],
+        ['无效', summary.invalid ?? 0],
+        ['通过率', `${(((summary.pass_rate || 0) * 100)).toFixed(1)}%`],
+        ['累计扣费', summary.total_cost ?? 0],
+        ['累计原始激活费', summary.total_activation_cost ?? 0],
+    ];
+    elements.phoneStatsSummary.innerHTML = cards.map(([label, value]) => `
+        <div class="stat-card">
+            <div class="stat-value" style="font-size:1.4rem;">${escapeHtml(String(value))}</div>
+            <div class="stat-label">${escapeHtml(label)}</div>
+        </div>
+    `).join('');
+}
+
+function renderPhoneStatsAggregate(rows) {
+    if (!elements.phoneStatsAggregate) return;
+    if (!rows.length) {
+        elements.phoneStatsAggregate.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted);">暂无统计数据</td></tr>';
+        return;
+    }
+    elements.phoneStatsAggregate.innerHTML = rows.map(row => `
+        <tr>
+            <td>${escapeHtml(row.sms_provider || '-')}</td>
+            <td>${escapeHtml(row.country_key || (row.country != null ? String(row.country) : '-'))}</td>
+            <td>${escapeHtml(row.provider_slot || '-')}</td>
+            <td>${escapeHtml(String(row.attempts || 0))}</td>
+            <td>${escapeHtml(String(row.success_count || 0))}</td>
+            <td>${escapeHtml((((row.pass_rate || 0) * 100)).toFixed(1))}%</td>
+            <td>${escapeHtml(String(row.avg_cost ?? 0))}</td>
+            <td>${escapeHtml(String(row.avg_provider_quote ?? 0))}</td>
+            <td>${escapeHtml(String(row.recorded_provider_count ?? 0))}</td>
+        </tr>
+    `).join('');
+}
+
+function renderPhoneStatsRecords(records) {
+    if (!elements.phoneStatsRecords) return;
+    if (!records.length) {
+        elements.phoneStatsRecords.innerHTML = '<tr><td colspan="11" style="text-align:center; color:var(--text-muted);">暂无记录</td></tr>';
+        return;
+    }
+    elements.phoneStatsRecords.innerHTML = records.map(item => `
+        <tr data-record-id="${item.id}">
+            <td>${escapeHtml(formatDateTime(item.created_at) || '-')}</td>
+            <td>${escapeHtml(item.account_email || '-')}</td>
+            <td>${escapeHtml(item.sms_provider || '-')}</td>
+            <td>${escapeHtml(item.country_key || (item.country != null ? String(item.country) : '-'))}</td>
+            <td>${escapeHtml(item.provider_slot || '-')}</td>
+            <td>${escapeHtml(String(item.provider_quote ?? '-'))}</td>
+            <td>${escapeHtml(String(item.provider_count ?? '-'))}</td>
+            <td class="live-provider-count" data-record-id="${item.id}">-</td>
+            <td>${escapeHtml(String(item.charged_cost ?? item.activation_cost ?? '-'))}</td>
+            <td>${item.success ? '<span class="badge badge-success">通过</span>' : '<span class="badge badge-danger">无效</span>'}</td>
+            <td title="${escapeHtml(item.error_message || '')}">${escapeHtml(item.error_code || item.failure_stage || '-')}</td>
+        </tr>
+    `).join('');
+}
+
+async function refreshPhoneStatsLiveCounts() {
+    const ids = Array.from(document.querySelectorAll('#phone-stats-records tr[data-record-id]')).map(row => row.dataset.recordId).filter(Boolean);
+    if (!ids.length) return;
+    try {
+        const result = await api.get(`/accounts/phone-verification/live-counts?record_ids=${ids.join(',')}`);
+        const byId = new Map((result.items || []).map(item => [String(item.id), item]));
+        document.querySelectorAll('.live-provider-count').forEach(cell => {
+            const item = byId.get(String(cell.dataset.recordId));
+            if (!item) {
+                cell.textContent = '-';
+                return;
+            }
+            if (item.live_error) {
+                cell.textContent = '查询失败';
+                cell.title = item.live_error;
+                return;
+            }
+            const countText = item.current_provider_count == null ? '-' : String(item.current_provider_count);
+            const quoteText = item.current_provider_quote == null ? '' : ` / ${item.current_provider_quote}`;
+            cell.textContent = `${countText}${quoteText}`;
+        });
+    } catch (error) {
+        toast.error('刷新当前库存失败: ' + error.message);
+    }
 }

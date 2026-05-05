@@ -281,6 +281,18 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.SMS,
         description="短信平台转发目标号码"
     ),
+    "sms_provider_failover_enabled": SettingDefinition(
+        db_key="sms.provider_failover_enabled",
+        default_value=True,
+        category=SettingCategory.SMS,
+        description="同一 providerIds 连续失败后自动切换到下一个 provider"
+    ),
+    "sms_provider_fail_threshold": SettingDefinition(
+        db_key="sms.provider_fail_threshold",
+        default_value=3,
+        category=SettingCategory.SMS,
+        description="同一 providerIds 连续失败多少次后自动切换"
+    ),
 
     # HeroSMS 接码平台配置
     "herosms_enabled": SettingDefinition(
@@ -843,6 +855,8 @@ SETTING_TYPES: Dict[str, Type] = {
     "sms_voice": bool,
     "sms_forwarding": bool,
     "sms_forwarding_number": str,
+    "sms_provider_failover_enabled": bool,
+    "sms_provider_fail_threshold": int,
     "herosms_enabled": bool,
     "herosms_country": int,
     "herosms_timeout": int,
@@ -1232,6 +1246,8 @@ class Settings(BaseModel):
     sms_voice: bool = False
     sms_forwarding: bool = False
     sms_forwarding_number: str = ""
+    sms_provider_failover_enabled: bool = True
+    sms_provider_fail_threshold: int = 3
 
     # HeroSMS 接码平台配置
     herosms_enabled: bool = False

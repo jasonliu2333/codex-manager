@@ -20,6 +20,90 @@ SMS_PENDING_CANCEL_KEY = "sms.pending_cancel_pool"
 _REUSE_POOL_LOCK = threading.RLock()
 
 
+def _extract_account_identity(engine: Any) -> tuple[Optional[int], Optional[str]]:
+    account_id = getattr(engine, "account_id", None)
+    email = (
+        getattr(engine, "email", None)
+        or getattr(engine, "email_address", None)
+        or getattr(engine, "account_email", None)
+        or getattr(engine, "current_email", None)
+    )
+    return (int(account_id) if isinstance(account_id, int) or str(account_id).isdigit() else None, str(email).strip() if email else None)
+
+
+def _create_phone_verification_record(
+    engine: Any,
+    *,
+    cfg: SMSProviderConfig,
+    activation: SMSActivation,
+    provider_slot: Optional[str],
+    provider_quote: Optional[float],
+    provider_count: Optional[int],
+    reused: bool,
+    charged_cost: Optional[float],
+    original_activation_cost: Optional[float] = None,
+) -> Optional[int]:
+    account_id, account_email = _extract_account_identity(engine)
+    try:
+        with get_db() as db:
+            record = crud.create_phone_verification_attempt(
+                db,
+                account_id=account_id,
+                account_email=account_email,
+                sms_provider=normalize_sms_provider_name(cfg.provider or "herosms"),
+                provider_slot=str(provider_slot or "").strip() or None,
+                provider_quote=provider_quote,
+                provider_count=provider_count,
+                service=cfg.service,
+                country=cfg.country if cfg.country and int(cfg.country) > 0 else None,
+                country_key=str(cfg.country_key or "").strip() or None,
+                operator=str(getattr(activation, "activation_operator", "") or "") or (str(cfg.operator or "") if hasattr(cfg, "operator") else None),
+                phone_number=activation.phone_number,
+                activation_id=str(activation.activation_id or ""),
+                requested_max_price=cfg.max_price,
+                requested_min_price=cfg.min_price,
+                activation_cost=activation.activation_cost,
+                charged_cost=charged_cost,
+                original_activation_cost=original_activation_cost,
+                reused=reused,
+                success=False,
+                invalid=False,
+            )
+            return int(record.id)
+    except Exception:
+        return None
+
+
+def _update_phone_verification_record(attempt_id: Optional[int], **updates) -> None:
+    if not attempt_id:
+        return
+    try:
+        with get_db() as db:
+            crud.update_phone_verification_attempt(db, int(attempt_id), **updates)
+    except Exception:
+        return
+
+
+def _extract_error_code_from_text(error_text: str) -> Optional[str]:
+    text = (error_text or "").lower()
+    markers = [
+        "phone_max_usage_exceeded",
+        "phone_number_in_use",
+        "phone_number_blocked",
+        "phone_number_invalid",
+        "phone_number_not_supported",
+        "too_many_attempts",
+        "too_many_requests",
+        "no_numbers",
+        "no_balance",
+        "bad_key",
+    ]
+    for marker in markers:
+        if marker in text:
+            return marker
+    return None
+
+
 def is_add_phone_challenge(page_type: str = "", continue_url: str = "", payload: Any = None) -> bool:
     text = f"{page_type} {continue_url}".lower()
     if "add_phone" in text or "add-phone" in text or "phone_verification" in text:
@@ -100,6 +184,11 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
     reuse_max_uses = max(1, int(runtime.get("reuse_max_uses", 1) or 1))
     selected_operator = str(runtime.get("operator", "") or "").strip()
     provider_candidates = _build_provider_candidates(engine, client, cfg)
+    provider_failover_enabled = bool(runtime.get("provider_failover_enabled", True)) and provider_name == "smsbower" and not str(cfg.provider_ids or "").strip()
+    provider_fail_threshold = max(1, int(runtime.get("provider_fail_threshold", 3) or 3))
+    provider_rotation_index = 0
+    provider_forced_price_floor: Optional[float] = None
+    provider_failure_counts: dict[str, int] = {}
     resolved_max_price = cfg.max_price
     min_price_floor = _positive_float_or_none(cfg.min_price)
     max_price_cap = _positive_float_or_none(cfg.max_price)
@@ -132,6 +221,8 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
     last_error: Optional[str] = None
     for number_attempt in range(1, max_number_attempts + 1):
         activation = None
+        verification_attempt_id: Optional[int] = None
+        provider_slot_used: Optional[str] = None
         reused_activation = False
         previous_codes: set[str] = set()
         previous_texts: set[str] = set()
@@ -148,6 +239,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     activation_cost=_positive_float_or_none(reuse_entry.get("activation_cost")),
                 )
                 reused_activation = True
+                provider_slot_used = str(reuse_entry.get("provider_slot") or "").strip() or None
                 previous_codes = {str(code).strip() for code in reuse_entry.get("used_codes", []) if str(code).strip()}
                 previous_texts = {
                     str(text).strip()
@@ -165,6 +257,17 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     engine._log(f"add-phone: 复用号码本次费用=0，原始激活费用={original_cost}")
                 else:
                     engine._log("add-phone: 复用号码本次费用=0")
+                verification_attempt_id = _create_phone_verification_record(
+                    engine,
+                    cfg=cfg,
+                    activation=activation,
+                    provider_slot=provider_slot_used,
+                    provider_quote=None,
+                    provider_count=None,
+                    reused=True,
+                    charged_cost=0.0,
+                    original_activation_cost=_positive_float_or_none(original_cost),
+                )
             else:
                 price_candidates = _build_price_candidates(
                     resolved_max_price,
@@ -177,7 +280,13 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 )
                 last_request_error: Optional[Exception] = None
                 for idx, candidate_price in enumerate(price_candidates, start=1):
-                    provider_try_plan = _build_provider_try_plan(provider_candidates, candidate_price, cfg)
+                    provider_try_plan = _build_provider_try_plan_with_failover(
+                        provider_candidates,
+                        candidate_price,
+                        cfg,
+                        min_provider_index=provider_rotation_index,
+                        forced_price_floor=provider_forced_price_floor,
+                    )
                     if provider_candidates:
                         engine._log(
                             "add-phone: 当前价格档可尝试 provider: "
@@ -209,13 +318,24 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                                 provider_ids=provider_choice.get("provider_ids"),
                             )
                             balance_after = _safe_get_balance(client)
+                            provider_slot_used = provider_choice.get("provider_ids") or None
                             engine._log(
                                 "add-phone: 当前价格档命中结果: "
                                 f"maxPrice={price_label}, "
                                 f"provider={provider_choice_label}, "
                                 f"actual_price={activation.activation_cost if activation.activation_cost is not None else '未知'}"
                             )
-                            _log_activation_cost(engine, activation, balance_before, balance_after)
+                            charged_cost = _log_activation_cost(engine, activation, balance_before, balance_after)
+                            verification_attempt_id = _create_phone_verification_record(
+                                engine,
+                                cfg=cfg,
+                                activation=activation,
+                                provider_slot=provider_slot_used,
+                                provider_quote=provider_choice.get("price"),
+                                provider_count=provider_choice.get("count"),
+                                reused=False,
+                                charged_cost=charged_cost,
+                            )
                             if activation.activation_operator or activation.activation_time or activation.can_get_another_sms is not None:
                                 engine._log(
                                     "add-phone: activation 扩展信息: "
@@ -242,6 +362,13 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
 
                 if number_attempt < target_number_index:
                     engine._log(f"add-phone: 当前为第 {number_attempt} 个号码，配置要求从第 {target_number_index} 个号码开始使用，跳过当前号码", "warning")
+                    _update_phone_verification_record(
+                        verification_attempt_id,
+                        invalid=True,
+                        failure_stage="number_skipped",
+                        error_code="target_number_skip",
+                        error_message=f"跳过第 {number_attempt} 个号码，等待目标序号 {target_number_index}",
+                    )
                     client.cancel_activation(activation.activation_id)
                     continue
 
@@ -265,7 +392,21 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             if send_resp is None or send_resp.status_code not in (200, 201, 204):
                 body = (getattr(send_resp, "text", "") or "")[:300] if send_resp is not None else ""
                 if _is_phone_max_usage_error(send_resp, body):
+                    _update_phone_verification_record(
+                        verification_attempt_id,
+                        invalid=True,
+                        failure_stage="submit_phone",
+                        error_code="phone_max_usage_exceeded",
+                        error_message=body or "手机号已达最大绑定次数",
+                    )
                     raise RuntimeError(f"手机号已达最大绑定次数，需更换号码: {body}")
+                _update_phone_verification_record(
+                    verification_attempt_id,
+                    invalid=True,
+                    failure_stage="submit_phone",
+                    error_code=f"http_{getattr(send_resp, 'status_code', 'no_response')}",
+                    error_message=body or "提交手机号失败",
+                )
                 raise RuntimeError(f"提交手机号失败: {getattr(send_resp, 'status_code', 'NO_RESPONSE')} {body}")
 
             if not reused_activation:
@@ -300,8 +441,20 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             trace_callback=lambda message: engine._log(f"add-phone: {provider_label} 状态: {message}", "debug"),
             )
             if not code:
+                _update_phone_verification_record(
+                    verification_attempt_id,
+                    invalid=True,
+                    failure_stage="wait_sms_code",
+                    error_code="sms_code_timeout",
+                    error_message="等待短信验证码超时",
+                )
                 raise RuntimeError("等待短信验证码超时")
             engine._log(f"add-phone: 成功获取短信验证码: {code}")
+            _update_phone_verification_record(
+                verification_attempt_id,
+                sms_code=code,
+                sms_received_at=datetime.utcnow(),
+            )
 
             validate_resp = _post_json_with_payload_variants(
                 engine,
@@ -312,6 +465,13 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             )
             if validate_resp is None or validate_resp.status_code not in (200, 201, 204):
                 body = (getattr(validate_resp, "text", "") or "")[:300] if validate_resp is not None else ""
+                _update_phone_verification_record(
+                    verification_attempt_id,
+                    invalid=True,
+                    failure_stage="validate_sms_code",
+                    error_code=f"http_{getattr(validate_resp, 'status_code', 'no_response')}",
+                    error_message=body or "短信验证码校验失败",
+                )
                 raise RuntimeError(f"短信验证码校验失败: {getattr(validate_resp, 'status_code', 'NO_RESPONSE')} {body}")
 
             next_url = _extract_continue_url(engine, validate_resp)
@@ -325,6 +485,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     code=code,
                     request_started_at=request_started_at,
                     reused=reused_activation,
+                    provider_slot=provider_slot_used,
                 )
                 if should_finish:
                     engine._log(f"add-phone: 号码 {activation.phone_number} 已达到复用上限，将结束激活")
@@ -340,11 +501,44 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 except Exception:
                     pass
                 client.finish_activation(activation.activation_id)
+            _update_phone_verification_record(
+                verification_attempt_id,
+                success=True,
+                invalid=False,
+                failure_stage=None,
+                error_code=None,
+                error_message=None,
+                verified_at=datetime.utcnow(),
+            )
             engine._log("add-phone: 手机验证完成")
             return next_url or "https://auth.openai.com/sign-in-with-chatgpt/codex/consent"
         except Exception as exc:
             last_error = str(exc)
             engine._log(f"add-phone: 手机验证失败: {exc}", "error")
+            _update_phone_verification_record(
+                verification_attempt_id,
+                invalid=True,
+                failure_stage="exception",
+                error_code=_extract_error_code_from_text(last_error) or "runtime_error",
+                error_message=last_error[:1000],
+            )
+            if provider_failover_enabled and provider_slot_used and activation:
+                provider_failure_counts[provider_slot_used] = int(provider_failure_counts.get(provider_slot_used, 0) or 0) + 1
+                failure_count = provider_failure_counts[provider_slot_used]
+                engine._log(f"add-phone: providerIds={provider_slot_used} 已连续失败 {failure_count}/{provider_fail_threshold}", "warning")
+                if failure_count >= provider_fail_threshold:
+                    rotation = _advance_provider_failover(
+                        engine,
+                        provider_candidates,
+                        provider_slot_used,
+                        provider_rotation_index,
+                        provider_forced_price_floor,
+                        cfg.max_price,
+                    )
+                    if rotation:
+                        provider_rotation_index = rotation["next_index"]
+                        provider_forced_price_floor = rotation["next_price"]
+                        provider_failure_counts[provider_slot_used] = 0
             if activation:
                 if reused_activation:
                     _release_failed_activation(client, activation.activation_id, last_error)
@@ -492,6 +686,8 @@ def _load_sms_runtime_settings() -> dict:
         "voice": bool(getattr(settings, "sms_voice", False)),
         "forwarding": bool(getattr(settings, "sms_forwarding", False)),
         "forwarding_number": getattr(settings, "sms_forwarding_number", "") or "",
+        "provider_failover_enabled": bool(getattr(settings, "sms_provider_failover_enabled", True)),
+        "provider_fail_threshold": int(getattr(settings, "sms_provider_fail_threshold", 3) or 3),
         "enabled": bool(getattr(settings, "herosms_enabled", False)),
         "service": getattr(settings, "herosms_service", "dr") or "dr",
         "country": int(getattr(settings, "herosms_country", 187) or 187),
@@ -520,6 +716,8 @@ def _load_sms_runtime_settings() -> dict:
         "sms.voice": ("voice", lambda v, d=data["voice"]: _parse_bool(v, d)),
         "sms.forwarding": ("forwarding", lambda v, d=data["forwarding"]: _parse_bool(v, d)),
         "sms.forwarding_number": ("forwarding_number", lambda v, d=data["forwarding_number"]: str(v or d)),
+        "sms.provider_failover_enabled": ("provider_failover_enabled", lambda v, d=data["provider_failover_enabled"]: _parse_bool(v, d)),
+        "sms.provider_fail_threshold": ("provider_fail_threshold", lambda v, d=data["provider_fail_threshold"]: int(v or d)),
         "herosms.enabled": ("enabled", lambda v, d=data["enabled"]: _parse_bool(v, d)),
         "herosms.service": ("service", lambda v, d=data["service"]: str(v or d)),
         "herosms.country": ("country", lambda v, d=data["country"]: int(v or d)),
@@ -619,22 +817,84 @@ def _build_provider_candidates(engine: Any, client: object, cfg: SMSProviderConf
 
 
 def _build_provider_try_plan(provider_candidates: list[dict], candidate_price: Optional[float], cfg: SMSProviderConfig) -> list[dict]:
+    return _build_provider_try_plan_with_failover(provider_candidates, candidate_price, cfg)
+
+
+def _build_provider_try_plan_with_failover(
+    provider_candidates: list[dict],
+    candidate_price: Optional[float],
+    cfg: SMSProviderConfig,
+    *,
+    min_provider_index: int = 0,
+    forced_price_floor: Optional[float] = None,
+) -> list[dict]:
     explicit_provider_ids = str(cfg.provider_ids or "").strip()
     if explicit_provider_ids:
         return [{"provider_ids": explicit_provider_ids}]
     if not provider_candidates:
         return [{"provider_ids": None}]
     plan = []
-    for item in provider_candidates:
+    effective_cap = candidate_price
+    if forced_price_floor is not None:
+        if effective_cap is None:
+            effective_cap = forced_price_floor
+        else:
+            effective_cap = max(effective_cap, forced_price_floor)
+    for idx, item in enumerate(provider_candidates):
+        if idx < max(0, int(min_provider_index or 0)):
+            continue
         quote_price = item.get("price")
-        if candidate_price is not None and quote_price is not None and quote_price > candidate_price:
+        if effective_cap is not None and quote_price is not None and quote_price > effective_cap:
             continue
         plan.append({
             "provider_ids": str(item.get("provider_id") or "").strip(),
             "price": quote_price,
             "count": item.get("count"),
+            "candidate_index": idx,
         })
     return plan or [{"provider_ids": None}]
+
+
+def _advance_provider_failover(
+    engine: Any,
+    provider_candidates: list[dict],
+    provider_slot_used: str,
+    current_rotation_index: int,
+    current_forced_price_floor: Optional[float],
+    max_price_cap: Optional[float],
+) -> Optional[dict]:
+    normalized_slot = str(provider_slot_used or "").strip()
+    if not normalized_slot or not provider_candidates:
+        return None
+    matched_index = next(
+        (idx for idx, item in enumerate(provider_candidates) if str(item.get("provider_id") or "").strip() == normalized_slot),
+        None,
+    )
+    if matched_index is None:
+        return None
+    next_index = matched_index + 1
+    if next_index >= len(provider_candidates):
+        engine._log(f"add-phone: providerIds={normalized_slot} 已达到连续失败阈值，但没有更高一档 provider 可切换", "warning")
+        return None
+    next_item = provider_candidates[next_index]
+    next_price = _positive_float_or_none(next_item.get("price"))
+    cap = _positive_float_or_none(max_price_cap)
+    if cap is not None and next_price is not None and next_price > cap:
+        engine._log(
+            f"add-phone: providerIds={normalized_slot} 已达到连续失败阈值，但下一 providerIds={next_item.get('provider_id')} 报价 {next_price} 超过最大价格 {cap}，停止上移",
+            "warning",
+        )
+        return None
+    forced_floor = next_price if next_price is not None else current_forced_price_floor
+    engine._log(
+        f"add-phone: providerIds={normalized_slot} 连续失败，切换到下一 providerIds={next_item.get('provider_id')}，"
+        f"新的价格下限={forced_floor if forced_floor is not None else '-'}",
+        "warning",
+    )
+    return {
+        "next_index": max(current_rotation_index, next_index),
+        "next_price": forced_floor,
+    }
 
 
 def _request_number_with_provider_options(
@@ -827,6 +1087,7 @@ def _record_activation_success(
     code: str,
     request_started_at: str,
     reused: bool,
+    provider_slot: Optional[str] = None,
 ) -> bool:
     """记录号码成功使用次数。返回 True 表示应结束当前短信平台 activation。"""
     now = _utc_now()
@@ -858,6 +1119,7 @@ def _record_activation_success(
             "raw_number": activation.raw_number,
             "country_phone_code": activation.country_phone_code,
             "activation_cost": activation.activation_cost,
+            "provider_slot": str(provider_slot or item.get("provider_slot") or "").strip() or None,
             "uses": int(item.get("uses") or 0) + 1,
             "max_uses": max_uses,
             "used_codes": used_codes[-10:],
@@ -1053,7 +1315,7 @@ def _log_activation_cost(
     activation: SMSActivation,
     balance_before: Optional[float],
     balance_after: Optional[float],
-) -> None:
+) -> Optional[float]:
     activation_cost = activation.activation_cost
     charged = None
     if balance_before is not None and balance_after is not None:
@@ -1067,6 +1329,7 @@ def _log_activation_cost(
         parts.append(f"余额 {balance_before} -> {balance_after}")
     if parts:
         engine._log(f"add-phone: 取号费用信息: {', '.join(parts)}")
+    return charged
 
 
 def _is_phone_max_usage_error(response: Any, body: str) -> bool:

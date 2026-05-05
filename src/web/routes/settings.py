@@ -134,6 +134,8 @@ def _load_sms_settings_from_db() -> dict:
         "voice": bool(getattr(settings, "sms_voice", False)),
         "forwarding": bool(getattr(settings, "sms_forwarding", False)),
         "forwarding_number": str(getattr(settings, "sms_forwarding_number", "") or ""),
+        "provider_failover_enabled": bool(getattr(settings, "sms_provider_failover_enabled", True)),
+        "provider_fail_threshold": int(getattr(settings, "sms_provider_fail_threshold", 3) or 3),
         "enabled": bool(getattr(settings, "herosms_enabled", False)),
         "has_api_key": bool(_get_saved_sms_api_key(provider_name)),
         "service": str(getattr(settings, "herosms_service", "dr") or "dr"),
@@ -163,6 +165,8 @@ def _load_sms_settings_from_db() -> dict:
         "voice": ("sms.voice", lambda v: _parse_bool(v, defaults["voice"])),
         "forwarding": ("sms.forwarding", lambda v: _parse_bool(v, defaults["forwarding"])),
         "forwarding_number": ("sms.forwarding_number", lambda v: str(v or "").strip()),
+        "provider_failover_enabled": ("sms.provider_failover_enabled", lambda v: _parse_bool(v, defaults["provider_failover_enabled"])),
+        "provider_fail_threshold": ("sms.provider_fail_threshold", lambda v: _parse_int(v, defaults["provider_fail_threshold"])),
         "enabled": ("herosms.enabled", lambda v: _parse_bool(v, defaults["enabled"])),
         "service": ("herosms.service", lambda v: str(v).strip() or defaults["service"]),
         "country": ("herosms.country", lambda v: _parse_int(v, defaults["country"])),
@@ -1378,6 +1382,8 @@ class SMSSettings(BaseModel):
     voice: bool = False
     forwarding: bool = False
     forwarding_number: str = ""
+    provider_failover_enabled: bool = True
+    provider_fail_threshold: int = 3
     enabled: bool = False
     api_key: Optional[str] = None
     service: str = "dr"
@@ -1493,6 +1499,8 @@ def _validate_sms_settings_request(request: SMSSettings) -> str:
         raise HTTPException(status_code=400, detail="使用第 N 个号码必须在 1 到最大换号次数之间")
     if request.price_relax_max_multiplier < 1 or request.price_relax_max_multiplier > 20:
         raise HTTPException(status_code=400, detail="价格放宽最大倍数必须在 1-20 之间")
+    if request.provider_fail_threshold < 1 or request.provider_fail_threshold > 10:
+        raise HTTPException(status_code=400, detail="同 provider 连续失败阈值必须在 1-10 之间")
     if request.reuse_max_uses < 1 or request.reuse_max_uses > 5:
         raise HTTPException(status_code=400, detail="号码复用次数必须在 1-5 之间")
     try:
@@ -1521,6 +1529,8 @@ def _build_sms_settings_update_dict(request: SMSSettings, provider_name: str) ->
         "sms_voice": request.voice,
         "sms_forwarding": request.forwarding,
         "sms_forwarding_number": request.forwarding_number.strip(),
+        "sms_provider_failover_enabled": request.provider_failover_enabled,
+        "sms_provider_fail_threshold": request.provider_fail_threshold,
         "herosms_enabled": request.enabled,
         "herosms_service": request.service,
         "herosms_country": request.country,

@@ -6,6 +6,7 @@
 import asyncio
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional, List, Callable, Any
 from collections import defaultdict
@@ -40,6 +41,7 @@ _task_cancelled: Dict[str, bool] = {}
 _batch_status: Dict[str, dict] = {}
 _batch_logs: Dict[str, List[str]] = defaultdict(list)
 _batch_locks: Dict[str, threading.Lock] = {}
+_cleanup_threads: Dict[str, threading.Thread] = {}
 
 
 def _get_log_lock(task_uuid: str) -> threading.Lock:
@@ -197,17 +199,30 @@ class TaskManager:
 
         _task_status[task_uuid]["status"] = status
         _task_status[task_uuid].update(kwargs)
+        if status in {"completed", "failed", "cancelled"}:
+            self.cleanup_task(task_uuid)
 
     def get_status(self, task_uuid: str) -> Optional[dict]:
         """获取任务状态"""
         return _task_status.get(task_uuid)
 
-    def cleanup_task(self, task_uuid: str):
-        """清理任务数据"""
-        # 保留日志队列一段时间，以便后续查询
-        # 只清理取消标志
-        if task_uuid in _task_cancelled:
-            del _task_cancelled[task_uuid]
+    def cleanup_task(self, task_uuid: str, delay_seconds: int = 300):
+        """延迟清理任务数据，给前端重连/查看日志保留缓冲期。"""
+        existing = _cleanup_threads.get(task_uuid)
+        if existing and existing.is_alive():
+            return
+
+        def _cleanup():
+            time.sleep(delay_seconds)
+            with _meta_lock:
+                for store in (_log_queues, _task_status, _task_cancelled, _ws_sent_index, _ws_connections):
+                    store.pop(task_uuid, None)
+                _log_locks.pop(task_uuid, None)
+                _cleanup_threads.pop(task_uuid, None)
+
+        worker = threading.Thread(target=_cleanup, daemon=True, name=f"cleanup_{task_uuid[:8]}")
+        _cleanup_threads[task_uuid] = worker
+        worker.start()
 
     # ============== 批量任务管理 ==============
 
@@ -271,6 +286,8 @@ class TaskManager:
             return
 
         _batch_status[batch_id].update(kwargs)
+        if _batch_status[batch_id].get("status") in {"completed", "failed", "cancelled"} or _batch_status[batch_id].get("finished"):
+            self.cleanup_batch(batch_id)
 
         # 异步广播状态更新
         if self._loop and self._loop.is_running():
@@ -364,6 +381,27 @@ class TaskManager:
             if key in _ws_sent_index:
                 _ws_sent_index[key].pop(id(websocket), None)
         logger.info(f"批量任务 WebSocket 连接已注销: {batch_id}")
+
+    def cleanup_batch(self, batch_id: str, delay_seconds: int = 300):
+        key = f"batch_{batch_id}"
+        thread_key = f"batch::{batch_id}"
+        existing = _cleanup_threads.get(thread_key)
+        if existing and existing.is_alive():
+            return
+
+        def _cleanup():
+            time.sleep(delay_seconds)
+            with _meta_lock:
+                _batch_status.pop(batch_id, None)
+                _batch_logs.pop(batch_id, None)
+                _batch_locks.pop(batch_id, None)
+                _ws_connections.pop(key, None)
+                _ws_sent_index.pop(key, None)
+                _cleanup_threads.pop(thread_key, None)
+
+        worker = threading.Thread(target=_cleanup, daemon=True, name=f"cleanup_batch_{batch_id[:8]}")
+        _cleanup_threads[thread_key] = worker
+        worker.start()
 
     def create_log_callback(self, task_uuid: str, prefix: str = "", batch_id: str = "") -> Callable[[str], None]:
         """创建日志回调函数，可附加任务编号前缀，并同时推送到批量任务频道"""

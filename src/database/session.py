@@ -126,6 +126,8 @@ class DatabaseSessionManager:
             ("accounts", "openai_auth_state", "VARCHAR(32)"),
             ("accounts", "token_validation_state", "VARCHAR(64)"),
             ("accounts", "openai_account_state", "VARCHAR(64)"),
+            ("phone_verification_attempts", "provider_quote", "FLOAT"),
+            ("phone_verification_attempts", "provider_count", "INTEGER"),
             ("proxies", "is_default", "BOOLEAN DEFAULT 0"),
             ("cpa_services", "include_proxy_url", "BOOLEAN DEFAULT 0"),
         ]

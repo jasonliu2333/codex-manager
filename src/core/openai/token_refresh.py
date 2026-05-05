@@ -104,7 +104,15 @@ def _mark_account_deleted_or_deactivated(db, account: Account, reason: str) -> N
         "openai_auth_state_marked_at",
     ):
         extra.pop(key, None)
-    crud.update_account(db, account.id, status="banned", extra_data=extra)
+    crud.update_account(
+        db,
+        account.id,
+        status="banned",
+        extra_data=extra,
+        openai_account_state="forbidden_or_banned",
+        oauth_recovery_required=False,
+        openai_auth_state=None,
+    )
 
 
 def _mark_account_forbidden_or_banned(db, account: Account, reason: str) -> None:
@@ -121,7 +129,15 @@ def _mark_account_forbidden_or_banned(db, account: Account, reason: str) -> None
         "openai_auth_state_marked_at",
     ):
         extra.pop(key, None)
-    crud.update_account(db, account.id, status="banned", extra_data=extra)
+    crud.update_account(
+        db,
+        account.id,
+        status="banned",
+        extra_data=extra,
+        openai_account_state="forbidden_or_banned",
+        oauth_recovery_required=False,
+        openai_auth_state=None,
+    )
 
 
 def _mark_oauth_recovery_required(db, account: Account, reason: str) -> None:
@@ -139,6 +155,7 @@ def _mark_oauth_recovery_required(db, account: Account, reason: str) -> None:
         account.id,
         status="failed",
         extra_data=extra,
+        oauth_recovery_required=True,
     )
 
 
@@ -147,7 +164,13 @@ def _mark_access_token_expired(db, account: Account, reason: str) -> None:
     extra["token_validation_state"] = "access_token_invalid_or_expired"
     extra["token_validation_reason"] = reason
     extra["token_validation_marked_at"] = datetime.utcnow().isoformat()
-    crud.update_account(db, account.id, status="expired", extra_data=extra)
+    crud.update_account(
+        db,
+        account.id,
+        status="expired",
+        extra_data=extra,
+        token_validation_state="access_token_invalid_or_expired",
+    )
 
 
 def _clear_success_state(db, account: Account, *, clear_oauth_recovery: bool = False) -> None:
@@ -187,7 +210,16 @@ def _clear_success_state(db, account: Account, *, clear_oauth_recovery: bool = F
         ):
             extra.pop(key, None)
 
-    crud.update_account(db, account.id, status="active", extra_data=extra)
+    crud.update_account(
+        db,
+        account.id,
+        status="active",
+        extra_data=extra,
+        oauth_recovery_required=bool(extra.get("oauth_recovery_required")) if "oauth_recovery_required" in extra else False,
+        openai_auth_state=str(extra.get("openai_auth_state") or "") or None,
+        token_validation_state=str(extra.get("token_validation_state") or "") or None,
+        openai_account_state=str(extra.get("openai_account_state") or "") or None,
+    )
 
 
 @dataclass
