@@ -456,10 +456,14 @@ def _http_get_dynamic_api(api_url: str, *, headers: dict, timeout: int, attempt:
 
 
 def fetch_public_ip() -> Optional[str]:
+    import requests
     from curl_cffi import requests as cffi_requests
-    for url in ("http://ip234.in/ip.json", "http://api.ipify.org?format=json"):
+    for url in ("http://api.ipify.org?format=json", "http://ip234.in/ip.json", "http://myip.ipip.net"):
         try:
-            resp = cffi_requests.get(url, timeout=10, impersonate="chrome110")
+            if "myip.ipip.net" in url:
+                resp = requests.get(url, timeout=10)
+            else:
+                resp = cffi_requests.get(url, timeout=10, impersonate="chrome110")
             if resp.status_code != 200:
                 continue
             try:
@@ -470,7 +474,8 @@ def fetch_public_ip() -> Optional[str]:
             except Exception:
                 text = resp.text.strip()
                 if text:
-                    return text
+                    found = re.search(r'(\d{1,3}(?:\.\d{1,3}){3})', text)
+                    return found.group(1) if found else text
         except Exception:
             continue
     return None
@@ -511,11 +516,20 @@ def probe_proxy_https_openai(proxy_url: str, timeout: int = 8) -> tuple[bool, st
         return False, str(exc)
 
 
-def select_best_dynamic_proxy(candidates: list[str]) -> Optional[str]:
+def select_best_dynamic_proxy(
+    candidates: list[str],
+    *,
+    seekproxy_trade_no: str = "",
+    seekproxy_key: str = "",
+) -> Optional[str]:
     for proxy_url in candidates:
         ok_http, detail_http = probe_proxy_http_basic(proxy_url)
         if not ok_http:
             logger.warning("动态代理候选不可用(HTTP): %s | %s", proxy_url, detail_http)
+            if seekproxy_trade_no and seekproxy_key:
+                ok_white, white_msg = ensure_seekproxy_whitelist_for_error(seekproxy_trade_no, seekproxy_key, detail_http)
+                if white_msg:
+                    logger.warning("SeekProxy 白名单补救: %s", white_msg)
             continue
         ok_https, detail_https = probe_proxy_https_openai(proxy_url)
         if not ok_https:
@@ -642,6 +656,27 @@ def ensure_seekproxy_whitelist(trade_no: str, key: str) -> tuple[bool, str]:
         return False, f"加入 SeekProxy 白名单失败: {exc}"
 
 
+def ensure_seekproxy_whitelist_for_error(trade_no: str, key: str, detail: str) -> tuple[bool, str]:
+    """
+    从代理探测返回里提取 “Please add the IP x.x.x.x whitelist first.”，
+    直接把该 IP 加入 SeekProxy 白名单。容器/宿主多出口时，fetch_public_ip()
+    得到的 IP 可能与 SeekProxy 识别的出口 IP 不一致，因此以服务端提示为准。
+    """
+    match = re.search(r'add\s+the\s+IP\s+(\d{1,3}(?:\.\d{1,3}){3})\s+whitelist', str(detail or ""), re.I)
+    if not match:
+        return False, ""
+    ip = match.group(1)
+    try:
+        current = get_seekproxy_white_list(trade_no, key)
+        if ip in current:
+            return True, f"SeekProxy 提示出口 IP 已在白名单中: {ip}"
+        if add_seekproxy_white_ip(trade_no, key, ip):
+            return True, f"已按 SeekProxy 提示加入白名单: {ip}，通常约 30 秒后生效"
+        return False, f"按 SeekProxy 提示加入白名单失败: {ip}"
+    except Exception as exc:
+        return False, f"按 SeekProxy 提示加入白名单失败: {exc}"
+
+
 def get_proxy_url_for_task() -> Optional[str]:
     """
     为注册任务获取代理 URL。
@@ -703,7 +738,14 @@ def get_proxy_url_for_task() -> Optional[str]:
                 provider=provider,
                 default_scheme=request_cfg["default_scheme"],
             )
-            proxy_url = select_best_dynamic_proxy(candidates) if candidates else None
+            if provider == "seekproxy":
+                proxy_url = select_best_dynamic_proxy(
+                    candidates,
+                    seekproxy_trade_no=str(request_cfg.get("trade_no") or ""),
+                    seekproxy_key=str(request_cfg.get("seekproxy_key") or ""),
+                ) if candidates else None
+            else:
+                proxy_url = select_best_dynamic_proxy(candidates) if candidates else None
             if proxy_url:
                 return proxy_url
             logger.warning("动态代理获取失败，回退到静态代理")

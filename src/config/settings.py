@@ -893,6 +893,8 @@ DYNAMIC_PROXY_KEYS = {
     "proxy_dynamic_profiles",
     "proxy_dynamic_mode",
     "proxy_dynamic_provider",
+    "proxy_refresh_use_proxy",
+    "proxy_validate_use_proxy",
     "proxy_dynamic_api_url",
     "proxy_dynamic_api_key",
     "proxy_dynamic_api_key_header",

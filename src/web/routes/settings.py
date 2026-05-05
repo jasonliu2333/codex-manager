@@ -354,9 +354,16 @@ def _build_dynamic_profile_payload(request: "DynamicProxySettings") -> dict:
             "country": request.country.strip() or "us",
         }
     if provider == "seekproxy":
+        existing_key = None
+        try:
+            existing_key = _load_proxy_settings_from_db().get("dynamic_profiles", {}).get(_dynamic_profile_key(provider, mode), {}).get("key")
+        except Exception:
+            existing_key = None
         return {
             "trade_no": request.seekproxy_trade_no.strip(),
-            "key": request.seekproxy_key if request.seekproxy_key is not None else None,
+            # 前端为了安全会在保存后清空密钥输入框；空字符串表示“保持原值”，
+            # 只有显式传入非空值才覆盖，避免重启/二次保存后丢失。
+            "key": request.seekproxy_key if request.seekproxy_key not in (None, "") else existing_key,
             "auth_type": request.seekproxy_auth_type,
             "ip_count": request.seekproxy_ip_count,
             "state": request.seekproxy_state.strip(),
@@ -1155,7 +1162,14 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
             provider=provider,
             default_scheme="socks5h" if provider == "seekproxy" and int(request.seekproxy_auth_type or 2) == 1 and int(request.seekproxy_protocol or 0) == 2 else request.scheme,
         )
-        proxy_url = select_best_dynamic_proxy(candidates) if candidates else None
+        if provider == "seekproxy":
+            proxy_url = select_best_dynamic_proxy(
+                candidates,
+                seekproxy_trade_no=request.seekproxy_trade_no.strip(),
+                seekproxy_key=seekproxy_key,
+            ) if candidates else None
+        else:
+            proxy_url = select_best_dynamic_proxy(candidates) if candidates else None
 
     if not proxy_url:
         return {"success": False, "message": "动态代理返回为空或请求失败"}
