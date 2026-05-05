@@ -435,12 +435,24 @@ def account_to_response(account: Account, include_mfa_secret: bool = False) -> A
     extra_data = dict(account.extra_data or {})
     if account.oauth_recovery_required is not None:
         extra_data["oauth_recovery_required"] = bool(account.oauth_recovery_required)
+        if not account.oauth_recovery_required:
+            for key in ("oauth_recovery_required_reason", "oauth_recovery_required_marked_at"):
+                extra_data.pop(key, None)
     if account.openai_auth_state:
         extra_data["openai_auth_state"] = account.openai_auth_state
+    else:
+        for key in ("openai_auth_state", "openai_auth_state_reason", "openai_auth_state_marked_at"):
+            extra_data.pop(key, None)
     if account.token_validation_state:
         extra_data["token_validation_state"] = account.token_validation_state
+    else:
+        for key in ("token_validation_state", "token_validation_reason", "token_validation_marked_at"):
+            extra_data.pop(key, None)
     if account.openai_account_state:
         extra_data["openai_account_state"] = account.openai_account_state
+    else:
+        for key in ("openai_account_state", "openai_account_state_reason", "openai_account_state_marked_at"):
+            extra_data.pop(key, None)
     mfa_secret = str(extra_data.get("mfa_totp_secret") or "").strip()
     response_extra = dict(extra_data)
     response_extra.pop("mfa_totp_secret", None)
@@ -523,7 +535,10 @@ async def list_accounts(
                 Account.access_token != "",
                 Account.refresh_token.is_not(None),
                 Account.refresh_token != "",
-                Account.status != "expired"
+                Account.status.notin_(["expired", "banned"]),
+                Account.oauth_recovery_required.is_not(True),
+                or_(Account.token_validation_state.is_(None), Account.token_validation_state == ""),
+                or_(Account.openai_account_state.is_(None), Account.openai_account_state != "forbidden_or_banned"),
             )
         elif token_status == "expired":
             query = query.filter(Account.status == "expired")
@@ -664,7 +679,26 @@ async def batch_update_accounts(request: BatchUpdateRequest):
     with get_db() as db:
         errors = []
         try:
-            updated_count = crud.update_accounts_batch(db, request.ids, status=request.status)
+            update_fields = {"status": request.status}
+            if request.status == AccountStatus.ACTIVE.value:
+                update_fields.update(
+                    oauth_recovery_required=False,
+                    openai_auth_state=None,
+                    token_validation_state=None,
+                    openai_account_state=None,
+                )
+            elif request.status == AccountStatus.BANNED.value:
+                update_fields.update(
+                    oauth_recovery_required=False,
+                    openai_auth_state=None,
+                    token_validation_state=None,
+                    openai_account_state="forbidden_or_banned",
+                )
+            elif request.status == AccountStatus.EXPIRED.value:
+                update_fields.update(
+                    token_validation_state="access_token_invalid_or_expired",
+                )
+            updated_count = crud.update_accounts_batch(db, request.ids, **update_fields)
         except Exception as e:
             updated_count = 0
             errors.append(str(e))
@@ -1941,6 +1975,8 @@ async def get_phone_verification_stats(
     provider_slot: Optional[str] = None,
     phone_number: Optional[str] = None,
     error_code: Optional[str] = None,
+    result_status: Optional[str] = None,
+    failure_type: Optional[str] = None,
 ):
     since = datetime.utcnow() - timedelta(days=days)
     with get_db() as db:
@@ -1961,6 +1997,10 @@ async def get_phone_verification_stats(
             query = query.filter(PhoneVerificationAttempt.phone_number.ilike(f"%{phone_number.strip()}%"))
         if error_code:
             query = query.filter(PhoneVerificationAttempt.error_code.ilike(f"%{error_code.strip()}%"))
+        if result_status:
+            query = query.filter(PhoneVerificationAttempt.result_status == result_status.strip())
+        if failure_type:
+            query = query.filter(PhoneVerificationAttempt.failure_type == failure_type.strip())
         total = query.count()
         success = query.filter(PhoneVerificationAttempt.success == True).count()
         invalid = query.filter(PhoneVerificationAttempt.invalid == True).count()
@@ -2030,6 +2070,8 @@ async def get_phone_verification_records(
     provider_slot: Optional[str] = None,
     phone_number: Optional[str] = None,
     error_code: Optional[str] = None,
+    result_status: Optional[str] = None,
+    failure_type: Optional[str] = None,
 ):
     since = datetime.utcnow() - timedelta(days=days)
     with get_db() as db:
@@ -2050,6 +2092,10 @@ async def get_phone_verification_records(
             query = query.filter(PhoneVerificationAttempt.phone_number.ilike(f"%{phone_number.strip()}%"))
         if error_code:
             query = query.filter(PhoneVerificationAttempt.error_code.ilike(f"%{error_code.strip()}%"))
+        if result_status:
+            query = query.filter(PhoneVerificationAttempt.result_status == result_status.strip())
+        if failure_type:
+            query = query.filter(PhoneVerificationAttempt.failure_type == failure_type.strip())
         total = query.count()
         records = query.order_by(desc(PhoneVerificationAttempt.created_at)).offset((page - 1) * page_size).limit(page_size).all()
         return {
@@ -2077,6 +2123,8 @@ async def get_phone_verification_records(
                     "reused": item.reused,
                     "success": item.success,
                     "invalid": item.invalid,
+                    "result_status": item.result_status,
+                    "failure_type": item.failure_type,
                     "failure_stage": item.failure_stage,
                     "error_code": item.error_code,
                     "error_message": item.error_message,
@@ -2097,8 +2145,18 @@ async def get_phone_verification_live_counts(record_ids: str = Query(...)):
     with get_db() as db:
         records = db.query(PhoneVerificationAttempt).filter(PhoneVerificationAttempt.id.in_(ids)).all()
         items = []
+        live_cache = {}
         for record in records:
-            live = _load_live_provider_metrics(record)
+            cache_key = (
+                normalize_sms_provider_name(record.sms_provider or "herosms"),
+                record.service or "",
+                int(record.country or 0),
+                str(record.country_key or ""),
+                str(record.provider_slot or ""),
+            )
+            if cache_key not in live_cache:
+                live_cache[cache_key] = _load_live_provider_metrics(record)
+            live = live_cache[cache_key]
             items.append({
                 "id": record.id,
                 "current_provider_count": live.get("current_provider_count"),

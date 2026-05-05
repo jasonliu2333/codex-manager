@@ -273,8 +273,10 @@ class PhoneVerificationAttempt(Base):
     charged_cost = Column(Float, nullable=True)
     original_activation_cost = Column(Float, nullable=True)
     reused = Column(Boolean, default=False)
+    result_status = Column(String(32), default='pending', index=True)  # pending, success, invalid, skipped, cancelled, provider_failed
     success = Column(Boolean, default=False, index=True)
     invalid = Column(Boolean, default=False, index=True)
+    failure_type = Column(String(32), nullable=True, index=True)  # hard_invalid, soft_invalid, transient, policy_blocked
     failure_stage = Column(String(64), nullable=True)
     error_code = Column(String(128), nullable=True)
     error_message = Column(Text, nullable=True)

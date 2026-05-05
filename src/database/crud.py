@@ -123,7 +123,7 @@ def update_accounts_batch(
     **fields
 ) -> int:
     """批量更新账户信息"""
-    clean_fields = {key: value for key, value in fields.items() if value is not None}
+    clean_fields = {key: value for key, value in fields.items() if hasattr(Account, key)}
     if not clean_fields or not account_ids:
         return 0
     result = db.query(Account).filter(Account.id.in_(account_ids)).update(

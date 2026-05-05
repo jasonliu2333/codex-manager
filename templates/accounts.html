@@ -389,6 +389,28 @@
                         </select>
                     </div>
                     <div>
+                        <label class="form-label">结果状态</label>
+                        <select id="phone-stats-result-status" class="form-select">
+                            <option value="">全部状态</option>
+                            <option value="pending">进行中</option>
+                            <option value="success">成功</option>
+                            <option value="invalid">无效</option>
+                            <option value="skipped">跳过</option>
+                            <option value="cancelled">已取消</option>
+                            <option value="provider_failed">平台失败</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">失败类型</label>
+                        <select id="phone-stats-failure-type" class="form-select">
+                            <option value="">全部类型</option>
+                            <option value="hard_invalid">硬失败</option>
+                            <option value="soft_invalid">软失败</option>
+                            <option value="transient">暂态错误</option>
+                            <option value="policy_blocked">策略/风控</option>
+                        </select>
+                    </div>
+                    <div>
                         <label class="form-label">服务代码</label>
                         <input type="text" id="phone-stats-service" class="form-input" placeholder="如 dr / facebook">
                     </div>
@@ -424,7 +446,6 @@
                                     <tr>
                                         <th>平台</th>
                                         <th>国家</th>
-                                        <th>号码</th>
                                         <th>providerIds</th>
                                         <th>尝试</th>
                                         <th>通过</th>
@@ -449,6 +470,7 @@
                                         <th>账号</th>
                                         <th>平台</th>
                                         <th>国家</th>
+                                        <th>号码</th>
                                         <th>providerIds</th>
                                         <th>记录报价</th>
                                         <th>记录库存</th>

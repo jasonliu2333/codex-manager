@@ -71,6 +71,8 @@ const elements = {
     phoneStatsDays: document.getElementById('phone-stats-days'),
     phoneStatsProvider: document.getElementById('phone-stats-provider'),
     phoneStatsSuccess: document.getElementById('phone-stats-success'),
+    phoneStatsResultStatus: document.getElementById('phone-stats-result-status'),
+    phoneStatsFailureType: document.getElementById('phone-stats-failure-type'),
     phoneStatsService: document.getElementById('phone-stats-service'),
     phoneStatsCountry: document.getElementById('phone-stats-country'),
     phoneStatsCountryKey: document.getElementById('phone-stats-country-key'),
@@ -460,19 +462,7 @@ function renderAccounts(accounts) {
             <td>${getServiceTypeText(account.email_service)}</td>
             <td>
                 <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;">
-                    ${getStatusIcon(getDerivedAccountStatus(account)?.key === 'expired' ? 'expired' : (getDerivedAccountStatus(account) ? 'failed' : account.status))}
-                    ${['forbidden_or_banned', 'deleted_or_deactivated'].includes(account.extra_data?.openai_account_state)
-                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_account_state_reason || 'OpenAI 已明确返回账号不可用/已删除/已停用')}">封禁</span>`
-                        : ''}
-                    ${account.extra_data?.openai_auth_state === 'mfa_required' && !['forbidden_or_banned', 'deleted_or_deactivated'].includes(account.extra_data?.openai_account_state)
-                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.openai_auth_state_reason || '该账号需要 MFA 二次验证')}">需要MFA</span>`
-                        : ''}
-                    ${account.extra_data?.oauth_recovery_required && !['forbidden_or_banned', 'deleted_or_deactivated'].includes(account.extra_data?.openai_account_state)
-                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.oauth_recovery_required_reason || 'refresh_token 已失效，需要补录 OAuth')}">需要补录</span>`
-                        : ''}
-                    ${account.extra_data?.token_validation_state === 'access_token_invalid_or_expired'
-                        ? `<span class="badge pending" title="${escapeHtml(account.extra_data?.token_validation_reason || 'access_token 无效或已过期')}">Token过期</span>`
-                        : ''}
+                    ${renderAccountStatusBadge(account)}
                 </div>
             </td>
             <td>
@@ -2277,6 +2267,8 @@ async function loadPhoneVerificationStats() {
     const days = parseInt(elements.phoneStatsDays?.value || '30', 10);
     const provider = elements.phoneStatsProvider?.value || '';
     const successRaw = elements.phoneStatsSuccess?.value || '';
+    const resultStatus = elements.phoneStatsResultStatus?.value || '';
+    const failureType = elements.phoneStatsFailureType?.value || '';
     const service = elements.phoneStatsService?.value?.trim() || '';
     const country = elements.phoneStatsCountry?.value?.trim() || '';
     const countryKey = elements.phoneStatsCountryKey?.value?.trim() || '';
@@ -2286,6 +2278,8 @@ async function loadPhoneVerificationStats() {
     const statsParams = new URLSearchParams({ days: String(days) });
     if (provider) statsParams.set('provider', provider);
     if (successRaw) statsParams.set('success', successRaw);
+    if (resultStatus) statsParams.set('result_status', resultStatus);
+    if (failureType) statsParams.set('failure_type', failureType);
     if (service) statsParams.set('service', service);
     if (country) statsParams.set('country', country);
     if (countryKey) statsParams.set('country_key', countryKey);
@@ -2303,6 +2297,8 @@ async function loadPhoneVerificationStats() {
     });
     if (provider) params.set('provider', provider);
     if (successRaw) params.set('success', successRaw);
+    if (resultStatus) params.set('result_status', resultStatus);
+    if (failureType) params.set('failure_type', failureType);
     if (service) params.set('service', service);
     if (country) params.set('country', country);
     if (countryKey) params.set('country_key', countryKey);

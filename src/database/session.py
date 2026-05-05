@@ -128,6 +128,8 @@ class DatabaseSessionManager:
             ("accounts", "openai_account_state", "VARCHAR(64)"),
             ("phone_verification_attempts", "provider_quote", "FLOAT"),
             ("phone_verification_attempts", "provider_count", "INTEGER"),
+            ("phone_verification_attempts", "result_status", "VARCHAR(32) DEFAULT 'pending'"),
+            ("phone_verification_attempts", "failure_type", "VARCHAR(32)"),
             ("proxies", "is_default", "BOOLEAN DEFAULT 0"),
             ("cpa_services", "include_proxy_url", "BOOLEAN DEFAULT 0"),
         ]
@@ -143,6 +145,13 @@ class DatabaseSessionManager:
             ("ix_phone_reputation_provider_phone", "CREATE UNIQUE INDEX IF NOT EXISTS ix_phone_reputation_provider_phone ON phone_number_reputations(sms_provider, phone_number)"),
             ("ix_phone_reputation_blacklisted", "CREATE INDEX IF NOT EXISTS ix_phone_reputation_blacklisted ON phone_number_reputations(blacklisted)"),
             ("ix_phone_reputation_last_seen", "CREATE INDEX IF NOT EXISTS ix_phone_reputation_last_seen ON phone_number_reputations(last_seen_at)"),
+            ("ix_phone_verify_service", "CREATE INDEX IF NOT EXISTS ix_phone_verify_service ON phone_verification_attempts(service)"),
+            ("ix_phone_verify_phone", "CREATE INDEX IF NOT EXISTS ix_phone_verify_phone ON phone_verification_attempts(phone_number)"),
+            ("ix_phone_verify_error_code", "CREATE INDEX IF NOT EXISTS ix_phone_verify_error_code ON phone_verification_attempts(error_code)"),
+            ("ix_phone_verify_result_status", "CREATE INDEX IF NOT EXISTS ix_phone_verify_result_status ON phone_verification_attempts(result_status)"),
+            ("ix_phone_verify_failure_type", "CREATE INDEX IF NOT EXISTS ix_phone_verify_failure_type ON phone_verification_attempts(failure_type)"),
+            ("ix_phone_verify_provider_slot_created", "CREATE INDEX IF NOT EXISTS ix_phone_verify_provider_slot_created ON phone_verification_attempts(sms_provider, provider_slot, created_at)"),
+            ("ix_phone_verify_provider_success_created", "CREATE INDEX IF NOT EXISTS ix_phone_verify_provider_success_created ON phone_verification_attempts(sms_provider, success, created_at)"),
         ]
 
         # 确保新表存在（create_tables 已处理，此处兜底）

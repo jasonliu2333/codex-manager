@@ -66,6 +66,7 @@ def _create_phone_verification_record(
                 charged_cost=charged_cost,
                 original_activation_cost=original_activation_cost,
                 reused=reused,
+                result_status="pending",
                 success=False,
                 invalid=False,
             )
@@ -77,6 +78,17 @@ def _create_phone_verification_record(
 def _update_phone_verification_record(attempt_id: Optional[int], **updates) -> None:
     if not attempt_id:
         return
+    if updates.get("success") is True:
+        updates.setdefault("result_status", "success")
+        updates.setdefault("failure_type", None)
+    elif updates.get("invalid") is True:
+        stage = str(updates.get("failure_stage") or "")
+        code = str(updates.get("error_code") or "")
+        if stage in {"history_blacklist_skip", "number_skipped"}:
+            updates.setdefault("result_status", "skipped")
+        else:
+            updates.setdefault("result_status", "invalid")
+        updates.setdefault("failure_type", _classify_phone_failure_type(code, str(updates.get("error_message") or "")))
     try:
         with get_db() as db:
             crud.update_phone_verification_attempt(db, int(attempt_id), **updates)
@@ -102,6 +114,51 @@ def _extract_error_code_from_text(error_text: str) -> Optional[str]:
         if marker in text:
             return marker
     return None
+
+
+def _classify_phone_failure_type(error_code: str = "", error_message: str = "") -> str:
+    text = f"{error_code} {error_message}".lower()
+    hard_markers = [
+        "phone_max_usage_exceeded",
+        "phone_number_in_use",
+        "phone_number_blocked",
+        "phone_number_invalid",
+        "phone_number_not_supported",
+        "history_blacklist_skip",
+        "bad_key",
+        "no_balance",
+    ]
+    transient_markers = [
+        "tls",
+        "connect",
+        "timeout",
+        "timed out",
+        "curl",
+        "proxy",
+        "network",
+        "http_5",
+        "server offline",
+        "internal error",
+    ]
+    policy_markers = [
+        "cloudflare",
+        "challenge",
+        "captcha",
+        "forbidden",
+        "too_many_attempts",
+        "too_many_requests",
+    ]
+    if any(marker in text for marker in hard_markers):
+        return "hard_invalid"
+    if any(marker in text for marker in policy_markers):
+        return "policy_blocked"
+    if any(marker in text for marker in transient_markers):
+        return "transient"
+    return "soft_invalid"
+
+
+def _should_blacklist_phone_failure(error_code: str = "", error_message: str = "") -> bool:
+    return _classify_phone_failure_type(error_code, error_message) == "hard_invalid"
 
 
 def _is_phone_blacklisted(provider_name: str, phone_number: str) -> Optional[dict]:
@@ -602,6 +659,8 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 verification_attempt_id,
                 success=True,
                 invalid=False,
+                result_status="success",
+                failure_type=None,
                 failure_stage=None,
                 error_code=None,
                 error_message=None,
@@ -642,7 +701,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 country_key=cfg.country_key or None,
                 provider_slot=provider_slot_used,
                 success=False,
-                blacklisted=bool(activation and activation.phone_number),
+                blacklisted=bool(activation and activation.phone_number and _should_blacklist_phone_failure(error_code, last_error)),
                 error_code=error_code,
                 error_message=last_error,
                 activation_cost=activation.activation_cost if activation else None,
