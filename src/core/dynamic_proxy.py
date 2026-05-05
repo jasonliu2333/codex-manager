@@ -49,6 +49,7 @@ def build_account_proxy_url(
     username: str,
     password: str,
     country: str = "",
+    session_suffix: Optional[str] = None,
 ) -> Optional[str]:
     scheme = (scheme or "http").strip().lower()
     if scheme not in {"http", "socks5", "socks5h"}:
@@ -61,7 +62,8 @@ def build_account_proxy_url(
         return None
     proxy_user = username
     if country:
-        proxy_user = f"{username}-country-{country}-session-{int(__import__('time').time() * 1000000)}"
+        session_value = session_suffix or str(int(__import__('time').time() * 1000000))
+        proxy_user = f"{username}-country-{country}-session-{session_value}"
     safe_user = quote(proxy_user, safe="")
     safe_password = quote(password, safe="")
     return f"{scheme}://{safe_user}:{safe_password}@{host}:{int(port)}"
@@ -127,14 +129,9 @@ def _parse_seekproxy_proxy_response(text: str) -> Optional[str]:
     parts = first_line.split(":")
     if len(parts) == 4:
         host, port, username, password = parts
-        return build_account_proxy_url(
-            scheme="http",
-            host=host,
-            port=int(port),
-            username=username,
-            password=password,
-            country="",
-        )
+        safe_user = quote(username, safe="")
+        safe_password = quote(password, safe="")
+        return f"http://{safe_user}:{safe_password}@{host}:{int(port)}"
     return _normalize_proxy_url(first_line, default_scheme="http")
 
 
@@ -440,8 +437,9 @@ def get_proxy_url_for_task() -> Optional[str]:
             if proxy_url:
                 return proxy_url
             logger.warning("账密动态代理配置不完整，回退到静态代理")
-        elif settings.proxy_dynamic_api_url:
-            provider = str(getattr(settings, "proxy_dynamic_provider", "generic") or "generic").strip().lower()
+        else:
+            request_cfg = build_dynamic_api_provider_request(settings)
+            provider = request_cfg["provider"]
             if provider == "haiwaidaili":
                 provider_appid = getattr(settings, "proxy_dynamic_provider_appid", "")
                 provider_appkey = settings.proxy_dynamic_provider_appkey.get_secret_value() if getattr(settings, "proxy_dynamic_provider_appkey", None) else ""
@@ -451,14 +449,13 @@ def get_proxy_url_for_task() -> Optional[str]:
                         logger.warning("动态代理白名单检查失败: %s", msg)
                     else:
                         logger.info("动态代理白名单检查成功: %s", msg)
-            api_key = settings.proxy_dynamic_api_key.get_secret_value() if settings.proxy_dynamic_api_key else ""
             candidates = fetch_dynamic_proxy_candidates(
-                api_url=settings.proxy_dynamic_api_url,
-                api_key=api_key,
-                api_key_header=settings.proxy_dynamic_api_key_header,
-                result_field=settings.proxy_dynamic_result_field,
+                api_url=request_cfg["api_url"],
+                api_key=request_cfg["api_key"],
+                api_key_header=request_cfg["api_key_header"],
+                result_field=request_cfg["result_field"],
                 provider=provider,
-                default_scheme=getattr(settings, "proxy_dynamic_scheme", "http"),
+                default_scheme=request_cfg["default_scheme"],
             )
             proxy_url = select_best_dynamic_proxy(candidates) if candidates else None
             if proxy_url:
@@ -467,3 +464,50 @@ def get_proxy_url_for_task() -> Optional[str]:
 
     # 使用静态代理
     return settings.proxy_url
+
+
+def build_dynamic_api_provider_request(settings) -> dict:
+    provider = str(getattr(settings, "proxy_dynamic_provider", "generic") or "generic").strip().lower()
+    if provider == "seekproxy":
+        secret = getattr(settings, "proxy_dynamic_seekproxy_key", None)
+        seekproxy_key = secret.get_secret_value().strip() if secret else ""
+        return {
+            "provider": "seekproxy",
+            "api_url": build_seekproxy_api_url(
+                trade_no=getattr(settings, "proxy_dynamic_seekproxy_trade_no", ""),
+                key=seekproxy_key,
+                auth_type=getattr(settings, "proxy_dynamic_seekproxy_auth_type", 2),
+                ip_count=getattr(settings, "proxy_dynamic_seekproxy_ip_count", 1),
+                country=getattr(settings, "proxy_dynamic_country", ""),
+                state=getattr(settings, "proxy_dynamic_seekproxy_state", ""),
+                city=getattr(settings, "proxy_dynamic_seekproxy_city", ""),
+                fmt=1,
+                break_type=getattr(settings, "proxy_dynamic_seekproxy_break_type", 1),
+                hold_time=getattr(settings, "proxy_dynamic_seekproxy_time", 5),
+            ),
+            "api_key": "",
+            "api_key_header": "X-API-Key",
+            "result_field": "",
+            "default_scheme": "http",
+        }
+    if provider == "haiwaidaili":
+        secret = getattr(settings, "proxy_dynamic_api_key", None)
+        api_key = secret.get_secret_value().strip() if secret else ""
+        return {
+            "provider": "haiwaidaili",
+            "api_url": getattr(settings, "proxy_dynamic_api_url", ""),
+            "api_key": api_key,
+            "api_key_header": getattr(settings, "proxy_dynamic_api_key_header", "X-API-Key"),
+            "result_field": getattr(settings, "proxy_dynamic_result_field", ""),
+            "default_scheme": getattr(settings, "proxy_dynamic_scheme", "http"),
+        }
+    secret = getattr(settings, "proxy_dynamic_api_key", None)
+    api_key = secret.get_secret_value().strip() if secret else ""
+    return {
+        "provider": "generic",
+        "api_url": getattr(settings, "proxy_dynamic_api_url", ""),
+        "api_key": api_key,
+        "api_key_header": getattr(settings, "proxy_dynamic_api_key_header", "X-API-Key"),
+        "result_field": getattr(settings, "proxy_dynamic_result_field", ""),
+        "default_scheme": getattr(settings, "proxy_dynamic_scheme", "http"),
+    }
