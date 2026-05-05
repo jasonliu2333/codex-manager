@@ -530,7 +530,27 @@ def select_best_dynamic_proxy(
                 ok_white, white_msg = ensure_seekproxy_whitelist_for_error(seekproxy_trade_no, seekproxy_key, detail_http)
                 if white_msg:
                     logger.warning("SeekProxy 白名单补救: %s", white_msg)
-            continue
+                if ok_white:
+                    # SeekProxy 文档提示白名单约 30 秒后生效。这里直接等待并重试同一节点，
+                    # 避免“已加入但本轮仍判定失败”。
+                    wait_seconds = 35
+                    logger.info("SeekProxy 白名单补救已触发，等待 %s 秒后重试当前代理: %s", wait_seconds, proxy_url)
+                    try:
+                        __import__("time").sleep(wait_seconds)
+                    except Exception:
+                        pass
+                    ok_http, detail_http = probe_proxy_http_basic(proxy_url)
+                    if ok_http:
+                        logger.info("SeekProxy 白名单补救后 HTTP 测试通过: %s", proxy_url)
+                    else:
+                        logger.warning("SeekProxy 白名单补救后仍不可用(HTTP): %s | %s", proxy_url, detail_http)
+                        continue
+                else:
+                    continue
+            else:
+                if "whitelist" in str(detail_http).lower():
+                    logger.warning("SeekProxy 返回白名单错误，但当前缺少 trade_no/key，无法自动添加白名单")
+                continue
         ok_https, detail_https = probe_proxy_https_openai(proxy_url)
         if not ok_https:
             logger.warning("动态代理候选不可用(HTTPS): %s | %s", proxy_url, detail_https)
