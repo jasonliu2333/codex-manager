@@ -1892,8 +1892,10 @@ async function handleSaveDynamicProxy(e) {
 }
 
 async function handleTestDynamicProxy() {
+    const mode = document.getElementById('dynamic-proxy-mode').value || 'api';
+    const provider = document.getElementById('dynamic-proxy-provider').value || 'generic';
     const apiUrl = document.getElementById('dynamic-proxy-api-url').value.trim();
-    if (!apiUrl) {
+    if (mode === 'api' && provider !== 'seekproxy' && !apiUrl) {
         toast.warning('请先填写动态代理 API 地址');
         return;
     }
@@ -1902,8 +1904,8 @@ async function handleTestDynamicProxy() {
     btn.textContent = '测试中...';
     try {
         const result = await api.post('/settings/proxy/dynamic/test', {
-            mode: document.getElementById('dynamic-proxy-mode').value || 'api',
-            provider: document.getElementById('dynamic-proxy-provider').value || 'generic',
+            mode,
+            provider,
             api_url: apiUrl,
             api_key: document.getElementById('dynamic-proxy-api-key').value || null,
             api_key_header: document.getElementById('dynamic-proxy-api-key-header').value.trim() || 'X-API-Key',

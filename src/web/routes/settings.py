@@ -571,9 +571,11 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
     """测试动态代理 API"""
     from ...core.dynamic_proxy import (
         fetch_dynamic_proxy,
+        fetch_dynamic_proxy_candidates,
         build_account_proxy_url,
         ensure_haiwaidaili_whitelist,
         build_seekproxy_api_url,
+        select_best_dynamic_proxy,
     )
 
     mode = str(request.mode or "api").strip().lower() or "api"
@@ -635,8 +637,7 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
         api_key = request.api_key or ""
         if not api_key:
             api_key = _get_saved_dynamic_proxy_api_key()
-
-        proxy_url = fetch_dynamic_proxy(
+        candidates = fetch_dynamic_proxy_candidates(
             api_url=api_url,
             api_key=api_key,
             api_key_header=request.api_key_header,
@@ -644,6 +645,7 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
             provider=provider,
             default_scheme=request.scheme,
         )
+        proxy_url = select_best_dynamic_proxy(candidates) if candidates else None
 
     if not proxy_url:
         return {"success": False, "message": "动态代理返回为空或请求失败"}
@@ -657,6 +659,7 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
         return {
             "success": True,
             "proxy_url": proxy_url,
+            "candidate_count": len(candidates) if 'candidates' in locals() else 1,
             "ip": basic.get("ip", ""),
             "response_time": basic.get("response_time"),
             "https_openai_ok": bool(https_test.get("success")),

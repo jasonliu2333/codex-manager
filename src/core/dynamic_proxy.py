@@ -153,6 +153,32 @@ def parse_dynamic_proxy_response(
     return _parse_generic_proxy_response(text, result_field=result_field, default_scheme=default_scheme)
 
 
+def parse_dynamic_proxy_candidates(
+    provider: str,
+    text: str,
+    *,
+    result_field: str = "",
+    default_scheme: str = "http",
+) -> list[str]:
+    provider = str(provider or "generic").strip().lower()
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    candidates: list[str] = []
+    if provider == "seekproxy":
+        for line in lines:
+            proxy = _parse_seekproxy_proxy_response(line)
+            if proxy:
+                candidates.append(proxy)
+        return candidates
+    if provider == "haiwaidaili":
+        for line in lines:
+            proxy = _parse_haiwaidaili_proxy_response(line)
+            if proxy:
+                candidates.append(proxy)
+        return candidates
+    proxy = _parse_generic_proxy_response(text, result_field=result_field, default_scheme=default_scheme)
+    return [proxy] if proxy else []
+
+
 def fetch_dynamic_proxy(
     api_url: str,
     api_key: str = "",
@@ -222,6 +248,55 @@ def fetch_dynamic_proxy(
     return None
 
 
+def fetch_dynamic_proxy_candidates(
+    api_url: str,
+    api_key: str = "",
+    api_key_header: str = "X-API-Key",
+    result_field: str = "",
+    retries: int = 3,
+    *,
+    provider: str = "generic",
+    default_scheme: str = "http",
+) -> list[str]:
+    from curl_cffi import requests as cffi_requests
+
+    headers = {}
+    if api_key:
+        headers[api_key_header] = api_key
+
+    last_error = None
+    max_attempts = max(1, int(retries or 1))
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = cffi_requests.get(
+                api_url,
+                headers=headers,
+                timeout=10,
+                impersonate="chrome110"
+            )
+            if response.status_code != 200:
+                last_error = f"动态代理 API 返回错误状态码: {response.status_code}"
+                logger.warning(f"{last_error} (第 {attempt}/{max_attempts} 次)")
+                continue
+            candidates = parse_dynamic_proxy_candidates(
+                provider,
+                response.text,
+                result_field=result_field,
+                default_scheme=default_scheme,
+            )
+            if candidates:
+                logger.info("动态代理获取候选成功，共 %s 个节点", len(candidates))
+                return candidates
+            last_error = "动态代理 API 未解析出可用候选"
+            logger.warning(f"{last_error} (第 {attempt}/{max_attempts} 次)")
+        except Exception as e:
+            last_error = str(e)
+            logger.error(f"获取动态代理候选失败(第 {attempt}/{max_attempts} 次): {e}")
+            continue
+    logger.error(f"获取动态代理候选最终失败: {last_error}")
+    return []
+
+
 def fetch_public_ip() -> Optional[str]:
     from curl_cffi import requests as cffi_requests
     for url in ("http://ip234.in/ip.json", "http://api.ipify.org?format=json"):
@@ -240,6 +315,57 @@ def fetch_public_ip() -> Optional[str]:
                     return text
         except Exception:
             continue
+    return None
+
+
+def _build_proxy_test_mapping(proxy_url: str, *, include_https: bool) -> dict:
+    proxies = {"http": proxy_url}
+    if include_https:
+        proxies["https"] = proxy_url
+    return proxies
+
+
+def probe_proxy_http_basic(proxy_url: str, timeout: int = 8) -> tuple[bool, str]:
+    from curl_cffi import requests as cffi_requests
+    try:
+        resp = cffi_requests.get(
+            "http://ip234.in/ip.json",
+            proxies=_build_proxy_test_mapping(proxy_url, include_https=True),
+            timeout=timeout,
+            impersonate="chrome110",
+        )
+        return resp.status_code == 200, (resp.text or "")[:200]
+    except Exception as exc:
+        return False, str(exc)
+
+
+def probe_proxy_https_openai(proxy_url: str, timeout: int = 8) -> tuple[bool, str]:
+    from curl_cffi import requests as cffi_requests
+    try:
+        resp = cffi_requests.get(
+            "https://auth.openai.com/",
+            proxies=_build_proxy_test_mapping(proxy_url, include_https=True),
+            timeout=timeout,
+            impersonate="chrome110",
+            allow_redirects=False,
+        )
+        return True, str(resp.status_code)
+    except Exception as exc:
+        return False, str(exc)
+
+
+def select_best_dynamic_proxy(candidates: list[str]) -> Optional[str]:
+    for proxy_url in candidates:
+        ok_http, detail_http = probe_proxy_http_basic(proxy_url)
+        if not ok_http:
+            logger.warning("动态代理候选不可用(HTTP): %s | %s", proxy_url, detail_http)
+            continue
+        ok_https, detail_https = probe_proxy_https_openai(proxy_url)
+        if not ok_https:
+            logger.warning("动态代理候选不可用(HTTPS): %s | %s", proxy_url, detail_https)
+            continue
+        logger.info("动态代理候选命中可用节点: %s", proxy_url)
+        return proxy_url
     return None
 
 
@@ -326,7 +452,7 @@ def get_proxy_url_for_task() -> Optional[str]:
                     else:
                         logger.info("动态代理白名单检查成功: %s", msg)
             api_key = settings.proxy_dynamic_api_key.get_secret_value() if settings.proxy_dynamic_api_key else ""
-            proxy_url = fetch_dynamic_proxy(
+            candidates = fetch_dynamic_proxy_candidates(
                 api_url=settings.proxy_dynamic_api_url,
                 api_key=api_key,
                 api_key_header=settings.proxy_dynamic_api_key_header,
@@ -334,6 +460,7 @@ def get_proxy_url_for_task() -> Optional[str]:
                 provider=provider,
                 default_scheme=getattr(settings, "proxy_dynamic_scheme", "http"),
             )
+            proxy_url = select_best_dynamic_proxy(candidates) if candidates else None
             if proxy_url:
                 return proxy_url
             logger.warning("动态代理获取失败，回退到静态代理")
