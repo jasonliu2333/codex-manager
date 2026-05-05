@@ -239,7 +239,10 @@ def _load_proxy_settings_from_db() -> dict:
         "port": int(getattr(settings, "proxy_port", 7890) or 7890),
         "username": getattr(settings, "proxy_username", None),
         "has_password": bool(getattr(settings, "proxy_password", None)),
+        "preference_mode": str(getattr(settings, "proxy_preference_mode", "auto") or "auto"),
+        "preferred_fixed_id": int(getattr(settings, "proxy_preferred_fixed_id", 0) or 0),
         "dynamic_enabled": bool(getattr(settings, "proxy_dynamic_enabled", False)),
+        "dynamic_profiles": dict(getattr(settings, "proxy_dynamic_profiles", {}) or {}),
         "dynamic_mode": str(getattr(settings, "proxy_dynamic_mode", "api") or "api"),
         "dynamic_provider": str(getattr(settings, "proxy_dynamic_provider", "generic") or "generic"),
         "dynamic_api_url": str(getattr(settings, "proxy_dynamic_api_url", "") or ""),
@@ -255,6 +258,9 @@ def _load_proxy_settings_from_db() -> dict:
         "dynamic_seekproxy_city": str(getattr(settings, "proxy_dynamic_seekproxy_city", "") or ""),
         "dynamic_seekproxy_break_type": int(getattr(settings, "proxy_dynamic_seekproxy_break_type", 1) or 1),
         "dynamic_seekproxy_time": int(getattr(settings, "proxy_dynamic_seekproxy_time", 5) or 5),
+        "dynamic_seekproxy_protocol": int(getattr(settings, "proxy_dynamic_seekproxy_protocol", 0) or 0),
+        "dynamic_seekproxy_pattern": int(getattr(settings, "proxy_dynamic_seekproxy_pattern", 0) or 0),
+        "dynamic_seekproxy_valid_code": int(getattr(settings, "proxy_dynamic_seekproxy_valid_code", 0) or 0),
         "dynamic_scheme": str(getattr(settings, "proxy_dynamic_scheme", "http") or "http"),
         "dynamic_host": str(getattr(settings, "proxy_dynamic_host", "proxy.haiwai-ip.com") or "proxy.haiwai-ip.com"),
         "dynamic_port": int(getattr(settings, "proxy_dynamic_port", 1456) or 1456),
@@ -271,7 +277,10 @@ def _load_proxy_settings_from_db() -> dict:
         "host": ("proxy.host", lambda v: str(v).strip() or defaults["host"]),
         "port": ("proxy.port", lambda v: _parse_int(v, defaults["port"])),
         "username": ("proxy.username", lambda v: str(v).strip() or None),
+        "preference_mode": ("proxy.preference_mode", lambda v: str(v).strip() or defaults["preference_mode"]),
+        "preferred_fixed_id": ("proxy.preferred_fixed_id", lambda v: _parse_int(v, defaults["preferred_fixed_id"])),
         "dynamic_enabled": ("proxy.dynamic_enabled", lambda v: _parse_bool(v, defaults["dynamic_enabled"])),
+        "dynamic_profiles": ("proxy.dynamic_profiles", lambda v: v if isinstance(v, dict) else defaults["dynamic_profiles"]),
         "dynamic_mode": ("proxy.dynamic_mode", lambda v: str(v).strip() or defaults["dynamic_mode"]),
         "dynamic_provider": ("proxy.dynamic_provider", lambda v: str(v).strip() or defaults["dynamic_provider"]),
         "dynamic_api_url": ("proxy.dynamic_api_url", lambda v: str(v).strip()),
@@ -285,6 +294,9 @@ def _load_proxy_settings_from_db() -> dict:
         "dynamic_seekproxy_city": ("proxy.dynamic_seekproxy_city", lambda v: str(v).strip()),
         "dynamic_seekproxy_break_type": ("proxy.dynamic_seekproxy_break_type", lambda v: _parse_int(v, defaults["dynamic_seekproxy_break_type"])),
         "dynamic_seekproxy_time": ("proxy.dynamic_seekproxy_time", lambda v: _parse_int(v, defaults["dynamic_seekproxy_time"])),
+        "dynamic_seekproxy_protocol": ("proxy.dynamic_seekproxy_protocol", lambda v: _parse_int(v, defaults["dynamic_seekproxy_protocol"])),
+        "dynamic_seekproxy_pattern": ("proxy.dynamic_seekproxy_pattern", lambda v: _parse_int(v, defaults["dynamic_seekproxy_pattern"])),
+        "dynamic_seekproxy_valid_code": ("proxy.dynamic_seekproxy_valid_code", lambda v: _parse_int(v, defaults["dynamic_seekproxy_valid_code"])),
         "dynamic_scheme": ("proxy.dynamic_scheme", lambda v: str(v).strip() or defaults["dynamic_scheme"]),
         "dynamic_host": ("proxy.dynamic_host", lambda v: str(v).strip() or defaults["dynamic_host"]),
         "dynamic_port": ("proxy.dynamic_port", lambda v: _parse_int(v, defaults["dynamic_port"])),
@@ -310,6 +322,58 @@ def _load_proxy_settings_from_db() -> dict:
     except Exception as exc:
         logger.warning("直接读取代理设置失败，回退到缓存配置: %s", exc)
     return defaults
+
+
+def _dynamic_profile_key(provider: str, mode: str) -> str:
+    return f"{str(provider or 'generic').strip().lower()}::{str(mode or 'api').strip().lower()}"
+
+
+def _build_dynamic_profile_payload(request: "DynamicProxySettings") -> dict:
+    mode = str(request.mode or "api").strip().lower() or "api"
+    provider = str(request.provider or "generic").strip().lower() or "generic"
+    if mode == "account":
+        return {
+            "scheme": str(request.scheme or "http").strip() or "http",
+            "host": request.host.strip(),
+            "port": request.port,
+            "username": request.username.strip(),
+            "password": request.password if request.password is not None else None,
+            "country": request.country.strip() or "us",
+        }
+    if provider == "seekproxy":
+        return {
+            "trade_no": request.seekproxy_trade_no.strip(),
+            "key": request.seekproxy_key if request.seekproxy_key is not None else None,
+            "auth_type": request.seekproxy_auth_type,
+            "ip_count": request.seekproxy_ip_count,
+            "state": request.seekproxy_state.strip(),
+            "city": request.seekproxy_city.strip(),
+            "break_type": request.seekproxy_break_type,
+            "time": request.seekproxy_time,
+            "protocol": request.seekproxy_protocol,
+            "pattern": request.seekproxy_pattern,
+            "valid_code": request.seekproxy_valid_code,
+            "country": request.country.strip() or "US",
+        }
+    if provider == "haiwaidaili":
+        return {
+            "api_url": request.api_url,
+            "api_key": request.api_key if request.api_key is not None else None,
+            "api_key_header": request.api_key_header,
+            "result_field": request.result_field,
+            "provider_appid": request.provider_appid.strip(),
+            "provider_appkey": request.provider_appkey if request.provider_appkey is not None else None,
+            "scheme": str(request.scheme or "http").strip() or "http",
+            "country": request.country.strip() or "us",
+        }
+    return {
+        "api_url": request.api_url,
+        "api_key": request.api_key if request.api_key is not None else None,
+        "api_key_header": request.api_key_header,
+        "result_field": request.result_field,
+        "scheme": str(request.scheme or "http").strip() or "http",
+        "country": request.country.strip() or "us",
+    }
 
 
 def _build_proxy_runtime_diagnostics() -> dict:
@@ -470,6 +534,7 @@ async def get_dynamic_proxy_settings():
     proxy_settings = _load_proxy_settings_from_db()
     return {
         "enabled": proxy_settings["dynamic_enabled"],
+        "profiles": proxy_settings["dynamic_profiles"],
         "mode": proxy_settings["dynamic_mode"],
         "provider": proxy_settings["dynamic_provider"],
         "api_url": proxy_settings["dynamic_api_url"],
@@ -485,6 +550,9 @@ async def get_dynamic_proxy_settings():
         "seekproxy_city": proxy_settings["dynamic_seekproxy_city"],
         "seekproxy_break_type": proxy_settings["dynamic_seekproxy_break_type"],
         "seekproxy_time": proxy_settings["dynamic_seekproxy_time"],
+        "seekproxy_protocol": proxy_settings["dynamic_seekproxy_protocol"],
+        "seekproxy_pattern": proxy_settings["dynamic_seekproxy_pattern"],
+        "seekproxy_valid_code": proxy_settings["dynamic_seekproxy_valid_code"],
         "scheme": proxy_settings["dynamic_scheme"],
         "host": proxy_settings["dynamic_host"],
         "port": proxy_settings["dynamic_port"],
@@ -517,6 +585,9 @@ class DynamicProxySettings(BaseModel):
     seekproxy_city: str = ""
     seekproxy_break_type: int = 1
     seekproxy_time: int = 5
+    seekproxy_protocol: int = 0
+    seekproxy_pattern: int = 0
+    seekproxy_valid_code: int = 0
     scheme: str = "http"
     host: str = "proxy.haiwai-ip.com"
     port: int = 1456
@@ -527,43 +598,168 @@ class DynamicProxySettings(BaseModel):
     validate_use_proxy: bool = False
 
 
+class ProxyPreferenceSettings(BaseModel):
+    """任务代理来源策略"""
+    preference_mode: str = "auto"
+    preferred_fixed_id: int = 0
+
+
 @router.post("/proxy/dynamic")
 async def update_dynamic_proxy_settings(request: DynamicProxySettings):
     """更新动态代理设置"""
+    mode = str(request.mode or "api").strip().lower() or "api"
+    provider = str(request.provider or "generic").strip().lower() or "generic"
+    proxy_settings = _load_proxy_settings_from_db()
+    profiles = dict(proxy_settings.get("dynamic_profiles", {}) or {})
+    profile_key = _dynamic_profile_key(provider, mode)
+    current_profile = profiles.get(profile_key, {})
+    new_profile = _build_dynamic_profile_payload(request)
+    merged_profile = dict(current_profile)
+    for key, value in new_profile.items():
+        if value is not None:
+            merged_profile[key] = value
+    profiles[profile_key] = merged_profile
     update_dict = {
         "proxy_dynamic_enabled": request.enabled,
-        "proxy_dynamic_mode": str(request.mode or "api").strip() or "api",
-        "proxy_dynamic_provider": str(request.provider or "generic").strip() or "generic",
-        "proxy_dynamic_api_url": request.api_url,
-        "proxy_dynamic_api_key_header": request.api_key_header,
-        "proxy_dynamic_result_field": request.result_field,
-        "proxy_dynamic_provider_appid": request.provider_appid.strip(),
-        "proxy_dynamic_seekproxy_trade_no": request.seekproxy_trade_no.strip(),
-        "proxy_dynamic_seekproxy_auth_type": request.seekproxy_auth_type,
-        "proxy_dynamic_seekproxy_ip_count": request.seekproxy_ip_count,
-        "proxy_dynamic_seekproxy_state": request.seekproxy_state.strip(),
-        "proxy_dynamic_seekproxy_city": request.seekproxy_city.strip(),
-        "proxy_dynamic_seekproxy_break_type": request.seekproxy_break_type,
-        "proxy_dynamic_seekproxy_time": request.seekproxy_time,
-        "proxy_dynamic_scheme": str(request.scheme or "http").strip() or "http",
-        "proxy_dynamic_host": request.host.strip(),
-        "proxy_dynamic_port": request.port,
-        "proxy_dynamic_username": request.username.strip(),
-        "proxy_dynamic_country": request.country.strip() or "us",
+        "proxy_dynamic_profiles": profiles,
+        "proxy_dynamic_mode": mode,
+        "proxy_dynamic_provider": provider,
         "proxy_refresh_use_proxy": request.refresh_use_proxy,
         "proxy_validate_use_proxy": request.validate_use_proxy,
     }
-    if request.api_key is not None:
-        update_dict["proxy_dynamic_api_key"] = request.api_key
-    if request.provider_appkey is not None:
-        update_dict["proxy_dynamic_provider_appkey"] = request.provider_appkey
-    if request.seekproxy_key is not None:
-        update_dict["proxy_dynamic_seekproxy_key"] = request.seekproxy_key
-    if request.password is not None:
-        update_dict["proxy_dynamic_password"] = request.password
+
+    # 同步当前选中的组合到兼容字段，供旧逻辑读取
+    if mode == "account":
+        update_dict.update({
+            "proxy_dynamic_api_url": "",
+            "proxy_dynamic_api_key_header": "X-API-Key",
+            "proxy_dynamic_result_field": "",
+            "proxy_dynamic_api_key": "",
+            "proxy_dynamic_provider_appid": "",
+            "proxy_dynamic_provider_appkey": "",
+            "proxy_dynamic_seekproxy_trade_no": "",
+            "proxy_dynamic_seekproxy_key": "",
+            "proxy_dynamic_seekproxy_auth_type": 2,
+            "proxy_dynamic_seekproxy_ip_count": 1,
+            "proxy_dynamic_seekproxy_state": "",
+            "proxy_dynamic_seekproxy_city": "",
+            "proxy_dynamic_seekproxy_break_type": 1,
+            "proxy_dynamic_seekproxy_time": 5,
+            "proxy_dynamic_scheme": merged_profile.get("scheme", "http"),
+            "proxy_dynamic_host": merged_profile.get("host", "proxy.haiwai-ip.com"),
+            "proxy_dynamic_port": merged_profile.get("port", 1456),
+            "proxy_dynamic_username": merged_profile.get("username", ""),
+            "proxy_dynamic_password": merged_profile.get("password", ""),
+            "proxy_dynamic_country": merged_profile.get("country", "us"),
+        })
+    elif provider == "seekproxy":
+        update_dict.update({
+            "proxy_dynamic_api_url": "",
+            "proxy_dynamic_api_key_header": "X-API-Key",
+            "proxy_dynamic_result_field": "",
+            "proxy_dynamic_api_key": "",
+            "proxy_dynamic_provider_appid": "",
+            "proxy_dynamic_provider_appkey": "",
+            "proxy_dynamic_seekproxy_trade_no": merged_profile.get("trade_no", ""),
+            "proxy_dynamic_seekproxy_key": merged_profile.get("key", ""),
+            "proxy_dynamic_seekproxy_auth_type": merged_profile.get("auth_type", 2),
+            "proxy_dynamic_seekproxy_ip_count": merged_profile.get("ip_count", 1),
+            "proxy_dynamic_seekproxy_state": merged_profile.get("state", ""),
+            "proxy_dynamic_seekproxy_city": merged_profile.get("city", ""),
+            "proxy_dynamic_seekproxy_break_type": merged_profile.get("break_type", 1),
+            "proxy_dynamic_seekproxy_time": merged_profile.get("time", 5),
+            "proxy_dynamic_seekproxy_protocol": merged_profile.get("protocol", 0),
+            "proxy_dynamic_seekproxy_pattern": merged_profile.get("pattern", 0),
+            "proxy_dynamic_seekproxy_valid_code": merged_profile.get("valid_code", 0),
+            "proxy_dynamic_scheme": "http",
+            "proxy_dynamic_host": "",
+            "proxy_dynamic_port": 1456,
+            "proxy_dynamic_username": "",
+            "proxy_dynamic_password": "",
+            "proxy_dynamic_country": merged_profile.get("country", "US"),
+        })
+    elif provider == "haiwaidaili":
+        update_dict.update({
+            "proxy_dynamic_api_url": merged_profile.get("api_url", ""),
+            "proxy_dynamic_api_key_header": merged_profile.get("api_key_header", "X-API-Key"),
+            "proxy_dynamic_result_field": merged_profile.get("result_field", ""),
+            "proxy_dynamic_api_key": merged_profile.get("api_key", ""),
+            "proxy_dynamic_provider_appid": merged_profile.get("provider_appid", ""),
+            "proxy_dynamic_provider_appkey": merged_profile.get("provider_appkey", ""),
+            "proxy_dynamic_seekproxy_trade_no": "",
+            "proxy_dynamic_seekproxy_key": "",
+            "proxy_dynamic_seekproxy_auth_type": 2,
+            "proxy_dynamic_seekproxy_ip_count": 1,
+            "proxy_dynamic_seekproxy_state": "",
+            "proxy_dynamic_seekproxy_city": "",
+            "proxy_dynamic_seekproxy_break_type": 1,
+            "proxy_dynamic_seekproxy_time": 5,
+            "proxy_dynamic_scheme": merged_profile.get("scheme", "http"),
+            "proxy_dynamic_host": "",
+            "proxy_dynamic_port": 1456,
+            "proxy_dynamic_username": "",
+            "proxy_dynamic_password": "",
+            "proxy_dynamic_country": merged_profile.get("country", "us"),
+        })
+    else:
+        update_dict.update({
+            "proxy_dynamic_api_url": merged_profile.get("api_url", ""),
+            "proxy_dynamic_api_key_header": merged_profile.get("api_key_header", "X-API-Key"),
+            "proxy_dynamic_result_field": merged_profile.get("result_field", ""),
+            "proxy_dynamic_api_key": merged_profile.get("api_key", ""),
+            "proxy_dynamic_provider_appid": "",
+            "proxy_dynamic_provider_appkey": "",
+            "proxy_dynamic_seekproxy_trade_no": "",
+            "proxy_dynamic_seekproxy_key": "",
+            "proxy_dynamic_seekproxy_auth_type": 2,
+            "proxy_dynamic_seekproxy_ip_count": 1,
+            "proxy_dynamic_seekproxy_state": "",
+            "proxy_dynamic_seekproxy_city": "",
+            "proxy_dynamic_seekproxy_break_type": 1,
+            "proxy_dynamic_seekproxy_time": 5,
+            "proxy_dynamic_scheme": merged_profile.get("scheme", "http"),
+            "proxy_dynamic_host": "",
+            "proxy_dynamic_port": 1456,
+            "proxy_dynamic_username": "",
+            "proxy_dynamic_password": "",
+            "proxy_dynamic_country": merged_profile.get("country", "us"),
+        })
 
     update_settings(**update_dict)
     return {"success": True, "message": "动态代理设置已更新"}
+
+
+@router.post("/proxy/preference")
+async def update_proxy_preference_settings(request: ProxyPreferenceSettings):
+    """更新任务代理来源策略"""
+    preference_mode = str(request.preference_mode or "auto").strip().lower() or "auto"
+    allowed_modes = {"auto", "dynamic", "fixed", "pool", "direct"}
+    if preference_mode not in allowed_modes:
+        raise HTTPException(status_code=400, detail="代理来源策略无效")
+
+    preferred_fixed_id = int(request.preferred_fixed_id or 0)
+    selected_proxy = None
+    if preference_mode == "fixed":
+        if preferred_fixed_id <= 0:
+            raise HTTPException(status_code=400, detail="固定代理模式必须选择一个已启用的固定代理")
+        with get_db() as db:
+            selected_proxy = crud.get_proxy_by_id(db, preferred_fixed_id)
+            if not selected_proxy:
+                raise HTTPException(status_code=404, detail="指定的固定代理不存在")
+            if not selected_proxy.enabled:
+                raise HTTPException(status_code=400, detail="指定的固定代理未启用，请先启用后再保存")
+
+    update_settings(
+        proxy_preference_mode=preference_mode,
+        proxy_preferred_fixed_id=preferred_fixed_id if preference_mode == "fixed" else 0,
+    )
+    return {
+        "success": True,
+        "message": "任务代理策略已更新",
+        "preference_mode": preference_mode,
+        "preferred_fixed_id": preferred_fixed_id if preference_mode == "fixed" else 0,
+        "preferred_fixed_name": getattr(selected_proxy, "name", None),
+    }
 
 
 @router.post("/proxy/dynamic/test")
@@ -616,6 +812,9 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
                 fmt=1,
                 break_type=request.seekproxy_break_type,
                 hold_time=request.seekproxy_time,
+                protocol=request.seekproxy_protocol,
+                pattern=request.seekproxy_pattern,
+                valid_code=request.seekproxy_valid_code,
             )
         elif provider != "seekproxy" and not request.api_url:
             raise HTTPException(status_code=400, detail="请填写动态代理 API 地址")
