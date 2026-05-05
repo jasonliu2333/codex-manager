@@ -439,6 +439,12 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.PROXY,
         description="是否启用动态代理"
     ),
+    "proxy_dynamic_profiles": SettingDefinition(
+        db_key="proxy.dynamic_profiles",
+        default_value={},
+        category=SettingCategory.PROXY,
+        description="动态代理按平台/模式分组的配置集合"
+    ),
     "proxy_dynamic_mode": SettingDefinition(
         db_key="proxy.dynamic_mode",
         default_value="api",
@@ -532,6 +538,24 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.PROXY,
         description="SeekProxy break_type"
     ),
+    "proxy_dynamic_seekproxy_protocol": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_protocol",
+        default_value=0,
+        category=SettingCategory.PROXY,
+        description="SeekProxy protocol（0=http,2=socks5，仅 auth_type=1 生效）"
+    ),
+    "proxy_dynamic_seekproxy_pattern": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_pattern",
+        default_value=0,
+        category=SettingCategory.PROXY,
+        description="SeekProxy pattern（返回格式，仅 auth_type=1 生效）"
+    ),
+    "proxy_dynamic_seekproxy_valid_code": SettingDefinition(
+        db_key="proxy.dynamic_seekproxy_valid_code",
+        default_value=0,
+        category=SettingCategory.PROXY,
+        description="SeekProxy valid_code（时效编码，仅 auth_type=1 生效）"
+    ),
     "proxy_dynamic_seekproxy_time": SettingDefinition(
         db_key="proxy.dynamic_seekproxy_time",
         default_value=5,
@@ -586,6 +610,24 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         default_value=False,
         category=SettingCategory.PROXY,
         description="验证 Token 时是否使用代理"
+    ),
+    "proxy_preference_mode": SettingDefinition(
+        db_key="proxy.preference_mode",
+        default_value="auto",
+        category=SettingCategory.PROXY,
+        description="任务代理来源策略（auto/dynamic/fixed/pool/direct）"
+    ),
+    "proxy_preferred_fixed_id": SettingDefinition(
+        db_key="proxy.preferred_fixed_id",
+        default_value=0,
+        category=SettingCategory.PROXY,
+        description="指定固定代理 ID（当策略为 fixed 时使用）"
+    ),
+    "proxy_connect_retry_count": SettingDefinition(
+        db_key="proxy.connect_retry_count",
+        default_value=3,
+        category=SettingCategory.PROXY,
+        description="任务代理不可达时的重试次数"
     ),
 
     # 注册配置
@@ -772,6 +814,7 @@ SETTING_TYPES: Dict[str, Type] = {
     "proxy_enabled": bool,
     "proxy_port": int,
     "proxy_dynamic_enabled": bool,
+    "proxy_dynamic_profiles": dict,
     "proxy_dynamic_mode": str,
     "proxy_dynamic_provider": str,
     "proxy_refresh_use_proxy": bool,
@@ -783,6 +826,12 @@ SETTING_TYPES: Dict[str, Type] = {
     "proxy_dynamic_seekproxy_ip_count": int,
     "proxy_dynamic_seekproxy_break_type": int,
     "proxy_dynamic_seekproxy_time": int,
+    "proxy_dynamic_seekproxy_protocol": int,
+    "proxy_dynamic_seekproxy_pattern": int,
+    "proxy_dynamic_seekproxy_valid_code": int,
+    "proxy_preference_mode": str,
+    "proxy_preferred_fixed_id": int,
+    "proxy_connect_retry_count": int,
     "sms_provider": str,
     "sms_operator": str,
     "sms_provider_ids": str,
@@ -827,6 +876,7 @@ SETTING_TYPES: Dict[str, Type] = {
 SECRET_FIELDS = {name for name, defn in SETTING_DEFINITIONS.items() if defn.is_secret}
 DYNAMIC_PROXY_KEYS = {
     "proxy_dynamic_enabled",
+    "proxy_dynamic_profiles",
     "proxy_dynamic_mode",
     "proxy_dynamic_provider",
     "proxy_dynamic_api_url",
@@ -843,6 +893,9 @@ DYNAMIC_PROXY_KEYS = {
     "proxy_dynamic_seekproxy_city",
     "proxy_dynamic_seekproxy_break_type",
     "proxy_dynamic_seekproxy_time",
+    "proxy_dynamic_seekproxy_protocol",
+    "proxy_dynamic_seekproxy_pattern",
+    "proxy_dynamic_seekproxy_valid_code",
     "proxy_dynamic_scheme",
     "proxy_dynamic_host",
     "proxy_dynamic_port",
@@ -1206,6 +1259,7 @@ class Settings(BaseModel):
     proxy_username: Optional[str] = None
     proxy_password: Optional[SecretStr] = None
     proxy_dynamic_enabled: bool = False
+    proxy_dynamic_profiles: Dict[str, Any] = {}
     proxy_dynamic_mode: str = "api"
     proxy_dynamic_provider: str = "generic"
     proxy_dynamic_api_url: str = ""
@@ -1224,12 +1278,18 @@ class Settings(BaseModel):
     proxy_dynamic_seekproxy_city: str = ""
     proxy_dynamic_seekproxy_break_type: int = 1
     proxy_dynamic_seekproxy_time: int = 5
+    proxy_dynamic_seekproxy_protocol: int = 0
+    proxy_dynamic_seekproxy_pattern: int = 0
+    proxy_dynamic_seekproxy_valid_code: int = 0
     proxy_dynamic_scheme: str = "http"
     proxy_dynamic_host: str = "proxy.haiwai-ip.com"
     proxy_dynamic_port: int = 1456
     proxy_dynamic_username: str = ""
     proxy_dynamic_password: Optional[SecretStr] = None
     proxy_dynamic_country: str = "us"
+    proxy_preference_mode: str = "auto"
+    proxy_preferred_fixed_id: int = 0
+    proxy_connect_retry_count: int = 3
 
     @property
     def proxy_url(self) -> Optional[str]:

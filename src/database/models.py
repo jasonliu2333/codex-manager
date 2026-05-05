@@ -5,7 +5,7 @@ SQLAlchemy ORM 模型定义
 from datetime import datetime
 from typing import Optional, Dict, Any
 import json
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import relationship
@@ -31,6 +31,12 @@ class JSONEncodedDict(TypeDecorator):
 class Account(Base):
     """已注册账号表"""
     __tablename__ = 'accounts'
+    __table_args__ = (
+        Index("ix_account_status", "status"),
+        Index("ix_account_email_service", "email_service"),
+        Index("ix_account_created_at", "created_at"),
+        Index("ix_account_status_created", "status", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     email = Column(String(255), nullable=False, unique=True, index=True)
@@ -50,6 +56,10 @@ class Account(Base):
     expires_at = Column(DateTime)  # Token 过期时间
     status = Column(String(20), default='active')  # 'active', 'expired', 'banned', 'failed'
     extra_data = Column(JSONEncodedDict)  # 额外信息存储
+    oauth_recovery_required = Column(Boolean, nullable=True, index=True)
+    openai_auth_state = Column(String(32), nullable=True, index=True)
+    token_validation_state = Column(String(64), nullable=True, index=True)
+    openai_account_state = Column(String(64), nullable=True, index=True)
     cpa_uploaded = Column(Boolean, default=False)  # 是否已上传到 CPA
     cpa_uploaded_at = Column(DateTime)  # 上传时间
     source = Column(String(20), default='register')  # 'register' 或 'login'，区分账号来源

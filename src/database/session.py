@@ -4,7 +4,8 @@
 
 from contextlib import contextmanager
 from typing import Generator
-from sqlalchemy import create_engine, text
+import json
+from sqlalchemy import create_engine, text, event
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
 import os
@@ -49,6 +50,17 @@ class DatabaseSessionManager:
             echo=False,  # 设置为 True 可以查看所有 SQL 语句
             pool_pre_ping=True  # 连接池预检查
         )
+
+        if self.database_url.startswith("sqlite"):
+            @event.listens_for(self.engine, "connect")
+            def _set_sqlite_pragma(dbapi_conn, _connection_record):
+                cursor = dbapi_conn.cursor()
+                try:
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=NORMAL")
+                    cursor.execute("PRAGMA cache_size=-64000")
+                finally:
+                    cursor.close()
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
     def get_db(self) -> Generator[Session, None, None]:
@@ -110,8 +122,22 @@ class DatabaseSessionManager:
             ("accounts", "subscription_type", "VARCHAR(20)"),
             ("accounts", "subscription_at", "DATETIME"),
             ("accounts", "cookies", "TEXT"),
+            ("accounts", "oauth_recovery_required", "BOOLEAN"),
+            ("accounts", "openai_auth_state", "VARCHAR(32)"),
+            ("accounts", "token_validation_state", "VARCHAR(64)"),
+            ("accounts", "openai_account_state", "VARCHAR(64)"),
             ("proxies", "is_default", "BOOLEAN DEFAULT 0"),
             ("cpa_services", "include_proxy_url", "BOOLEAN DEFAULT 0"),
+        ]
+        index_migrations = [
+            ("ix_account_status", "CREATE INDEX IF NOT EXISTS ix_account_status ON accounts(status)"),
+            ("ix_account_email_service", "CREATE INDEX IF NOT EXISTS ix_account_email_service ON accounts(email_service)"),
+            ("ix_account_created_at", "CREATE INDEX IF NOT EXISTS ix_account_created_at ON accounts(created_at)"),
+            ("ix_account_status_created", "CREATE INDEX IF NOT EXISTS ix_account_status_created ON accounts(status, created_at)"),
+            ("ix_accounts_oauth_recovery_required", "CREATE INDEX IF NOT EXISTS ix_accounts_oauth_recovery_required ON accounts(oauth_recovery_required)"),
+            ("ix_accounts_openai_auth_state", "CREATE INDEX IF NOT EXISTS ix_accounts_openai_auth_state ON accounts(openai_auth_state)"),
+            ("ix_accounts_token_validation_state", "CREATE INDEX IF NOT EXISTS ix_accounts_token_validation_state ON accounts(token_validation_state)"),
+            ("ix_accounts_openai_account_state", "CREATE INDEX IF NOT EXISTS ix_accounts_openai_account_state ON accounts(openai_account_state)"),
         ]
 
         # 确保新表存在（create_tables 已处理，此处兜底）
@@ -142,6 +168,54 @@ class DatabaseSessionManager:
                         logger.info(f"成功添加列 {table_name}.{column_name}")
                 except Exception as e:
                     logger.warning(f"迁移列 {table_name}.{column_name} 时出错: {e}")
+
+            for index_name, sql in index_migrations:
+                try:
+                    conn.execute(text(sql))
+                    conn.commit()
+                    logger.info(f"已确保索引存在: {index_name}")
+                except Exception as e:
+                    logger.warning(f"创建索引 {index_name} 时出错: {e}")
+
+            # 将高频 extra_data 状态回填到独立列
+            try:
+                result = conn.execute(text(
+                    "SELECT id, extra_data, oauth_recovery_required, openai_auth_state, token_validation_state, openai_account_state "
+                    "FROM accounts"
+                ))
+                rows = result.fetchall()
+                for row in rows:
+                    acc_id = row[0]
+                    extra_raw = row[1]
+                    current_oauth = row[2]
+                    current_auth = row[3]
+                    current_token = row[4]
+                    current_account = row[5]
+                    try:
+                        extra = json.loads(extra_raw) if extra_raw else {}
+                    except Exception:
+                        extra = {}
+                    if not isinstance(extra, dict):
+                        extra = {}
+
+                    updates = {}
+                    if current_oauth is None and "oauth_recovery_required" in extra:
+                        updates["oauth_recovery_required"] = 1 if bool(extra.get("oauth_recovery_required")) else 0
+                    if not current_auth and extra.get("openai_auth_state"):
+                        updates["openai_auth_state"] = str(extra.get("openai_auth_state") or "")
+                    if not current_token and extra.get("token_validation_state"):
+                        updates["token_validation_state"] = str(extra.get("token_validation_state") or "")
+                    if not current_account and extra.get("openai_account_state"):
+                        updates["openai_account_state"] = str(extra.get("openai_account_state") or "")
+                    if updates:
+                        set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
+                        conn.execute(
+                            text(f"UPDATE accounts SET {set_clause} WHERE id = :acc_id"),
+                            {"acc_id": acc_id, **updates}
+                        )
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"回填 accounts 高频状态列时出错: {e}")
 
 
 # 全局数据库会话管理器实例
