@@ -464,7 +464,23 @@ async function loadSettings() {
         document.getElementById('dynamic-proxy-enabled').checked = data.proxy?.dynamic_enabled || false;
         document.getElementById('dynamic-proxy-mode').value = data.proxy?.dynamic_mode || 'api';
         document.getElementById('dynamic-proxy-provider').value = data.proxy?.dynamic_provider || 'generic';
-        applyDynamicProfile(dynamicProxyProfiles[getDynamicProfileKey()] || {});
+        const currentDynamicProfileKey = getDynamicProfileKey();
+        if ((!dynamicProxyProfiles[currentDynamicProfileKey] || Object.keys(dynamicProxyProfiles[currentDynamicProfileKey]).length === 0) && data.proxy?.dynamic_provider === 'seekproxy') {
+            dynamicProxyProfiles[currentDynamicProfileKey] = {
+                trade_no: data.proxy?.dynamic_seekproxy_trade_no || data.proxy?.seekproxy_trade_no || '',
+                auth_type: data.proxy?.dynamic_seekproxy_auth_type ?? data.proxy?.seekproxy_auth_type ?? 2,
+                ip_count: data.proxy?.dynamic_seekproxy_ip_count ?? data.proxy?.seekproxy_ip_count ?? 1,
+                state: data.proxy?.dynamic_seekproxy_state ?? data.proxy?.seekproxy_state ?? '',
+                city: data.proxy?.dynamic_seekproxy_city ?? data.proxy?.seekproxy_city ?? '',
+                break_type: data.proxy?.dynamic_seekproxy_break_type ?? data.proxy?.seekproxy_break_type ?? 1,
+                time: data.proxy?.dynamic_seekproxy_time ?? data.proxy?.seekproxy_time ?? 5,
+                protocol: data.proxy?.dynamic_seekproxy_protocol ?? data.proxy?.seekproxy_protocol ?? 0,
+                pattern: data.proxy?.dynamic_seekproxy_pattern ?? data.proxy?.seekproxy_pattern ?? 0,
+                valid_code: data.proxy?.dynamic_seekproxy_valid_code ?? data.proxy?.seekproxy_valid_code ?? 0,
+                country: data.proxy?.dynamic_country || data.proxy?.country || 'US'
+            };
+        }
+        applyDynamicProfile(dynamicProxyProfiles[currentDynamicProfileKey] || {});
         const refreshProxyToggle = document.getElementById('proxy-refresh-use-proxy');
         const validateProxyToggle = document.getElementById('proxy-validate-use-proxy');
         if (refreshProxyToggle) refreshProxyToggle.checked = !!data.proxy?.refresh_use_proxy;

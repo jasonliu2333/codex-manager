@@ -238,6 +238,53 @@ def _get_saved_dynamic_proxy_password() -> str:
     return ""
 
 
+def _get_saved_dynamic_seekproxy_trade_no() -> str:
+    """优先从数据库直接读取 SeekProxy trade_no。"""
+    try:
+        with get_db() as db:
+            setting = crud.get_setting(db, "proxy.dynamic_seekproxy_trade_no")
+            value = str(setting.value or "").strip() if setting else ""
+            if value:
+                return value
+    except Exception:
+        pass
+    try:
+        return str(getattr(get_settings(), "proxy_dynamic_seekproxy_trade_no", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _get_saved_dynamic_seekproxy_key() -> str:
+    """优先从数据库直接读取 SeekProxy key。"""
+    try:
+        with get_db() as db:
+            setting = crud.get_setting(db, "proxy.dynamic_seekproxy_key")
+            value = str(setting.value or "").strip() if setting else ""
+            if value:
+                return value
+    except Exception:
+        pass
+    try:
+        secret = getattr(get_settings(), "proxy_dynamic_seekproxy_key", None)
+        if secret:
+            return secret.get_secret_value().strip() if hasattr(secret, "get_secret_value") else str(secret).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _parse_json_dict_setting(value, default: Optional[dict] = None) -> dict:
+    if isinstance(value, dict):
+        return value
+    if value in (None, ""):
+        return dict(default or {})
+    try:
+        parsed = json.loads(str(value))
+        return parsed if isinstance(parsed, dict) else dict(default or {})
+    except Exception:
+        return dict(default or {})
+
+
 def _load_proxy_settings_from_db() -> dict:
     """
     代理设置直接从数据库读取，避免页面显示依赖内存缓存。
@@ -293,7 +340,7 @@ def _load_proxy_settings_from_db() -> dict:
         "preferred_fixed_id": ("proxy.preferred_fixed_id", lambda v: _parse_int(v, defaults["preferred_fixed_id"])),
         "connect_retry_count": ("proxy.connect_retry_count", lambda v: _parse_int(v, defaults["connect_retry_count"])),
         "dynamic_enabled": ("proxy.dynamic_enabled", lambda v: _parse_bool(v, defaults["dynamic_enabled"])),
-        "dynamic_profiles": ("proxy.dynamic_profiles", lambda v: v if isinstance(v, dict) else defaults["dynamic_profiles"]),
+        "dynamic_profiles": ("proxy.dynamic_profiles", lambda v: _parse_json_dict_setting(v, defaults["dynamic_profiles"])),
         "dynamic_mode": ("proxy.dynamic_mode", lambda v: str(v).strip() or defaults["dynamic_mode"]),
         "dynamic_provider": ("proxy.dynamic_provider", lambda v: str(v).strip() or defaults["dynamic_provider"]),
         "dynamic_api_url": ("proxy.dynamic_api_url", lambda v: str(v).strip()),
@@ -334,6 +381,36 @@ def _load_proxy_settings_from_db() -> dict:
             defaults["has_dynamic_seekproxy_key"] = bool(str(dynamic_seekproxy_key_setting.value or "").strip()) if dynamic_seekproxy_key_setting else defaults["has_dynamic_seekproxy_key"]
     except Exception as exc:
         logger.warning("直接读取代理设置失败，回退到缓存配置: %s", exc)
+
+    # 兼容字段是实际运行链路仍会读取的兜底配置；如果 profiles 因历史版本、备份或重启
+    # 没有恢复出来，需要反向合成当前 SeekProxy profile，避免前端回填为空并在测试/保存时覆盖旧值。
+    profiles = _parse_json_dict_setting(defaults.get("dynamic_profiles"), {})
+    defaults["dynamic_profiles"] = profiles
+    if str(defaults.get("dynamic_provider") or "").strip().lower() == "seekproxy":
+        profile_key = _dynamic_profile_key("seekproxy", defaults.get("dynamic_mode") or "api")
+        profile = dict(profiles.get(profile_key) or {})
+        if defaults.get("dynamic_seekproxy_trade_no") and not profile.get("trade_no"):
+            profile["trade_no"] = defaults["dynamic_seekproxy_trade_no"]
+        saved_key = _get_saved_dynamic_seekproxy_key()
+        if saved_key and not profile.get("key"):
+            profile["key"] = saved_key
+        for field, profile_field in {
+            "dynamic_seekproxy_auth_type": "auth_type",
+            "dynamic_seekproxy_ip_count": "ip_count",
+            "dynamic_seekproxy_state": "state",
+            "dynamic_seekproxy_city": "city",
+            "dynamic_seekproxy_break_type": "break_type",
+            "dynamic_seekproxy_time": "time",
+            "dynamic_seekproxy_protocol": "protocol",
+            "dynamic_seekproxy_pattern": "pattern",
+            "dynamic_seekproxy_valid_code": "valid_code",
+            "dynamic_country": "country",
+        }.items():
+            value = defaults.get(field)
+            if value not in (None, "") and profile.get(profile_field) in (None, ""):
+                profile[profile_field] = value
+        if profile:
+            profiles[profile_key] = profile
     return defaults
 
 
@@ -354,16 +431,20 @@ def _build_dynamic_profile_payload(request: "DynamicProxySettings") -> dict:
             "country": request.country.strip() or "us",
         }
     if provider == "seekproxy":
-        existing_key = None
+        existing_profile = {}
         try:
-            existing_key = _load_proxy_settings_from_db().get("dynamic_profiles", {}).get(_dynamic_profile_key(provider, mode), {}).get("key")
+            existing_profile = _load_proxy_settings_from_db().get("dynamic_profiles", {}).get(_dynamic_profile_key(provider, mode), {}) or {}
         except Exception:
-            existing_key = None
+            existing_profile = {}
+        existing_trade_no = str(existing_profile.get("trade_no") or _get_saved_dynamic_seekproxy_trade_no() or "").strip()
+        existing_key = str(existing_profile.get("key") or _get_saved_dynamic_seekproxy_key() or "").strip()
+        incoming_key = request.seekproxy_key.strip() if isinstance(request.seekproxy_key, str) else request.seekproxy_key
         return {
-            "trade_no": request.seekproxy_trade_no.strip(),
+            # trade_no 也需要“留空保持不变”，否则只保存刷新/验证开关或重启后页面未回填时会把已保存配置清空。
+            "trade_no": request.seekproxy_trade_no.strip() or existing_trade_no,
             # 前端为了安全会在保存后清空密钥输入框；空字符串表示“保持原值”，
             # 只有显式传入非空值才覆盖，避免重启/二次保存后丢失。
-            "key": request.seekproxy_key if request.seekproxy_key not in (None, "") else existing_key,
+            "key": incoming_key if incoming_key not in (None, "") else existing_key,
             "auth_type": request.seekproxy_auth_type,
             "ip_count": request.seekproxy_ip_count,
             "state": request.seekproxy_state.strip(),
@@ -1106,21 +1187,17 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
         provider = str(request.provider or "generic").strip().lower() or "generic"
         api_url = request.api_url
         if provider == "seekproxy":
-            seekproxy_key = (request.seekproxy_key or "").strip()
-            if not seekproxy_key:
-                settings = get_settings()
-                secret = getattr(settings, "proxy_dynamic_seekproxy_key", None)
-                if secret:
-                    seekproxy_key = secret.get_secret_value().strip() if hasattr(secret, "get_secret_value") else str(secret).strip()
-            if not request.seekproxy_trade_no.strip() or not seekproxy_key:
+            seekproxy_trade_no = request.seekproxy_trade_no.strip() or _get_saved_dynamic_seekproxy_trade_no()
+            seekproxy_key = (request.seekproxy_key or "").strip() or _get_saved_dynamic_seekproxy_key()
+            if not seekproxy_trade_no or not seekproxy_key:
                 raise HTTPException(status_code=400, detail="请填写完整的 SeekProxy trade_no 和 key")
             whitelist_message = ""
             if int(request.seekproxy_auth_type or 2) == 2:
-                ok, whitelist_message = ensure_seekproxy_whitelist(request.seekproxy_trade_no.strip(), seekproxy_key)
+                ok, whitelist_message = ensure_seekproxy_whitelist(seekproxy_trade_no, seekproxy_key)
                 if not ok:
                     return {"success": False, "message": whitelist_message}
             api_url = build_seekproxy_api_url(
-                trade_no=request.seekproxy_trade_no,
+                trade_no=seekproxy_trade_no,
                 key=seekproxy_key,
                 auth_type=request.seekproxy_auth_type,
                 ip_count=request.seekproxy_ip_count,
@@ -1165,7 +1242,7 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
         if provider == "seekproxy":
             proxy_url = select_best_dynamic_proxy(
                 candidates,
-                seekproxy_trade_no=request.seekproxy_trade_no.strip(),
+                seekproxy_trade_no=seekproxy_trade_no,
                 seekproxy_key=seekproxy_key,
             ) if candidates else None
         else:
