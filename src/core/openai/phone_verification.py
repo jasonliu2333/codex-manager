@@ -135,6 +135,7 @@ def _extract_error_code_from_text(error_text: str) -> Optional[str]:
     markers = [
         "sms_code_timeout",
         "等待短信验证码超时",
+        "fraud_guard",
         "phone_max_usage_exceeded",
         "phone_number_in_use",
         "phone_number_blocked",
@@ -181,6 +182,8 @@ def _classify_phone_failure_type(error_code: str = "", error_message: str = "") 
         "challenge",
         "captcha",
         "forbidden",
+        "fraud_guard",
+        "suspicious behavior",
         "too_many_attempts",
         "too_many_requests",
     ]
