@@ -107,11 +107,9 @@ class DatabaseSessionManager:
     def migrate_tables(self):
         """
         数据库迁移 - 添加缺失的列
-        用于在不删除数据的情况下更新表结构
+        用于在不删除数据的情况下更新表结构（SQLite 和 PostgreSQL 通用）
         """
-        if not self.database_url.startswith("sqlite"):
-            logger.info("非 SQLite 数据库，跳过自动迁移")
-            return
+        is_sqlite = self.database_url.startswith("sqlite")
 
         # 需要检查和添加的新列
         migrations = [
@@ -173,18 +171,30 @@ class DatabaseSessionManager:
             except Exception as e:
                 logger.warning(f"迁移 custom_domain -> moe_mail 时出错: {e}")
 
+            # 列迁移：SQLite 用 PRAGMA，PostgreSQL 用 information_schema + IF NOT EXISTS
             for table_name, column_name, column_type in migrations:
                 try:
-                    # 检查列是否存在
-                    result = conn.execute(text(
-                        f"SELECT * FROM pragma_table_info('{table_name}') WHERE name='{column_name}'"
-                    ))
-                    if result.fetchone() is None:
-                        # 列不存在，添加它
-                        logger.info(f"添加列 {table_name}.{column_name}")
-                        conn.execute(text(
-                            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+                    if is_sqlite:
+                        result = conn.execute(text(
+                            f"SELECT * FROM pragma_table_info('{table_name}') WHERE name='{column_name}'"
                         ))
+                        exists = result.fetchone() is not None
+                    else:
+                        result = conn.execute(text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_name = :tbl AND column_name = :col"
+                        ), {"tbl": table_name, "col": column_name})
+                        exists = result.fetchone() is not None
+                    if not exists:
+                        logger.info(f"添加列 {table_name}.{column_name}")
+                        if is_sqlite:
+                            conn.execute(text(
+                                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+                            ))
+                        else:
+                            conn.execute(text(
+                                f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+                            ))
                         conn.commit()
                         logger.info(f"成功添加列 {table_name}.{column_name}")
                 except Exception as e:
@@ -194,49 +204,49 @@ class DatabaseSessionManager:
                 try:
                     conn.execute(text(sql))
                     conn.commit()
-                    logger.info(f"已确保索引存在: {index_name}")
                 except Exception as e:
                     logger.warning(f"创建索引 {index_name} 时出错: {e}")
 
-            # 将高频 extra_data 状态回填到独立列
-            try:
-                result = conn.execute(text(
-                    "SELECT id, extra_data, oauth_recovery_required, openai_auth_state, token_validation_state, openai_account_state "
-                    "FROM accounts"
-                ))
-                rows = result.fetchall()
-                for row in rows:
-                    acc_id = row[0]
-                    extra_raw = row[1]
-                    current_oauth = row[2]
-                    current_auth = row[3]
-                    current_token = row[4]
-                    current_account = row[5]
-                    try:
-                        extra = json.loads(extra_raw) if extra_raw else {}
-                    except Exception:
-                        extra = {}
-                    if not isinstance(extra, dict):
-                        extra = {}
+            # 将高频 extra_data 状态回填到独立列（仅 SQLite）
+            if is_sqlite:
+                try:
+                    result = conn.execute(text(
+                        "SELECT id, extra_data, oauth_recovery_required, openai_auth_state, token_validation_state, openai_account_state "
+                        "FROM accounts"
+                    ))
+                    rows = result.fetchall()
+                    for row in rows:
+                        acc_id = row[0]
+                        extra_raw = row[1]
+                        current_oauth = row[2]
+                        current_auth = row[3]
+                        current_token = row[4]
+                        current_account = row[5]
+                        try:
+                            extra = json.loads(extra_raw) if extra_raw else {}
+                        except Exception:
+                            extra = {}
+                        if not isinstance(extra, dict):
+                            extra = {}
 
-                    updates = {}
-                    if current_oauth is None and "oauth_recovery_required" in extra:
-                        updates["oauth_recovery_required"] = 1 if bool(extra.get("oauth_recovery_required")) else 0
-                    if not current_auth and extra.get("openai_auth_state"):
-                        updates["openai_auth_state"] = str(extra.get("openai_auth_state") or "")
-                    if not current_token and extra.get("token_validation_state"):
-                        updates["token_validation_state"] = str(extra.get("token_validation_state") or "")
-                    if not current_account and extra.get("openai_account_state"):
-                        updates["openai_account_state"] = str(extra.get("openai_account_state") or "")
-                    if updates:
-                        set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
-                        conn.execute(
-                            text(f"UPDATE accounts SET {set_clause} WHERE id = :acc_id"),
-                            {"acc_id": acc_id, **updates}
-                        )
-                conn.commit()
-            except Exception as e:
-                logger.warning(f"回填 accounts 高频状态列时出错: {e}")
+                        updates = {}
+                        if current_oauth is None and "oauth_recovery_required" in extra:
+                            updates["oauth_recovery_required"] = 1 if bool(extra.get("oauth_recovery_required")) else 0
+                        if not current_auth and extra.get("openai_auth_state"):
+                            updates["openai_auth_state"] = str(extra.get("openai_auth_state") or "")
+                        if not current_token and extra.get("token_validation_state"):
+                            updates["token_validation_state"] = str(extra.get("token_validation_state") or "")
+                        if not current_account and extra.get("openai_account_state"):
+                            updates["openai_account_state"] = str(extra.get("openai_account_state") or "")
+                        if updates:
+                            set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
+                            conn.execute(
+                                text(f"UPDATE accounts SET {set_clause} WHERE id = :acc_id"),
+                                {"acc_id": acc_id, **updates}
+                            )
+                    conn.commit()
+                except Exception as e:
+                    logger.warning(f"回填 accounts 高频状态列时出错: {e}")
 
 
 # 全局数据库会话管理器实例
