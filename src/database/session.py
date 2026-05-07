@@ -132,6 +132,11 @@ class DatabaseSessionManager:
             ("phone_verification_attempts", "failure_type", "VARCHAR(32)"),
             ("proxies", "is_default", "BOOLEAN DEFAULT 0"),
             ("cpa_services", "include_proxy_url", "BOOLEAN DEFAULT 0"),
+            ("phone_verification_attempts", "stage", "VARCHAR(32)"),
+            ("phone_verification_attempts", "wait_started_at", "DATETIME"),
+            ("phone_verification_attempts", "wait_timeout_seconds", "INTEGER"),
+            ("phone_verification_attempts", "task_uuid", "VARCHAR(36)"),
+            ("phone_verification_attempts", "batch_id", "VARCHAR(36)"),
         ]
         index_migrations = [
             ("ix_account_status", "CREATE INDEX IF NOT EXISTS ix_account_status ON accounts(status)"),
@@ -152,6 +157,8 @@ class DatabaseSessionManager:
             ("ix_phone_verify_failure_type", "CREATE INDEX IF NOT EXISTS ix_phone_verify_failure_type ON phone_verification_attempts(failure_type)"),
             ("ix_phone_verify_provider_slot_created", "CREATE INDEX IF NOT EXISTS ix_phone_verify_provider_slot_created ON phone_verification_attempts(sms_provider, provider_slot, created_at)"),
             ("ix_phone_verify_provider_success_created", "CREATE INDEX IF NOT EXISTS ix_phone_verify_provider_success_created ON phone_verification_attempts(sms_provider, success, created_at)"),
+            ("ix_phone_verify_stage", "CREATE INDEX IF NOT EXISTS ix_phone_verify_stage ON phone_verification_attempts(stage)"),
+            ("ix_phone_verify_task_uuid", "CREATE INDEX IF NOT EXISTS ix_phone_verify_task_uuid ON phone_verification_attempts(task_uuid)"),
         ]
 
         # 确保新表存在（create_tables 已处理，此处兜底）

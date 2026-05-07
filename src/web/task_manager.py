@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -13,6 +14,38 @@ from collections import defaultdict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+_db_sync_enabled = True
+
+
+def _sync_batch_to_db(batch_id: str, batch_type: str, **fields) -> None:
+    """将批量任务状态同步写入数据库，防止重启丢失。"""
+    if not _db_sync_enabled:
+        return
+    try:
+        from ..database.session import get_db
+        from ..database import crud
+        with get_db() as db:
+            existing = crud.get_batch_task(db, batch_id)
+            if existing is None:
+                crud.create_batch_task(db, batch_id=batch_id, batch_type=batch_type, **fields)
+            else:
+                crud.update_batch_task(db, batch_id, **fields)
+    except Exception:
+        pass
+
+
+def _append_batch_log_to_db(batch_id: str, log_message: str) -> None:
+    """追加批量任务日志到数据库。"""
+    if not _db_sync_enabled:
+        return
+    try:
+        from ..database.session import get_db
+        from ..database import crud
+        with get_db() as db:
+            crud.append_batch_task_log(db, batch_id, log_message)
+    except Exception:
+        pass
 
 # 全局线程池（支持最多 50 个并发注册任务）
 _executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="reg_worker")
@@ -226,7 +259,7 @@ class TaskManager:
 
     # ============== 批量任务管理 ==============
 
-    def init_batch(self, batch_id: str, total: int):
+    def init_batch(self, batch_id: str, total: int, batch_type: str = "unknown"):
         """初始化批量任务"""
         _batch_status[batch_id] = {
             "status": "running",
@@ -236,8 +269,10 @@ class TaskManager:
             "failed": 0,
             "skipped": 0,
             "current_index": 0,
-            "finished": False
+            "finished": False,
+            "batch_type": batch_type,
         }
+        _sync_batch_to_db(batch_id, batch_type=batch_type, total=total, status="running")
         logger.info(f"批量任务 {batch_id} 已初始化，总数: {total}")
 
     def add_batch_log(self, batch_id: str, log_message: str):
@@ -255,6 +290,8 @@ class TaskManager:
         # 广播后再添加到队列
         with _get_batch_lock(batch_id):
             _batch_logs[batch_id].append(log_message)
+
+        _append_batch_log_to_db(batch_id, log_message)
 
     async def _broadcast_batch_log(self, batch_id: str, log_message: str):
         """广播批量任务日志"""
@@ -286,6 +323,8 @@ class TaskManager:
             return
 
         _batch_status[batch_id].update(kwargs)
+        batch_type = _batch_status[batch_id].get("batch_type", "unknown")
+        _sync_batch_to_db(batch_id, batch_type=batch_type, **kwargs)
         if _batch_status[batch_id].get("status") in {"completed", "failed", "cancelled"} or _batch_status[batch_id].get("finished"):
             self.cleanup_batch(batch_id)
 

@@ -8,6 +8,7 @@ import sys
 import secrets
 import hmac
 import hashlib
+from datetime import datetime
 from typing import Optional
 from pathlib import Path
 import inspect
@@ -45,6 +46,124 @@ def _build_static_asset_version(static_dir: Path) -> str:
             if path.is_file():
                 latest_mtime = max(latest_mtime, int(path.stat().st_mtime))
     return str(latest_mtime or 1)
+
+
+def _recover_interrupted_tasks():
+    """启动时恢复中断的任务：标记批量任务为 interrupted，并恢复等待短信的手机验证。"""
+    try:
+        from ..database.session import get_db
+        from ..database import crud
+
+        # 1. 标记中断的批量任务
+        with get_db() as db:
+            interrupted = crud.get_interrupted_batch_tasks(db)
+            for bt in interrupted:
+                crud.update_batch_task(db, bt.batch_id, status="interrupted", finished=True)
+                logger.warning(
+                    "标记中断批量任务: batch_id=%s type=%s completed=%s/%s",
+                    bt.batch_id, bt.batch_type, bt.completed, bt.total,
+                )
+        if interrupted:
+            logger.info("已标记 %s 个中断的批量任务", len(interrupted))
+
+        # 2. 恢复等待短信的手机验证
+        with get_db() as db:
+            pending = crud.get_pending_sms_verifications(db)
+            if pending:
+                logger.info("发现 %s 个等待短信中的手机验证记录，尝试恢复...", len(pending))
+                _resume_phone_verifications(pending)
+    except Exception as e:
+        logger.warning("恢复中断任务时出错: %s", e)
+
+
+def _resume_phone_verifications(attempts: list):
+    """尝试恢复等待短信中的手机验证任务。"""
+    import threading
+    from ..core.sms import SMSProviderConfig, get_sms_provider
+    from ..config.settings import get_settings, normalize_sms_provider_name
+
+    settings = get_settings()
+    provider_name = normalize_sms_provider_name(getattr(settings, "sms_provider", "herosms") or "herosms")
+
+    # 获取短信平台 API Key
+    try:
+        from ..database.session import get_db
+        from ..database import crud
+        db_key = {
+            "herosms": "herosms.api_key",
+            "smsbower": "smsbower.api_key",
+            "5sim": "fivesim.api_key",
+        }.get(provider_name, "herosms.api_key")
+        with get_db() as db:
+            ks = crud.get_setting(db, db_key)
+            api_key = str(ks.value or "").strip() if ks else ""
+        if not api_key:
+            settings_field = {"herosms": "herosms_api_key", "smsbower": "smsbower_api_key", "5sim": "fivesim_api_key"}.get(provider_name, "herosms_api_key")
+            secret = getattr(settings, settings_field, None)
+            if secret and hasattr(secret, "get_secret_value"):
+                api_key = secret.get_secret_value()
+    except Exception:
+        api_key = ""
+
+    if not api_key:
+        logger.warning("未配置短信平台 API Key，跳过手机验证恢复")
+        return
+
+    def _resume_one(attempt):
+        try:
+            from ..database.session import get_db
+            from ..database import crud
+            activation_id = attempt.activation_id
+            if not activation_id:
+                return
+            timeout = max(10, min(300, int(attempt.wait_timeout_seconds or 150)))
+            poll_interval = 3
+
+            cfg = SMSProviderConfig(
+                api_key=api_key,
+                provider=attempt.sms_provider or provider_name,
+                service=attempt.service or "dr",
+                country=int(attempt.country or 187),
+                country_key=str(attempt.country_key or ""),
+                timeout=30,
+            )
+            client = get_sms_provider(cfg)
+
+            logger.info("恢复手机验证: activation=%s phone=%s", activation_id, attempt.phone_number)
+            code = client.wait_for_code(
+                activation_id,
+                timeout=min(timeout, 180),
+                poll_interval=poll_interval,
+            )
+            if code:
+                with get_db() as db2:
+                    crud.update_phone_attempt_stage(
+                        db2,
+                        int(attempt.id),
+                        "sms_received",
+                        sms_code=code,
+                        sms_received_at=datetime.utcnow(),
+                    )
+                logger.info("恢复成功，收到验证码: activation=%s", activation_id)
+            else:
+                with get_db() as db:
+                    crud.update_phone_attempt_stage(
+                        db,
+                        int(attempt.id),
+                        "failed",
+                        failure_stage="wait_sms_code",
+                        error_code="sms_code_timeout_recovery",
+                        error_message="恢复后等待短信验证码超时",
+                        invalid=True,
+                    )
+                logger.warning("恢复失败，短信超时: activation=%s", activation_id)
+        except Exception as e:
+            logger.warning("恢复手机验证失败 activation=%s: %s", getattr(attempt, "activation_id", None), e)
+
+    for attempt in attempts:
+        t = threading.Thread(target=_resume_one, args=(attempt,), daemon=True, name=f"sms_resume_{attempt.id}")
+        t.start()
+    logger.info("已启动 %s 个手机验证恢复线程", len(attempts))
 
 
 def create_app() -> FastAPI:
@@ -197,6 +316,9 @@ def create_app() -> FastAPI:
         # 设置 TaskManager 的事件循环
         loop = asyncio.get_event_loop()
         task_manager.set_loop(loop)
+
+        # 标记中断的批量任务并尝试恢复 waiting_sms 的手机验证
+        _recover_interrupted_tasks()
 
         logger.info("=" * 50)
         logger.info(f"{settings.app_name} v{settings.app_version} 启动中...")

@@ -106,6 +106,39 @@ def _batch_status_response(batch_id: str, local_batch: Optional[dict]) -> dict:
     return _lost_batch_status(batch_id)
 
 
+def _batch_status_from_db(batch_id: str) -> dict:
+    """从数据库加载批量任务状态（内存丢失后的最终兜底）"""
+    try:
+        with get_db() as db:
+            bt = crud.get_batch_task(db, batch_id)
+            if bt:
+                status = bt.status
+                if status in ("completed", "failed", "cancelled"):
+                    pass
+                elif status in ("running", "pending"):
+                    status = "interrupted"
+                response = {
+                    "batch_id": batch_id,
+                    "status": status,
+                    "total": bt.total or 0,
+                    "completed": bt.completed or 0,
+                    "success": bt.success or 0,
+                    "failed": bt.failed or 0,
+                    "skipped": bt.skipped or 0,
+                    "current_index": bt.current_index or 0,
+                    "cancelled": bool(bt.cancelled),
+                    "finished": bool(bt.finished) or status != "running",
+                    "lost": status == "interrupted",
+                    "error": "后端重启导致任务中断，请刷新账号列表确认实际结果" if status == "interrupted" else "",
+                    "progress": f"{bt.completed or 0}/{bt.total or 0}",
+                    "logs": (bt.logs or "").split("\n") if bt.logs else [],
+                }
+                return response
+    except Exception:
+        pass
+    return _lost_batch_status(batch_id)
+
+
 SMS_COUNTRY_CODE_EN = {
     0: "Russia",
     1: "Ukraine",
@@ -1821,7 +1854,7 @@ async def run_recover_oauth_task(
 
 async def run_batch_recover_oauth(batch_id: str, task_account_pairs: List[dict], proxy: Optional[str]):
     """顺序执行批量补录，并向批量 WS 推送日志。"""
-    task_manager.init_batch(batch_id, len(task_account_pairs))
+    task_manager.init_batch(batch_id, len(task_account_pairs), batch_type="recovery")
     recovery_batches[batch_id] = {
         "status": "running",
         "total": len(task_account_pairs),
@@ -1890,7 +1923,7 @@ def _run_single_validate(account_id: int, proxy: Optional[str]):
 async def run_batch_validate(batch_id: str, account_ids: List[int], request_proxy: Optional[str]):
     settings = get_settings()
     concurrency = max(1, min(5, int(getattr(settings, "registration_max_retries", 3) or 3)))
-    task_manager.init_batch(batch_id, len(account_ids))
+    task_manager.init_batch(batch_id, len(account_ids), batch_type="validate")
     validate_batches[batch_id] = {
         "status": "running",
         "total": len(account_ids),
@@ -2042,7 +2075,7 @@ async def run_refresh_task(task_uuid: str, account_id: int, request_proxy: Optio
 async def run_batch_refresh(batch_id: str, account_ids: List[int], request_proxy: Optional[str]):
     settings = get_settings()
     concurrency = max(1, min(5, int(getattr(settings, "registration_max_retries", 3) or 3)))
-    task_manager.init_batch(batch_id, len(account_ids))
+    task_manager.init_batch(batch_id, len(account_ids), batch_type="refresh")
     refresh_batches[batch_id] = {
         "status": "running",
         "total": len(account_ids),
@@ -2167,12 +2200,18 @@ async def cancel_batch_recover(batch_id: str):
 
 @router.get("/batch-refresh/{batch_id}")
 async def get_batch_refresh_status(batch_id: str):
-    return _batch_status_response(batch_id, refresh_batches.get(batch_id))
+    result = _batch_status_response(batch_id, refresh_batches.get(batch_id))
+    if result.get("lost"):
+        result = _batch_status_from_db(batch_id)
+    return result
 
 
 @router.get("/batch-validate/{batch_id}")
 async def get_batch_validate_status(batch_id: str):
-    return _batch_status_response(batch_id, validate_batches.get(batch_id))
+    result = _batch_status_response(batch_id, validate_batches.get(batch_id))
+    if result.get("lost"):
+        result = _batch_status_from_db(batch_id)
+    return result
 
 
 @router.get("/validate/task/{task_uuid}")
@@ -2528,7 +2567,10 @@ async def get_recover_oauth_task(task_uuid: str):
 @router.get("/recover-oauth/batch/{batch_id}")
 async def get_recover_oauth_batch(batch_id: str):
     """获取批量补录任务状态。"""
-    return _batch_status_response(batch_id, recovery_batches.get(batch_id))
+    result = _batch_status_response(batch_id, recovery_batches.get(batch_id))
+    if result.get("lost"):
+        result = _batch_status_from_db(batch_id)
+    return result
 
 
 @router.post("/batch-validate")

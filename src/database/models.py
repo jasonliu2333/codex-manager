@@ -285,8 +285,39 @@ class PhoneVerificationAttempt(Base):
     verified_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    stage = Column(String(32), nullable=True, index=True)
+    wait_started_at = Column(DateTime, nullable=True)
+    wait_timeout_seconds = Column(Integer, nullable=True)
+    task_uuid = Column(String(36), nullable=True, index=True)
+    batch_id = Column(String(36), nullable=True)
 
     account = relationship('Account')
+
+
+class BatchTask(Base):
+    """批量任务持久化表，防止后端重启丢失状态。"""
+    __tablename__ = 'batch_tasks'
+    __table_args__ = (
+        Index("ix_batch_task_status", "status"),
+        Index("ix_batch_task_created_at", "created_at"),
+        Index("ix_batch_task_type_status", "batch_type", "status"),
+    )
+
+    batch_id = Column(String(36), primary_key=True)
+    batch_type = Column(String(32), nullable=False, index=True)
+    status = Column(String(20), default='running')  # running/completed/failed/cancelled/interrupted
+    total = Column(Integer, default=0)
+    completed = Column(Integer, default=0)
+    success = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
+    skipped = Column(Integer, default=0)
+    current_index = Column(Integer, default=0)
+    cancelled = Column(Boolean, default=False)
+    finished = Column(Boolean, default=False)
+    logs = Column(Text)
+    extra_data = Column(JSONEncodedDict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class PhoneNumberReputation(Base):

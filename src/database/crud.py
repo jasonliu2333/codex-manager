@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, asc, func
 
-from .models import Account, EmailService, RegistrationTask, Setting, Proxy, CpaService, Sub2ApiService, PhoneVerificationAttempt, PhoneNumberReputation
+from .models import Account, EmailService, RegistrationTask, Setting, Proxy, CpaService, Sub2ApiService, PhoneVerificationAttempt, PhoneNumberReputation, BatchTask
 
 
 PHONE_REPUTATION_MAX_SUCCESS_USES = 3
@@ -496,6 +496,121 @@ def upsert_phone_number_reputation(
     db.commit()
     db.refresh(record)
     return record
+
+
+# ============================================================================
+# 批量任务 CRUD
+# ============================================================================
+
+def create_batch_task(
+    db: Session,
+    batch_id: str,
+    batch_type: str,
+    total: int = 0,
+    **kwargs
+) -> BatchTask:
+    """创建或更新批量任务记录"""
+    existing = db.query(BatchTask).filter(BatchTask.batch_id == batch_id).first()
+    if existing:
+        for key, value in dict(kwargs, batch_type=batch_type, total=total, status='running').items():
+            if hasattr(existing, key) and value is not None:
+                setattr(existing, key, value)
+        existing.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return existing
+    bt = BatchTask(batch_id=batch_id, batch_type=batch_type, total=total, **kwargs)
+    db.add(bt)
+    db.commit()
+    db.refresh(bt)
+    return bt
+
+
+def update_batch_task(
+    db: Session,
+    batch_id: str,
+    **kwargs
+) -> Optional[BatchTask]:
+    """更新批量任务状态"""
+    bt = db.query(BatchTask).filter(BatchTask.batch_id == batch_id).first()
+    if not bt:
+        return None
+    for key, value in kwargs.items():
+        if hasattr(bt, key) and value is not None:
+            setattr(bt, key, value)
+    bt.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(bt)
+    return bt
+
+
+def get_batch_task(db: Session, batch_id: str) -> Optional[BatchTask]:
+    """查询批量任务"""
+    return db.query(BatchTask).filter(BatchTask.batch_id == batch_id).first()
+
+
+def get_interrupted_batch_tasks(db: Session) -> list:
+    """查询所有未完成的批量任务（用于启动恢复）"""
+    return db.query(BatchTask).filter(
+        BatchTask.status.in_(['running', 'pending'])
+    ).all()
+
+
+def append_batch_task_log(db: Session, batch_id: str, log_message: str) -> None:
+    """追加批量任务日志（线程安全尽量简单：直接拼接到 DB 中的 logs 字段）"""
+    import json as _json
+    bt = db.query(BatchTask).filter(BatchTask.batch_id == batch_id).first()
+    if not bt:
+        return
+    lines = [line for line in (bt.logs or "").split("\n") if line.strip()]
+    lines.append(log_message)
+    bt.logs = "\n".join(lines[-500:])
+    bt.updated_at = datetime.utcnow()
+    db.commit()
+
+
+def update_phone_attempt_stage(
+    db: Session,
+    attempt_id: int,
+    stage: str,
+    wait_timeout_seconds: Optional[int] = None,
+    task_uuid: Optional[str] = None,
+    batch_id: Optional[str] = None,
+    **extra_fields
+) -> None:
+    """更新手机验证的阶段标记"""
+    record = db.query(PhoneVerificationAttempt).filter(PhoneVerificationAttempt.id == attempt_id).first()
+    if not record:
+        return
+    record.stage = stage
+    if wait_timeout_seconds is not None:
+        record.wait_timeout_seconds = wait_timeout_seconds
+    if task_uuid is not None:
+        record.task_uuid = task_uuid
+    if batch_id is not None:
+        record.batch_id = batch_id
+    if stage == 'waiting_sms':
+        record.wait_started_at = datetime.utcnow()
+    for key, value in extra_fields.items():
+        if hasattr(record, key) and value is not None:
+            setattr(record, key, value)
+    db.commit()
+
+
+def get_pending_sms_verifications(db: Session) -> list:
+    """查询所有等待短信中且未超时的记录（用于启动恢复）"""
+    now = datetime.utcnow()
+    candidates = db.query(PhoneVerificationAttempt).filter(
+        PhoneVerificationAttempt.stage == 'waiting_sms',
+        PhoneVerificationAttempt.success == False,
+    ).all()
+    active = []
+    for r in candidates:
+        if r.wait_started_at and r.wait_timeout_seconds:
+            elapsed = (now - r.wait_started_at).total_seconds()
+            if elapsed < r.wait_timeout_seconds + 30:
+                active.append(r)
+    return active
 
 
 # ============================================================================

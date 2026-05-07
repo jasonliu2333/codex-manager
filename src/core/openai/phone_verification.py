@@ -15,6 +15,20 @@ from ...database.session import get_db, get_session_manager
 from ..sms import SMSActivation, SMSProviderConfig, get_sms_provider
 
 
+def _persist_phone_stage(attempt_id: Optional[int], stage: str, wait_timeout: Optional[int] = None,
+                         task_uuid: Optional[str] = None, batch_id: Optional[str] = None):
+    """持久化手机验证阶段，用于重启后可恢复。"""
+    if not attempt_id:
+        return
+    try:
+        with get_db() as db:
+            crud.update_phone_attempt_stage(db, int(attempt_id), stage,
+                                            wait_timeout_seconds=wait_timeout,
+                                            task_uuid=task_uuid, batch_id=batch_id)
+    except Exception:
+        pass
+
+
 SMS_REUSE_POOL_KEY = "herosms.reuse_pool"
 SMS_ACTIVATION_WINDOW_SECONDS = 20 * 60
 SMS_PENDING_CANCEL_KEY = "sms.pending_cancel_pool"
@@ -324,6 +338,7 @@ def is_add_phone_challenge(page_type: str = "", continue_url: str = "", payload:
 def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Optional[str]:
     """处理 auth.openai.com/add-phone，并返回下一步 continue_url。"""
 
+    _task_uuid = getattr(engine, "task_uuid", None)
     runtime = _load_sms_runtime_settings()
     provider_name = normalize_sms_provider_name(runtime.get("provider", "herosms"))
     provider_label = {
@@ -468,6 +483,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     charged_cost=0.0,
                     original_activation_cost=_positive_float_or_none(original_cost),
                 )
+                _persist_phone_stage(verification_attempt_id, "acquired_number", task_uuid=_task_uuid)
             else:
                 price_candidates = _build_price_candidates(
                     resolved_max_price,
@@ -536,6 +552,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                                 reused=False,
                                 charged_cost=charged_cost,
                             )
+                            _persist_phone_stage(verification_attempt_id, "acquired_number", task_uuid=_task_uuid)
                             if activation.activation_operator or activation.activation_time or activation.can_get_another_sms is not None:
                                 engine._log(
                                     "add-phone: activation 扩展信息: "
@@ -679,6 +696,8 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 except Exception:
                     pass
 
+            _persist_phone_stage(verification_attempt_id, "submitted_phone", task_uuid=_task_uuid)
+
             def resend_business_code() -> None:
                 resp = engine.session.post(
                     resend_url,
@@ -693,6 +712,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             timeout = int(runtime.get("verify_timeout", 180) or 180)
             poll_interval = int(runtime.get("poll_interval", 3) or 3)
             engine._log(f"add-phone: 等待短信验证码，最多 {timeout} 秒")
+            _persist_phone_stage(verification_attempt_id, "waiting_sms", wait_timeout=timeout, task_uuid=_task_uuid)
             request_started_at = _utc_now()
             code = client.wait_for_code(
                 activation.activation_id,
@@ -714,6 +734,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 )
                 raise RuntimeError("等待短信验证码超时")
             engine._log(f"add-phone: 成功获取短信验证码: {code}")
+            _persist_phone_stage(verification_attempt_id, "sms_received", task_uuid=_task_uuid)
             _update_phone_verification_record(
                 verification_attempt_id,
                 sms_code=code,
@@ -792,11 +813,13 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                 result_label="success",
             )
             engine._log("add-phone: 手机验证完成")
+            _persist_phone_stage(verification_attempt_id, "verified", task_uuid=_task_uuid)
             return next_url or "https://auth.openai.com/sign-in-with-chatgpt/codex/consent"
         except Exception as exc:
             last_error = str(exc)
             error_code = _extract_error_code_from_text(last_error) or "runtime_error"
             engine._log(f"add-phone: 手机验证失败: {exc}", "error")
+            _persist_phone_stage(verification_attempt_id, "failed", task_uuid=_task_uuid)
             failure_stage = "wait_sms_code" if error_code == "sms_code_timeout" else "exception"
             _update_phone_verification_record(
                 verification_attempt_id,

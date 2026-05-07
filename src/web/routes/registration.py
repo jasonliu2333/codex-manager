@@ -111,6 +111,42 @@ def _batch_status_response(batch_id: str, include_logs: bool = False) -> dict:
     return _lost_batch_status(batch_id, include_logs=include_logs)
 
 
+def _batch_status_from_db(batch_id: str, include_logs: bool = False) -> dict:
+    """从数据库加载批量任务状态（内存丢失后的最终兜底）"""
+    try:
+        from ...database.session import get_db as _get_db
+        from ...database import crud as _crud
+        with _get_db() as db:
+            bt = _crud.get_batch_task(db, batch_id)
+            if bt:
+                status = bt.status
+                if status in ("completed", "failed", "cancelled"):
+                    pass
+                elif status in ("running", "pending"):
+                    status = "interrupted"
+                response = {
+                    "batch_id": batch_id,
+                    "status": status,
+                    "total": bt.total or 0,
+                    "completed": bt.completed or 0,
+                    "success": bt.success or 0,
+                    "failed": bt.failed or 0,
+                    "skipped": bt.skipped or 0,
+                    "current_index": bt.current_index or 0,
+                    "cancelled": bool(bt.cancelled),
+                    "finished": bool(bt.finished) or status != "running",
+                    "lost": status == "interrupted",
+                    "error": "后端重启导致任务中断，请刷新账号列表确认实际结果" if status == "interrupted" else "",
+                    "progress": f"{bt.completed or 0}/{bt.total or 0}",
+                }
+                if include_logs:
+                    response["logs"] = (bt.logs or "").split("\n") if bt.logs else []
+                return response
+    except Exception:
+        pass
+    return _lost_batch_status(batch_id, include_logs=include_logs)
+
+
 # ============== Proxy Helper Functions ==============
 
 def _mask_proxy_url(proxy_url: Optional[str]) -> str:
@@ -801,9 +837,9 @@ async def run_registration_task(task_uuid: str, email_service_type: str, proxy: 
         task_manager.update_status(task_uuid, "failed", error=str(e))
 
 
-def _init_batch_state(batch_id: str, task_uuids: List[str]):
+def _init_batch_state(batch_id: str, task_uuids: List[str], batch_type: str = "register"):
     """初始化批量任务内存状态"""
-    task_manager.init_batch(batch_id, len(task_uuids))
+    task_manager.init_batch(batch_id, len(task_uuids), batch_type=batch_type)
     batch_tasks[batch_id] = {
         "total": len(task_uuids),
         "completed": 0,
@@ -813,7 +849,8 @@ def _init_batch_state(batch_id: str, task_uuids: List[str]):
         "task_uuids": task_uuids,
         "current_index": 0,
         "logs": [],
-        "finished": False
+        "finished": False,
+        "batch_type": batch_type,
     }
 
 
@@ -1177,7 +1214,10 @@ async def start_batch_registration(
 @router.get("/batch/{batch_id}")
 async def get_batch_status(batch_id: str):
     """获取批量任务状态"""
-    return _batch_status_response(batch_id)
+    result = _batch_status_response(batch_id)
+    if result.get("lost"):
+        result = _batch_status_from_db(batch_id)
+    return result
 
 
 @router.post("/batch/{batch_id}/cancel")
@@ -1723,8 +1763,10 @@ async def start_outlook_batch_registration(
         "service_ids": actual_service_ids,
         "current_index": 0,
         "logs": [],
-        "finished": False
+        "finished": False,
+        "batch_type": "outlook_register",
     }
+    task_manager.init_batch(batch_id, len(actual_service_ids), batch_type="outlook_register")
 
     # 在后台运行批量注册
     background_tasks.add_task(
@@ -1759,7 +1801,10 @@ async def start_outlook_batch_registration(
 @router.get("/outlook-batch/{batch_id}")
 async def get_outlook_batch_status(batch_id: str):
     """获取 Outlook 批量任务状态"""
-    return _batch_status_response(batch_id, include_logs=True)
+    result = _batch_status_response(batch_id, include_logs=True)
+    if result.get("lost"):
+        result = _batch_status_from_db(batch_id, include_logs=True)
+    return result
 
 
 @router.post("/outlook-batch/{batch_id}/cancel")
