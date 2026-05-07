@@ -5,11 +5,12 @@ Web UI 启动入口
 import uvicorn
 import logging
 import sys
-from pathlib import Path
-
-# 添加项目根目录到 Python 路径
-# PyInstaller 打包后 __file__ 在临时解压目录，需要用 sys.executable 所在目录作为数据目录
 import os
+import signal
+import traceback
+import threading
+from datetime import datetime
+from pathlib import Path
 if getattr(sys, 'frozen', False):
     # 打包后：使用可执行文件所在目录
     project_root = Path(sys.executable).parent
@@ -18,6 +19,47 @@ else:
     project_root = Path(__file__).parent
     _src_root = project_root
 sys.path.insert(0, str(_src_root))
+
+
+# ── 进程退出捕获（诊断容器被谁杀死） ──────────────────────────
+_shutdown_logged = threading.Lock()
+
+def _capture_shutdown(signum=None, frame=None):
+    """记录进程退出原因，用于诊断容器异常重启。"""
+    with _shutdown_logged:
+        lines = [
+            "=" * 60,
+            f"[SHUTDOWN] 进程退出时间: {datetime.now().isoformat()}",
+        ]
+        if signum is not None:
+            sig_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else f"signal={signum}"
+            lines.append(f"[SHUTDOWN] 信号: {sig_name} (signum={signum})")
+        else:
+            lines.append("[SHUTDOWN] 触发方式: atexit / 正常退出")
+        lines.append(f"[SHUTDOWN] PID: {os.getpid()}  PPID: {os.getppid()}")
+        if frame is not None:
+            lines.append("[SHUTDOWN] 调用栈:")
+            for line in traceback.format_stack(frame):
+                lines.append(f"  {line.rstrip()}")
+        lines.append("=" * 60)
+        for line in lines:
+            print(line, flush=True)
+            try:
+                logging.getLogger("shutdown").warning(line)
+            except Exception:
+                print(line, flush=True)
+    if signum is not None:
+        sys.exit(0)
+
+# 注册信号处理
+for sig in (signal.SIGTERM, signal.SIGINT):
+    try:
+        signal.signal(sig, _capture_shutdown)
+    except Exception:
+        pass
+
+import atexit
+atexit.register(_capture_shutdown)
 
 from src.core.utils import setup_logging
 from src.database.init_db import initialize_database

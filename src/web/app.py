@@ -329,7 +329,17 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def shutdown_event():
         """应用关闭事件"""
-        logger.info("应用关闭")
+        import os as _os
+        import traceback as _tb
+        pid = _os.getpid()
+        ppid = _os.getppid()
+        stack = ''.join(_tb.format_stack())
+        logger.warning(
+            "应用关闭 | PID=%s PPID=%s | 调用栈:\n%s",
+            pid, ppid, stack[:2000]
+        )
+        # 同时写入 stderr 确保容器日志可见
+        print(f"[SHUTDOWN] FastAPI shutdown PID={pid} PPID={ppid}", flush=True)
 
     return app
 
