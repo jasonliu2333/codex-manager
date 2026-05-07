@@ -2344,7 +2344,7 @@ function renderPhoneStatsAggregate(rows) {
     elements.phoneStatsAggregate.innerHTML = rows.map(row => `
         <tr>
             <td>${escapeHtml(row.sms_provider || '-')}</td>
-            <td>${escapeHtml(row.country_key || (row.country != null ? String(row.country) : '-'))}</td>
+            <td>${escapeHtml(row.country_display || row.country_key || (row.country != null ? String(row.country) : '-'))}</td>
             <td>${escapeHtml(row.provider_slot || '-')}</td>
             <td>${escapeHtml(String(row.attempts || 0))}</td>
             <td>${escapeHtml(String(row.success_count || 0))}</td>
@@ -2367,7 +2367,7 @@ function renderPhoneStatsRecords(records) {
             <td>${escapeHtml(formatDateTime(item.created_at) || '-')}</td>
             <td>${escapeHtml(item.account_email || '-')}</td>
             <td>${escapeHtml(item.sms_provider || '-')}</td>
-            <td>${escapeHtml(item.country_key || (item.country != null ? String(item.country) : '-'))}</td>
+            <td>${escapeHtml(item.country_display || item.country_key || (item.country != null ? String(item.country) : '-'))}</td>
             <td>${escapeHtml(item.phone_number || '-')}</td>
             <td>${escapeHtml(item.provider_slot || '-')}</td>
             <td>${escapeHtml(String(item.provider_quote ?? '-'))}</td>

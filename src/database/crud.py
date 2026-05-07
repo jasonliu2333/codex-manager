@@ -10,6 +10,9 @@ from sqlalchemy import and_, or_, desc, asc, func
 from .models import Account, EmailService, RegistrationTask, Setting, Proxy, CpaService, Sub2ApiService, PhoneVerificationAttempt, PhoneNumberReputation
 
 
+PHONE_REPUTATION_MAX_SUCCESS_USES = 3
+
+
 # ============================================================================
 # 账户 CRUD
 # ============================================================================
@@ -433,6 +436,8 @@ def update_phone_verification_attempt(
 
 
 def get_phone_number_reputation(db: Session, sms_provider: str, phone_number: str) -> Optional[PhoneNumberReputation]:
+    sms_provider = str(sms_provider or "").strip().lower() or "herosms"
+    phone_number = str(phone_number or "").strip()
     return db.query(PhoneNumberReputation).filter(
         PhoneNumberReputation.sms_provider == sms_provider,
         PhoneNumberReputation.phone_number == phone_number,
@@ -455,6 +460,8 @@ def upsert_phone_number_reputation(
     activation_cost: Optional[float] = None,
     result_label: Optional[str] = None,
 ) -> PhoneNumberReputation:
+    sms_provider = str(sms_provider or "").strip().lower() or "herosms"
+    phone_number = str(phone_number or "").strip()
     record = get_phone_number_reputation(db, sms_provider, phone_number)
     now = datetime.utcnow()
     if not record:
@@ -473,6 +480,10 @@ def upsert_phone_number_reputation(
     if success:
         record.success_count = int(record.success_count or 0) + 1
         record.last_result = result_label or "success"
+        if int(record.success_count or 0) >= PHONE_REPUTATION_MAX_SUCCESS_USES:
+            record.blacklisted = True
+            record.last_error_code = record.last_error_code or "phone_success_usage_limit"
+            record.last_error_message = record.last_error_message or f"号码成功使用已达到 {PHONE_REPUTATION_MAX_SUCCESS_USES} 次上限"
     else:
         record.failure_count = int(record.failure_count or 0) + 1
         record.last_result = result_label or "failed"

@@ -18,6 +18,7 @@ from ..sms import SMSActivation, SMSProviderConfig, get_sms_provider
 SMS_REUSE_POOL_KEY = "herosms.reuse_pool"
 SMS_ACTIVATION_WINDOW_SECONDS = 20 * 60
 SMS_PENDING_CANCEL_KEY = "sms.pending_cancel_pool"
+PHONE_REPUTATION_MAX_SUCCESS_USES = 3
 _REUSE_POOL_LOCK = threading.RLock()
 _PHONE_STATS_SCHEMA_LOCK = threading.RLock()
 _PHONE_STATS_SCHEMA_READY = False
@@ -141,6 +142,12 @@ def _extract_error_code_from_text(error_text: str) -> Optional[str]:
         "phone_number_blocked",
         "phone_number_invalid",
         "phone_number_not_supported",
+        "phone_number_banned",
+        "phone_number_unavailable",
+        "phone number cannot be used",
+        "phone number is unavailable",
+        "number unavailable",
+        "temporarily unavailable",
         "too_many_attempts",
         "too_many_requests",
         "no_numbers",
@@ -161,6 +168,17 @@ def _classify_phone_failure_type(error_code: str = "", error_message: str = "") 
         "phone_number_blocked",
         "phone_number_invalid",
         "phone_number_not_supported",
+        "phone_number_banned",
+        "phone_number_unavailable",
+        "phone number already in use",
+        "phone number blocked",
+        "phone number banned",
+        "invalid phone number",
+        "unsupported phone number",
+        "phone number cannot be used",
+        "phone number is unavailable",
+        "number unavailable",
+        "temporarily unavailable",
         "history_blacklist_skip",
         "bad_key",
         "no_balance",
@@ -197,17 +215,48 @@ def _classify_phone_failure_type(error_code: str = "", error_message: str = "") 
 
 
 def _should_blacklist_phone_failure(error_code: str = "", error_message: str = "") -> bool:
-    return _classify_phone_failure_type(error_code, error_message) == "hard_invalid"
+    text = f"{error_code} {error_message}".lower()
+    blacklist_markers = [
+        "sms_code_timeout",
+        "等待短信验证码超时",
+        "phone_max_usage_exceeded",
+        "maximum number of accounts",
+        "phone_number_in_use",
+        "phone number already in use",
+        "phone_number_blocked",
+        "phone number blocked",
+        "phone_number_banned",
+        "phone number banned",
+        "phone_number_invalid",
+        "invalid phone number",
+        "phone_number_not_supported",
+        "unsupported phone number",
+        "phone verification failed for this number",
+        "phone_number_unavailable",
+        "phone number cannot be used",
+        "phone number is unavailable",
+        "number unavailable",
+        "temporarily unavailable",
+    ]
+    return _classify_phone_failure_type(error_code, error_message) == "hard_invalid" or any(
+        marker in text for marker in blacklist_markers
+    )
 
 
 def _is_phone_blacklisted(provider_name: str, phone_number: str) -> Optional[dict]:
     try:
+        provider_name = normalize_sms_provider_name(provider_name or "herosms")
         with get_db() as db:
             record = crud.get_phone_number_reputation(db, provider_name, phone_number)
-            if not record or not record.blacklisted:
+            if not record:
+                return None
+            success_count = int(record.success_count or 0)
+            blacklisted = bool(record.blacklisted) or success_count >= PHONE_REPUTATION_MAX_SUCCESS_USES
+            if not blacklisted:
                 return None
             return {
                 "failure_count": int(record.failure_count or 0),
+                "success_count": success_count,
                 "last_error_code": record.last_error_code,
                 "last_error_message": record.last_error_message,
             }
@@ -380,7 +429,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
         try:
             _cleanup_reuse_pool(client)
             _cleanup_pending_cancels(client)
-            reuse_entry = _claim_reusable_activation(cfg.service, cfg.country, reuse_max_uses) if reuse_enabled else None
+            reuse_entry = _claim_reusable_activation(provider_name, cfg.service, cfg.country, reuse_max_uses) if reuse_enabled else None
             if reuse_entry:
                 activation = SMSActivation(
                     activation_id=str(reuse_entry["activation_id"]),
@@ -541,38 +590,6 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     raise last_request_error
                 engine._log(f"add-phone: 取号成功 {activation.phone_number} (activation={activation.activation_id})")
 
-                blacklist_info = _is_phone_blacklisted(provider_name, activation.phone_number)
-                if blacklist_info:
-                    reason_text = (
-                        f"历史失败 {blacklist_info.get('failure_count')} 次，"
-                        f"last_code={blacklist_info.get('last_error_code') or '-'}, "
-                        f"last_error={blacklist_info.get('last_error_message') or '-'}"
-                    )
-                    engine._log(f"add-phone: 号码 {activation.phone_number} 命中历史失败黑名单，直接跳过: {reason_text}", "warning")
-                    _update_phone_verification_record(
-                        verification_attempt_id,
-                        invalid=True,
-                        failure_stage="history_blacklist_skip",
-                        error_code="history_blacklist_skip",
-                        error_message=reason_text[:1000],
-                    )
-                    _record_phone_reputation(
-                        provider_name=provider_name,
-                        phone_number=activation.phone_number,
-                        service=cfg.service,
-                        country=cfg.country if cfg.country and int(cfg.country) > 0 else None,
-                        country_key=cfg.country_key or None,
-                        provider_slot=provider_slot_used,
-                        success=False,
-                        blacklisted=True,
-                        error_code="history_blacklist_skip",
-                        error_message=reason_text,
-                        activation_cost=activation.activation_cost,
-                        result_label="history_blacklist_skip",
-                    )
-                    client.cancel_activation(activation.activation_id)
-                    continue
-
                 if number_attempt < target_number_index:
                     engine._log(f"add-phone: 当前为第 {number_attempt} 个号码，配置要求从第 {target_number_index} 个号码开始使用，跳过当前号码", "warning")
                     _update_phone_verification_record(
@@ -584,6 +601,40 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     )
                     client.cancel_activation(activation.activation_id)
                     continue
+
+            blacklist_info = _is_phone_blacklisted(provider_name, activation.phone_number)
+            if blacklist_info:
+                reason_text = (
+                    f"历史失败 {blacklist_info.get('failure_count')} 次，"
+                    f"历史成功 {blacklist_info.get('success_count', 0)} 次，"
+                    f"last_code={blacklist_info.get('last_error_code') or '-'}"
+                )
+                engine._log(f"add-phone: 号码 {activation.phone_number} 命中黑名单，直接跳过: {reason_text}", "warning")
+                _update_phone_verification_record(
+                    verification_attempt_id,
+                    invalid=True,
+                    failure_stage="history_blacklist_skip",
+                    error_code="history_blacklist_skip",
+                    error_message=reason_text[:1000],
+                )
+                _record_phone_reputation(
+                    provider_name=provider_name,
+                    phone_number=activation.phone_number,
+                    service=cfg.service,
+                    country=cfg.country if cfg.country and int(cfg.country) > 0 else None,
+                    country_key=cfg.country_key or None,
+                    provider_slot=provider_slot_used,
+                    success=False,
+                    blacklisted=True,
+                    error_code="history_blacklist_skip",
+                    error_message=reason_text,
+                    activation_cost=activation.activation_cost,
+                    result_label="history_blacklist_skip",
+                )
+                if reused_activation:
+                    _discard_reusable_activation(activation.activation_id, reason_text[:300])
+                client.cancel_activation(activation.activation_id)
+                continue
 
             headers = _phone_headers(engine, "https://auth.openai.com/add-phone")
             endpoint_settings = get_settings()
@@ -692,6 +743,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             if reuse_enabled:
                 should_finish = _record_activation_success(
                     activation,
+                    provider_name=provider_name,
                     service=cfg.service,
                     country=cfg.country,
                     max_uses=reuse_max_uses,
@@ -1279,14 +1331,18 @@ def _save_pending_cancel_pool(pool: list[dict]) -> None:
         )
 
 
-def _claim_reusable_activation(service: str, country: int, max_uses: int) -> Optional[dict]:
+def _claim_reusable_activation(provider_name: str, service: str, country: int, max_uses: int) -> Optional[dict]:
     """从复用池领取一个号码；领取后标记为 in_use，避免并发任务同时使用同一个号码。"""
     now = _utc_now()
+    provider_name = normalize_sms_provider_name(provider_name or "herosms")
     with _REUSE_POOL_LOCK:
         pool = _load_reuse_pool()
         changed = False
         for item in pool:
             if item.get("state") != "active":
+                continue
+            item_provider = normalize_sms_provider_name(item.get("sms_provider") or "herosms")
+            if item_provider != provider_name:
                 continue
             if str(item.get("service")) != str(service) or int(item.get("country") or 0) != int(country):
                 continue
@@ -1353,6 +1409,7 @@ def _register_new_activation(
 def _record_activation_success(
     activation: SMSActivation,
     *,
+    provider_name: str,
     service: str,
     country: int,
     max_uses: int,
@@ -1363,6 +1420,7 @@ def _record_activation_success(
 ) -> bool:
     """记录号码成功使用次数。返回 True 表示应结束当前短信平台 activation。"""
     now = _utc_now()
+    provider_name = normalize_sms_provider_name(provider_name or "herosms")
     with _REUSE_POOL_LOCK:
         pool = _load_reuse_pool()
         item = next((x for x in pool if str(x.get("activation_id")) == str(activation.activation_id)), None)
@@ -1370,6 +1428,7 @@ def _record_activation_success(
             item = {
                 "activation_id": str(activation.activation_id),
                 "phone_number": activation.phone_number,
+                "sms_provider": provider_name,
                 "raw_number": activation.raw_number,
                 "country_phone_code": activation.country_phone_code,
                 "activation_cost": activation.activation_cost,
@@ -1386,6 +1445,7 @@ def _record_activation_success(
             used_codes.append(code)
         item.update({
             "service": service,
+            "sms_provider": provider_name,
             "country": country,
             "phone_number": activation.phone_number,
             "raw_number": activation.raw_number,
@@ -1669,4 +1729,3 @@ def _summarize_retry_reason(error_text: str) -> str:
     if "phone number cannot be used" in text or "phone number is unavailable" in text or "number unavailable" in text or "temporarily unavailable" in text:
         return "号码当前不可用"
     return "当前号码不可用"
-

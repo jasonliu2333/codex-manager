@@ -32,6 +32,7 @@ from ...database import crud
 from ...database.models import Account, EmailService as EmailServiceModel, RegistrationTask, PhoneVerificationAttempt
 from ...database.session import get_db
 from ...services import EmailServiceFactory, EmailServiceType
+from .settings import SMS_COUNTRY_ZH
 from ..task_manager import task_manager
 
 logger = logging.getLogger(__name__)
@@ -41,12 +42,100 @@ refresh_batches: Dict[str, dict] = {}
 validate_batches: Dict[str, dict] = {}
 
 
+SMS_COUNTRY_CODE_EN = {
+    0: "Russia",
+    1: "Ukraine",
+    2: "Kazakhstan",
+    3: "China",
+    4: "Philippines",
+    5: "Myanmar",
+    6: "Indonesia",
+    7: "Malaysia",
+    8: "Kenya",
+    9: "Tanzania",
+    10: "Vietnam",
+    11: "Kyrgyzstan",
+    12: "United States",
+    13: "Israel",
+    14: "Hong Kong",
+    15: "Poland",
+    16: "England",
+    20: "Macao",
+    21: "Egypt",
+    22: "India",
+    23: "Ireland",
+    24: "Cambodia",
+    25: "Laos",
+    31: "South Africa",
+    32: "Romania",
+    33: "Colombia",
+    36: "Canada",
+    43: "Germany",
+    48: "Netherlands",
+    52: "Thailand",
+    54: "Mexico",
+    56: "Spain",
+    62: "Turkey",
+    73: "Brazil",
+    78: "France",
+    86: "Italy",
+    151: "Russia",
+    187: "United States",
+}
+
+SMS_COUNTRY_KEY_EN = {
+    "any": "Any",
+    "england": "England",
+    "uk": "United Kingdom",
+    "unitedkingdom": "United Kingdom",
+    "usa": "United States",
+    "us": "United States",
+    "unitedstates": "United States",
+    "russia": "Russia",
+    "china": "China",
+    "philippines": "Philippines",
+    "indonesia": "Indonesia",
+    "malaysia": "Malaysia",
+    "thailand": "Thailand",
+    "vietnam": "Vietnam",
+    "india": "India",
+    "brazil": "Brazil",
+    "france": "France",
+    "germany": "Germany",
+    "italy": "Italy",
+    "spain": "Spain",
+    "canada": "Canada",
+    "mexico": "Mexico",
+    "poland": "Poland",
+    "netherlands": "Netherlands",
+    "turkey": "Turkey",
+}
+
+
 def _extra_data_flag_filter(column, key: str, value: str):
     """兼容 JSON 序列化时有无空格的筛选条件。"""
     return or_(
         column.like(f'%"{key}":"{value}"%'),
         column.like(f'%"{key}": "{value}"%'),
     )
+
+
+def _format_phone_stats_country(country: Optional[int], country_key: Optional[str]) -> str:
+    """统计页国家显示：优先中文(英文)名称，最后才回退代码/key。"""
+    raw_key = str(country_key or "").strip()
+    normalized_key = raw_key.lower().replace("-", "").replace("_", "").replace(" ", "")
+    en_name = SMS_COUNTRY_KEY_EN.get(normalized_key)
+    if not en_name and country is not None:
+        try:
+            en_name = SMS_COUNTRY_CODE_EN.get(int(country))
+        except Exception:
+            en_name = None
+    if not en_name and raw_key:
+        en_name = " ".join(part.capitalize() for part in raw_key.replace("-", "_").split("_") if part)
+    if en_name:
+        zh_name = SMS_COUNTRY_ZH.get(en_name) or ("任意" if en_name == "Any" else en_name)
+        return f"{zh_name}({en_name})" if zh_name != en_name else en_name
+    return str(country) if country is not None else "-"
 
 
 def _extra_data_bool_filter(column, key: str, value: bool):
@@ -2032,6 +2121,7 @@ async def get_phone_verification_stats(
                 "sms_provider": row.sms_provider,
                 "country": row.country,
                 "country_key": row.country_key,
+                "country_display": _format_phone_stats_country(row.country, row.country_key),
                 "provider_slot": row.provider_slot,
                 "attempts": attempts,
                 "success_count": success_count,
@@ -2112,6 +2202,7 @@ async def get_phone_verification_records(
                     "service": item.service,
                     "country": item.country,
                     "country_key": item.country_key,
+                    "country_display": _format_phone_stats_country(item.country, item.country_key),
                     "operator": item.operator,
                     "phone_number": item.phone_number,
                     "activation_id": item.activation_id,
