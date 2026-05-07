@@ -449,15 +449,16 @@
                             <table class="data-table">
                                 <thead>
                                     <tr>
-                                        <th>平台</th>
-                                        <th>国家</th>
-                                        <th>providerIds</th>
-                                        <th>尝试</th>
-                                        <th>通过</th>
-                                        <th>通过率</th>
-                                        <th>均扣费</th>
-                                        <th>记录报价</th>
-                                        <th>记录库存</th>
+                                        <th data-phone-stats-sort="sms_provider">平台</th>
+                                        <th data-phone-stats-sort="country_display">国家</th>
+                                        <th data-phone-stats-sort="provider_slot">providerIds</th>
+                                        <th data-phone-stats-sort="attempts">尝试</th>
+                                        <th data-phone-stats-sort="success_count">通过</th>
+                                        <th data-phone-stats-sort="invalid_count">失败/无效</th>
+                                        <th data-phone-stats-sort="pass_rate">通过率</th>
+                                        <th data-phone-stats-sort="avg_cost">均扣费</th>
+                                        <th data-phone-stats-sort="avg_provider_quote">记录报价</th>
+                                        <th data-phone-stats-sort="recorded_provider_count">记录库存</th>
                                     </tr>
                                 </thead>
                                 <tbody id="phone-stats-aggregate"></tbody>

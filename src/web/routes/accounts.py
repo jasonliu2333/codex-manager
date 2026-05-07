@@ -2231,6 +2231,8 @@ async def get_phone_verification_stats(
     error_code: Optional[str] = None,
     result_status: Optional[str] = None,
     failure_type: Optional[str] = None,
+    sort_by: str = Query("pass_rate"),
+    sort_dir: str = Query("desc"),
 ):
     since = datetime.utcnow() - timedelta(days=days)
     with get_db() as db:
@@ -2277,7 +2279,7 @@ async def get_phone_verification_stats(
             filtered.c.country,
             filtered.c.country_key,
             filtered.c.provider_slot,
-        ).order_by(desc("attempts"), desc("success_count")).limit(200).all()
+        ).all()
         rows = []
         for row in grouped:
             attempts = int(row.attempts or 0)
@@ -2296,8 +2298,41 @@ async def get_phone_verification_stats(
                 "avg_provider_quote": round(float(row.avg_provider_quote or 0), 6),
                 "recorded_provider_count": int(row.max_provider_count or 0),
             })
+        sort_key = (sort_by or "pass_rate").strip()
+        sort_reverse = (sort_dir or "desc").strip().lower() != "asc"
+        sort_fields = {
+            "sms_provider": lambda item: str(item.get("sms_provider") or "").lower(),
+            "country": lambda item: item.get("country") if item.get("country") is not None else -1,
+            "country_display": lambda item: str(item.get("country_display") or "").lower(),
+            "country_key": lambda item: str(item.get("country_key") or "").lower(),
+            "provider_slot": lambda item: str(item.get("provider_slot") or "").lower(),
+            "attempts": lambda item: int(item.get("attempts") or 0),
+            "success_count": lambda item: int(item.get("success_count") or 0),
+            "invalid_count": lambda item: int(item.get("invalid_count") or 0),
+            "pass_rate": lambda item: float(item.get("pass_rate") or 0),
+            "avg_cost": lambda item: float(item.get("avg_cost") or 0),
+            "avg_provider_quote": lambda item: float(item.get("avg_provider_quote") or 0),
+            "recorded_provider_count": lambda item: int(item.get("recorded_provider_count") or 0),
+        }
+        if sort_key not in sort_fields:
+            sort_key = "pass_rate"
+        if sort_key == "pass_rate":
+            rows.sort(key=lambda item: (
+                sort_fields[sort_key](item),
+                int(item.get("attempts") or 0),
+                int(item.get("success_count") or 0),
+            ), reverse=sort_reverse)
+        else:
+            rows.sort(key=lambda item: (
+                sort_fields[sort_key](item),
+                float(item.get("pass_rate") or 0),
+                int(item.get("attempts") or 0),
+            ), reverse=sort_reverse)
+        rows = rows[:200]
         return {
             "days": days,
+            "sort_by": sort_key,
+            "sort_dir": "desc" if sort_reverse else "asc",
             "summary": {
                 "total": total,
                 "success": success,

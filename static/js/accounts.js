@@ -21,6 +21,8 @@ let recentTaskCache = [];
 let phoneStatsPage = 1;
 const phoneStatsPageSize = 20;
 let phoneStatsTotal = 0;
+let phoneStatsSortBy = 'pass_rate';
+let phoneStatsSortDir = 'desc';
 const BATCH_STATUS_MAX_FAILURES = 5;
 const BATCH_STATUS_RECONNECT_INTERVAL_MS = 10000;
 
@@ -172,6 +174,19 @@ function initEventListeners() {
             phoneStatsPage += 1;
             loadPhoneVerificationStats();
         }
+    });
+    document.querySelectorAll('[data-phone-stats-sort]').forEach(header => {
+        header.addEventListener('click', () => {
+            const field = header.dataset.phoneStatsSort;
+            if (!field) return;
+            if (phoneStatsSortBy === field) {
+                phoneStatsSortDir = phoneStatsSortDir === 'desc' ? 'asc' : 'desc';
+            } else {
+                phoneStatsSortBy = field;
+                phoneStatsSortDir = ['sms_provider', 'country_display', 'provider_slot'].includes(field) ? 'asc' : 'desc';
+            }
+            loadPhoneVerificationStats();
+        });
     });
 
     // 批量刷新Token
@@ -2439,8 +2454,13 @@ async function loadPhoneVerificationStats() {
     if (providerSlot) statsParams.set('provider_slot', providerSlot);
     if (phone) statsParams.set('phone_number', phone);
     if (errorCode) statsParams.set('error_code', errorCode);
+    statsParams.set('sort_by', phoneStatsSortBy);
+    statsParams.set('sort_dir', phoneStatsSortDir);
     const stats = await api.get(`/accounts/phone-verification/stats?${statsParams.toString()}`);
+    phoneStatsSortBy = stats.sort_by || phoneStatsSortBy;
+    phoneStatsSortDir = stats.sort_dir || phoneStatsSortDir;
     renderPhoneStatsSummary(stats.summary || {});
+    updatePhoneStatsSortHeaders();
     renderPhoneStatsAggregate(stats.rows || []);
 
     const params = new URLSearchParams({
@@ -2470,6 +2490,22 @@ async function loadPhoneVerificationStats() {
     if (elements.phoneStatsNextPage) elements.phoneStatsNextPage.disabled = phoneStatsPage >= totalPages;
 }
 
+function updatePhoneStatsSortHeaders() {
+    document.querySelectorAll('[data-phone-stats-sort]').forEach(header => {
+        const label = header.dataset.label || header.textContent.replace(/[↕↑↓]/g, '').trim();
+        header.dataset.label = label;
+        const field = header.dataset.phoneStatsSort;
+        const active = field === phoneStatsSortBy;
+        const arrow = !active ? '↕' : (phoneStatsSortDir === 'asc' ? '↑' : '↓');
+        header.textContent = `${label} ${arrow}`;
+        header.title = active
+            ? `当前按 ${label} ${phoneStatsSortDir === 'asc' ? '升序' : '降序'} 排序，点击切换`
+            : `点击按 ${label} 排序`;
+        header.style.cursor = 'pointer';
+        header.style.whiteSpace = 'nowrap';
+    });
+}
+
 function renderPhoneStatsSummary(summary) {
     if (!elements.phoneStatsSummary) return;
     const cards = [
@@ -2491,7 +2527,7 @@ function renderPhoneStatsSummary(summary) {
 function renderPhoneStatsAggregate(rows) {
     if (!elements.phoneStatsAggregate) return;
     if (!rows.length) {
-        elements.phoneStatsAggregate.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted);">暂无统计数据</td></tr>';
+        elements.phoneStatsAggregate.innerHTML = '<tr><td colspan="10" style="text-align:center; color:var(--text-muted);">暂无统计数据</td></tr>';
         return;
     }
     elements.phoneStatsAggregate.innerHTML = rows.map(row => `
@@ -2501,6 +2537,7 @@ function renderPhoneStatsAggregate(rows) {
             <td>${escapeHtml(row.provider_slot || '-')}</td>
             <td>${escapeHtml(String(row.attempts || 0))}</td>
             <td>${escapeHtml(String(row.success_count || 0))}</td>
+            <td>${escapeHtml(String(row.invalid_count || 0))}</td>
             <td>${escapeHtml((((row.pass_rate || 0) * 100)).toFixed(1))}%</td>
             <td>${escapeHtml(String(row.avg_cost ?? 0))}</td>
             <td>${escapeHtml(String(row.avg_provider_quote ?? 0))}</td>
