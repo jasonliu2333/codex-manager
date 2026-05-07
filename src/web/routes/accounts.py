@@ -32,7 +32,7 @@ from ...database import crud
 from ...database.models import Account, EmailService as EmailServiceModel, RegistrationTask, PhoneVerificationAttempt
 from ...database.session import get_db
 from ...services import EmailServiceFactory, EmailServiceType
-from .settings import SMS_COUNTRY_ZH
+from .settings import SMS_COUNTRY_ZH, _sms_provider_cache_get
 from ..task_manager import task_manager
 
 logger = logging.getLogger(__name__)
@@ -60,24 +60,75 @@ SMS_COUNTRY_CODE_EN = {
     14: "Hong Kong",
     15: "Poland",
     16: "England",
+    17: "Madagascar",
+    18: "Democratic Republic of the Congo",
+    19: "Nigeria",
     20: "Macao",
     21: "Egypt",
     22: "India",
     23: "Ireland",
     24: "Cambodia",
     25: "Laos",
+    26: "Haiti",
+    27: "Ivory Coast",
+    28: "Gambia",
+    29: "Serbia",
+    30: "Yemen",
     31: "South Africa",
     32: "Romania",
     33: "Colombia",
+    34: "Estonia",
+    35: "Azerbaijan",
     36: "Canada",
+    37: "Morocco",
+    38: "Ghana",
+    39: "Argentina",
+    40: "Uzbekistan",
+    41: "Cameroon",
+    42: "Chad",
     43: "Germany",
+    44: "Lithuania",
+    45: "Croatia",
+    46: "Sweden",
+    47: "Iraq",
     48: "Netherlands",
+    49: "Latvia",
+    50: "Austria",
+    51: "Belarus",
     52: "Thailand",
+    53: "Saudi Arabia",
     54: "Mexico",
+    55: "Taiwan",
     56: "Spain",
+    57: "Iran",
+    58: "Algeria",
+    59: "Slovenia",
+    60: "Bangladesh",
+    61: "Senegal",
     62: "Turkey",
+    63: "Czech Republic",
+    64: "Sri Lanka",
+    65: "Peru",
+    66: "Pakistan",
+    67: "New Zealand",
+    68: "Guinea",
+    69: "Mali",
+    70: "Venezuela",
+    71: "Ethiopia",
+    72: "Mongolia",
     73: "Brazil",
+    74: "Afghanistan",
+    75: "Uganda",
+    76: "Angola",
+    77: "Cyprus",
     78: "France",
+    79: "Papua New Guinea",
+    80: "Mozambique",
+    81: "Nepal",
+    82: "Belgium",
+    83: "Bulgaria",
+    84: "Hungary",
+    85: "Moldova",
     86: "Italy",
     151: "Russia",
     187: "United States",
@@ -120,10 +171,67 @@ def _extra_data_flag_filter(column, key: str, value: str):
     )
 
 
-def _format_phone_stats_country(country: Optional[int], country_key: Optional[str]) -> str:
-    """统计页国家显示：优先中文(英文)名称，最后才回退代码/key。"""
+def _normalize_phone_stats_country_key(country_key: Optional[str]) -> str:
+    return str(country_key or "").strip().lower().replace("-", "").replace("_", "").replace(" ", "")
+
+
+def _country_name_display(en_name: Optional[str], fallback: str = "-") -> str:
+    en_name = str(en_name or "").strip()
+    if not en_name:
+        return fallback
+    zh_name = SMS_COUNTRY_ZH.get(en_name) or ("任意" if en_name == "Any" else en_name)
+    return f"{zh_name}({en_name})" if zh_name != en_name else en_name
+
+
+def _find_cached_sms_country_name(provider: Optional[str], country: Optional[int], country_key: Optional[str]) -> Optional[str]:
+    provider_name = normalize_sms_provider_name(provider or "herosms")
+    try:
+        cached = _sms_provider_cache_get("countries", provider_name, allow_stale=True)
+    except Exception:
+        cached = None
+    rows = (cached or {}).get("data") if isinstance(cached, dict) else None
+    if not isinstance(rows, list):
+        return None
+
     raw_key = str(country_key or "").strip()
-    normalized_key = raw_key.lower().replace("-", "").replace("_", "").replace(" ", "")
+    normalized_key = _normalize_phone_stats_country_key(raw_key)
+    country_int: Optional[int] = None
+    if country is not None:
+        try:
+            country_int = int(country)
+        except Exception:
+            country_int = None
+
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        item_code = item.get("code")
+        item_key = str(item.get("country_key") or "").strip()
+        matched = False
+        if country_int is not None and item_code is not None:
+            try:
+                matched = int(item_code) == country_int
+            except Exception:
+                matched = False
+        if not matched and normalized_key and _normalize_phone_stats_country_key(item_key) == normalized_key:
+            matched = True
+        if not matched:
+            continue
+        en_name = str(item.get("en_name") or item.get("name") or "").strip()
+        zh_name = str(item.get("zh_name") or "").strip()
+        if zh_name and en_name and zh_name != en_name:
+            return f"{zh_name}({en_name})"
+        return _country_name_display(en_name or zh_name, fallback=zh_name or en_name or None)
+    return None
+
+
+def _format_phone_stats_country(provider: Optional[str], country: Optional[int], country_key: Optional[str]) -> str:
+    """统计页国家显示：优先中文(英文)名称，最后才回退代码/key。"""
+    cached_name = _find_cached_sms_country_name(provider, country, country_key)
+    if cached_name:
+        return cached_name
+    raw_key = str(country_key or "").strip()
+    normalized_key = _normalize_phone_stats_country_key(raw_key)
     en_name = SMS_COUNTRY_KEY_EN.get(normalized_key)
     if not en_name and country is not None:
         try:
@@ -133,8 +241,7 @@ def _format_phone_stats_country(country: Optional[int], country_key: Optional[st
     if not en_name and raw_key:
         en_name = " ".join(part.capitalize() for part in raw_key.replace("-", "_").split("_") if part)
     if en_name:
-        zh_name = SMS_COUNTRY_ZH.get(en_name) or ("任意" if en_name == "Any" else en_name)
-        return f"{zh_name}({en_name})" if zh_name != en_name else en_name
+        return _country_name_display(en_name)
     return str(country) if country is not None else "-"
 
 
@@ -2121,7 +2228,7 @@ async def get_phone_verification_stats(
                 "sms_provider": row.sms_provider,
                 "country": row.country,
                 "country_key": row.country_key,
-                "country_display": _format_phone_stats_country(row.country, row.country_key),
+                "country_display": _format_phone_stats_country(row.sms_provider, row.country, row.country_key),
                 "provider_slot": row.provider_slot,
                 "attempts": attempts,
                 "success_count": success_count,
@@ -2202,7 +2309,7 @@ async def get_phone_verification_records(
                     "service": item.service,
                     "country": item.country,
                     "country_key": item.country_key,
-                    "country_display": _format_phone_stats_country(item.country, item.country_key),
+                    "country_display": _format_phone_stats_country(item.sms_provider, item.country, item.country_key),
                     "operator": item.operator,
                     "phone_number": item.phone_number,
                     "activation_id": item.activation_id,

@@ -123,16 +123,39 @@ def test_phone_blacklist_hits_when_success_count_reaches_limit(monkeypatch):
 
 
 def test_phone_stats_country_display_uses_chinese_english_names():
-    assert accounts._format_phone_stats_country(16, "") == "英国(England)"
-    assert accounts._format_phone_stats_country(None, "england") == "英国(England)"
-    assert accounts._format_phone_stats_country(187, "") == "美国(United States)"
+    assert accounts._format_phone_stats_country("herosms", 16, "") == "英国(England)"
+    assert accounts._format_phone_stats_country("herosms", None, "england") == "英国(England)"
+    assert accounts._format_phone_stats_country("herosms", 187, "") == "美国(United States)"
+    assert accounts._format_phone_stats_country("smsbower", 76, "") == "安哥拉(Angola)"
+
+
+def test_phone_stats_country_display_prefers_sms_provider_cache(monkeypatch):
+    def _fake_cache_get(section, cache_key, *, allow_stale=False):
+        assert section == "countries"
+        assert cache_key == "smsbower"
+        assert allow_stale is True
+        return {
+            "data": [
+                {
+                    "code": 76,
+                    "country_key": "",
+                    "name": "Cachedland",
+                    "zh_name": "缓存国",
+                    "en_name": "Cachedland",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(accounts, "_sms_provider_cache_get", _fake_cache_get)
+
+    assert accounts._format_phone_stats_country("smsbower", 76, "") == "缓存国(Cachedland)"
 
 
 def test_phone_stats_country_display_fallback_to_code():
     """无映射时回退到 country 代码或 '-'。"""
-    assert accounts._format_phone_stats_country(999, "") == "999"
-    assert accounts._format_phone_stats_country(999, "unknown_slug") == "Unknown Slug"
-    assert accounts._format_phone_stats_country(None, None) == "-"
+    assert accounts._format_phone_stats_country("herosms", 999, "") == "999"
+    assert accounts._format_phone_stats_country("herosms", 999, "unknown_slug") == "Unknown Slug"
+    assert accounts._format_phone_stats_country("herosms", None, None) == "-"
 
 
 def test_all_number_invalid_errors_are_blacklisted():
