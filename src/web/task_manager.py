@@ -11,9 +11,16 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional, List, Callable, Any
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
+
+_LOCAL_TZ = timezone(timedelta(hours=8))  # Asia/Shanghai
+
+
+def _local_now() -> datetime:
+    """返回本地时区时间（Asia/Shanghai）"""
+    return datetime.now(_LOCAL_TZ)
 
 _db_sync_enabled = True
 
@@ -150,7 +157,7 @@ class TaskManager:
                     "type": "log",
                     "task_uuid": task_uuid,
                     "message": log_message,
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": _local_now().isoformat()
                 })
                 # 发送成功后更新 sent_index
                 with _ws_lock:
@@ -169,7 +176,7 @@ class TaskManager:
             "type": "status",
             "task_uuid": task_uuid,
             "status": status,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": _local_now().isoformat(),
             **kwargs
         }
 
@@ -306,7 +313,7 @@ class TaskManager:
                     "type": "log",
                     "batch_id": batch_id,
                     "message": log_message,
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": _local_now().isoformat()
                 })
                 # 发送成功后更新 sent_index
                 with _ws_lock:
@@ -350,7 +357,7 @@ class TaskManager:
                 await ws.send_json({
                     "type": "status",
                     "batch_id": batch_id,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": _local_now().isoformat(),
                     **status
                 })
             except Exception as e:

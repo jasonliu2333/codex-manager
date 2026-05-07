@@ -50,8 +50,9 @@ def setup_logging(
     # 清除现有的处理器
     root_logger.handlers.clear()
 
-    # 创建格式化器
+    # 创建格式化器（使用本地时区）
     formatter = logging.Formatter(log_format)
+    formatter.converter = time.localtime
 
     # 控制台处理器
     console_handler = logging.StreamHandler(sys.stdout)
