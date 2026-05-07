@@ -29,10 +29,15 @@ router = APIRouter()
 running_tasks: dict = {}
 # 批量任务存储
 batch_tasks: Dict[str, dict] = {}
+_reported_batch_status_fallbacks: set[str] = set()
+_reported_lost_batch_statuses: set[str] = set()
 
 
 def _lost_batch_status(batch_id: str, include_logs: bool = False) -> dict:
     message = "批量任务状态已丢失，后端可能在任务执行中重启；请刷新账号列表确认实际结果"
+    if batch_id not in _reported_lost_batch_statuses:
+        logger.warning("注册批量任务状态丢失: batch_id=%s include_logs=%s", batch_id, include_logs)
+        _reported_lost_batch_statuses.add(batch_id)
     response = {
         "batch_id": batch_id,
         "status": "unknown",
@@ -75,6 +80,14 @@ def _batch_status_response(batch_id: str, include_logs: bool = False) -> dict:
     status = task_manager.get_batch_status(batch_id)
     logs = task_manager.get_batch_logs(batch_id)
     if status or logs:
+        if batch_id not in _reported_batch_status_fallbacks:
+            logger.info(
+                "注册批量任务本地状态缺失，使用 task_manager 快照兜底: batch_id=%s status=%s logs=%s",
+                batch_id,
+                (status or {}).get("status"),
+                len(logs),
+            )
+            _reported_batch_status_fallbacks.add(batch_id)
         response = {
             "batch_id": batch_id,
             "status": "running",

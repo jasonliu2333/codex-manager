@@ -334,7 +334,12 @@
             </div>
             <div class="modal-body">
                 <div style="margin-bottom: 12px; display:flex; align-items:center; justify-content:space-between; gap:12px;"><div id="recovery-log-status" style="color: var(--text-muted); font-size: 0.9rem;">等待开始...</div><button class="btn btn-danger btn-sm" id="recovery-log-cancel-btn" onclick="cancelCurrentBatchTask()" style="display:none;">取消任务</button></div>
-                <div id="recovery-log-output" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; min-height: 320px; max-height: 60vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.82rem; line-height: 1.55; font-family: var(--font-mono, monospace);"></div>
+                <div style="font-size:0.85rem; color:var(--text-muted); margin:0 0 6px;">后端任务日志</div>
+                <div id="recovery-log-output" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; min-height: 300px; max-height: 46vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.82rem; line-height: 1.55; font-family: var(--font-mono, monospace);"></div>
+                <details id="recovery-client-log-panel" style="margin-top:12px;">
+                    <summary style="cursor:pointer; color:var(--text-muted); font-size:0.85rem;">前端诊断日志（连接/轮询/重连）</summary>
+                    <div id="recovery-client-log-output" style="margin-top:8px; background: var(--bg-tertiary, var(--bg-secondary)); border: 1px dashed var(--border-color); border-radius: 8px; padding: 10px; min-height: 80px; max-height: 18vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.78rem; line-height: 1.5; font-family: var(--font-mono, monospace); color: var(--text-muted);"></div>
+                </details>
             </div>
         </div>
     </div>

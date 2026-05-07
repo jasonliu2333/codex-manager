@@ -62,6 +62,8 @@ const elements = {
     closeModal: document.getElementById('close-modal'),
     recoveryLogModal: document.getElementById('recovery-log-modal'),
     recoveryLogOutput: document.getElementById('recovery-log-output'),
+    recoveryClientLogOutput: document.getElementById('recovery-client-log-output'),
+    recoveryClientLogPanel: document.getElementById('recovery-client-log-panel'),
     recoveryLogStatus: document.getElementById('recovery-log-status'),
     closeRecoveryLogModal: document.getElementById('close-recovery-log-modal'),
     resumeTaskBtn: document.getElementById('resume-task-btn'),
@@ -763,6 +765,24 @@ function appendRecoveryLog(message) {
     elements.recoveryLogOutput.scrollTop = elements.recoveryLogOutput.scrollHeight;
 }
 
+function appendRecoveryClientLog(message, options = {}) {
+    if (!elements.recoveryClientLogOutput) {
+        appendRecoveryLog(message);
+        return;
+    }
+    const line = document.createElement('div');
+    const time = new Date().toLocaleTimeString();
+    line.textContent = `[${time}] ${message}`;
+    elements.recoveryClientLogOutput.appendChild(line);
+    while (elements.recoveryClientLogOutput.childElementCount > 200) {
+        elements.recoveryClientLogOutput.firstChild.remove();
+    }
+    elements.recoveryClientLogOutput.scrollTop = elements.recoveryClientLogOutput.scrollHeight;
+    if (options.expand && elements.recoveryClientLogPanel) {
+        elements.recoveryClientLogPanel.open = true;
+    }
+}
+
 function cleanupRecoveryWatchers() {
     if (recoverySocket) {
         recoverySocket.close();
@@ -778,6 +798,10 @@ function openRecoveryLogModal(title = '任务日志') {
     cleanupRecoveryWatchers();
     currentBatchCancelEndpoint = null;
     elements.recoveryLogOutput.replaceChildren();
+    elements.recoveryClientLogOutput?.replaceChildren();
+    if (elements.recoveryClientLogPanel) {
+        elements.recoveryClientLogPanel.open = false;
+    }
     elements.recoveryLogStatus.textContent = title;
     const cancelBtn = document.getElementById('recovery-log-cancel-btn');
     if (cancelBtn) cancelBtn.style.display = 'none';
@@ -794,9 +818,11 @@ function isRecoverySocketActive() {
 function ensureRecoverySocket(path) {
     if (!path || isRecoverySocketActive()) return;
     try {
+        appendRecoveryClientLog(`正在重连日志 WebSocket: ${path}`);
         connectRecoverySocket(path);
     } catch (error) {
         console.warn('重连日志 WebSocket 失败:', error);
+        appendRecoveryClientLog(`重连日志 WebSocket 失败: ${error.message || error}`, { expand: true });
     }
 }
 
@@ -806,7 +832,7 @@ function createBatchStatusFailureHandler(label, wsPath) {
     return {
         reset() {
             if (failures > 0) {
-                appendRecoveryLog(`[系统] ${label}状态连接已恢复`);
+                appendRecoveryClientLog(`${label}状态连接已恢复`);
             }
             failures = 0;
         },
@@ -815,10 +841,11 @@ function createBatchStatusFailureHandler(label, wsPath) {
             const message = error?.message || String(error || '未知错误');
             const remaining = BATCH_STATUS_MAX_FAILURES - failures;
             if (failures === 1 || failures === 3 || remaining <= 0) {
-                appendRecoveryLog(
+                appendRecoveryClientLog(
                     remaining > 0
-                        ? `[系统] ${label}状态连接中断，任务可能仍在执行，将继续重试 (${failures}/${BATCH_STATUS_MAX_FAILURES}): ${message}`
-                        : `[系统] ${label}状态连续查询失败，已停止自动监听: ${message}`
+                        ? `${label}状态连接中断，任务可能仍在执行，将继续重试 (${failures}/${BATCH_STATUS_MAX_FAILURES}): ${message}`
+                        : `${label}状态连续查询失败，已停止自动监听: ${message}`,
+                    { expand: true }
                 );
             }
             elements.recoveryLogStatus.textContent =
@@ -850,7 +877,7 @@ function finishBatchWatcher(batch, options = {}) {
     if (cancelled) {
         appendRecoveryLog(options.cancelledMessage || '[系统] 批量任务已取消');
     } else if (lost) {
-        appendRecoveryLog(`[系统] ${options.label || '批量任务'}状态已丢失：${batch.error || batch.message || '后端可能已重启，请刷新账号列表确认实际结果'}`);
+        appendRecoveryClientLog(`${options.label || '批量任务'}状态已丢失：${batch.error || batch.message || '后端可能已重启，请刷新账号列表确认实际结果'}`, { expand: true });
     } else {
         appendRecoveryLog(options.doneMessage || '[系统] 批量任务已结束');
     }
@@ -939,7 +966,7 @@ async function loadExistingTaskLogs(logUrl) {
         elements.recoveryLogOutput.replaceChildren();
         logs.forEach(line => appendRecoveryLog(line));
     } catch (error) {
-        appendRecoveryLog(`[系统] 读取已有日志失败: ${error.message}`);
+        appendRecoveryClientLog(`读取已有后端日志失败: ${error.message}`, { expand: true });
     }
 }
 
@@ -1026,7 +1053,7 @@ function closeRecoveryLogModal() {
     cleanupRecoveryWatchers();
     elements.recoveryLogModal.classList.remove('active');
     if (currentTaskContext && !currentTaskContext.finished) {
-        appendRecoveryLog('[系统] 日志窗口已关闭，后台任务仍会继续执行，可稍后继续查看。');
+        appendRecoveryClientLog('日志窗口已关闭，后台任务仍会继续执行，可稍后继续查看。');
         renderResumeTaskButton();
     }
 }
@@ -1034,15 +1061,22 @@ function closeRecoveryLogModal() {
 function connectRecoverySocket(path) {
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
     if (isRecoverySocketActive()) return;
+    appendRecoveryClientLog(`连接日志 WebSocket: ${path}`);
     recoverySocket = new WebSocket(`${scheme}://${window.location.host}${path}`);
+    recoverySocket.onopen = () => {
+        appendRecoveryClientLog(`日志 WebSocket 已连接: ${path}`);
+    };
     recoverySocket.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type === 'log' && data.message) {
             appendRecoveryLog(data.message);
         }
     };
+    recoverySocket.onclose = (event) => {
+        appendRecoveryClientLog(`日志 WebSocket 已断开: code=${event.code || '-'} reason=${event.reason || '-'}`, { expand: event.code !== 1000 });
+    };
     recoverySocket.onerror = () => {
-        appendRecoveryLog('[系统] 日志连接异常，已切换为状态轮询');
+        appendRecoveryClientLog('日志连接异常，已切换为状态轮询', { expand: true });
     };
 }
 
@@ -1069,7 +1103,7 @@ function watchRefreshTask(taskUuid) {
                 toast.error(task.error || 'Token 刷新失败');
             }
         } catch (error) {
-            appendRecoveryLog(`[系统] 刷新状态查询失败: ${error.message}`);
+            appendRecoveryClientLog(`刷新状态查询失败: ${error.message}`, { expand: true });
             cleanupRecoveryWatchers();
             refreshingAccountIds.clear();
             updateBatchButtons();
@@ -1098,7 +1132,7 @@ function watchValidateTask(taskUuid) {
                 toast.error(task.error || 'Token 验证失败');
             }
         } catch (error) {
-            appendRecoveryLog(`[系统] 验证状态查询失败: ${error.message}`);
+            appendRecoveryClientLog(`验证状态查询失败: ${error.message}`, { expand: true });
             cleanupRecoveryWatchers();
             isBatchValidating = false;
             updateBatchButtons();
@@ -1127,7 +1161,7 @@ function watchSubscriptionTask(taskUuid) {
                 toast.error(task.error || '订阅检测失败');
             }
         } catch (error) {
-            appendRecoveryLog(`[系统] 订阅检测状态查询失败: ${error.message}`);
+            appendRecoveryClientLog(`订阅检测状态查询失败: ${error.message}`, { expand: true });
             cleanupRecoveryWatchers();
             updateBatchButtons();
         }
@@ -1155,7 +1189,7 @@ function watchRecoveryTask(taskUuid) {
                 toast.error(task.error_message || 'OAuth 补录失败');
             }
         } catch (error) {
-            appendRecoveryLog(`[系统] 状态查询失败: ${error.message}`);
+            appendRecoveryClientLog(`补录状态查询失败: ${error.message}`, { expand: true });
             cleanupRecoveryWatchers();
             updateBatchButtons();
         }
