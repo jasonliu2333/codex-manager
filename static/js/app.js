@@ -36,6 +36,8 @@ let wsHeartbeatInterval = null;  // 心跳定时器
 let batchWsHeartbeatInterval = null;  // 批量任务心跳定时器
 let activeTaskUuid = null;   // 当前活跃的单任务 UUID（用于页面重新可见时重连）
 let activeBatchId = null;    // 当前活跃的批量任务 ID（用于页面重新可见时重连）
+const BATCH_POLL_MAX_FAILURES = 5;
+const BATCH_POLL_RECONNECT_INTERVAL_MS = 10000;
 
 // DOM 元素
 const elements = {
@@ -1383,6 +1385,12 @@ async function handleOutlookBatchRegistration() {
 
 // 连接批量任务 WebSocket
 function connectBatchWebSocket(batchId) {
+    if (batchWebSocket && (
+        batchWebSocket.readyState === WebSocket.OPEN ||
+        batchWebSocket.readyState === WebSocket.CONNECTING
+    )) {
+        return;
+    }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/api/ws/batch/${batchId}`;
 
@@ -1514,9 +1522,18 @@ function cancelBatchViaWebSocket() {
 
 // 开始轮询 Outlook 批量状态（降级方案）
 function startOutlookBatchPolling(batchId) {
+    if (batchPollingInterval) return;
+    let failureCount = 0;
+    let lastReconnectAt = 0;
+    let lastLogIndex = 0;
+
     batchPollingInterval = setInterval(async () => {
         try {
             const data = await api.get(`/registration/outlook-batch/${batchId}`);
+            if (failureCount > 0) {
+                addLog('info', '[系统] 批量状态连接已恢复');
+            }
+            failureCount = 0;
 
             // 更新进度
             updateBatchProgress({
@@ -1528,13 +1545,12 @@ function startOutlookBatchPolling(batchId) {
 
             // 输出日志
             if (data.logs && data.logs.length > 0) {
-                const lastLogIndex = batchPollingInterval.lastLogIndex || 0;
                 for (let i = lastLogIndex; i < data.logs.length; i++) {
                     const log = data.logs[i];
                     const logType = getLogType(log);
                     addLog(logType, log);
                 }
-                batchPollingInterval.lastLogIndex = data.logs.length;
+                lastLogIndex = data.logs.length;
             }
 
             // 检查是否完成
@@ -1545,21 +1561,46 @@ function startOutlookBatchPolling(batchId) {
                 // 只显示一次 toast
                 if (!toastShown) {
                     toastShown = true;
-                    addLog('info', `[完成] Outlook 批量任务完成！成功: ${data.success}, 失败: ${data.failed}, 跳过: ${data.skipped || 0}`);
-                    if (data.success > 0) {
+                    const status = String(data.status || '').toLowerCase();
+                    const lost = data.lost || status === 'unknown' || status === 'lost';
+                    if (lost) {
+                        addLog('warning', `[警告] 批量任务状态已丢失：${data.error || '后端可能已重启，请刷新账号列表确认实际结果'}`);
+                        toast.warning('批量任务状态已丢失，请刷新账号列表确认结果');
+                    } else {
+                        addLog('info', `[完成] Outlook 批量任务完成！成功: ${data.success}, 失败: ${data.failed}, 跳过: ${data.skipped || 0}`);
+                    }
+                    if (!lost && data.success > 0) {
                         toast.success(`Outlook 批量注册完成，成功 ${data.success} 个`);
                         loadRecentAccounts();
-                    } else {
+                    } else if (!lost) {
                         toast.warning('Outlook 批量注册完成，但没有成功注册任何账号');
                     }
                 }
             }
         } catch (error) {
-            console.error('轮询 Outlook 批量状态失败:', error);
+            failureCount += 1;
+            const remaining = BATCH_POLL_MAX_FAILURES - failureCount;
+            console.error(`轮询 Outlook 批量状态失败 (${failureCount}/${BATCH_POLL_MAX_FAILURES}):`, error);
+            if (failureCount === 1 || failureCount === 3 || remaining <= 0) {
+                addLog(
+                    remaining > 0 ? 'warning' : 'error',
+                    remaining > 0
+                        ? `[系统] 批量状态连接中断，任务可能仍在执行，将继续重试 (${failureCount}/${BATCH_POLL_MAX_FAILURES}): ${error.message}`
+                        : `[系统] 批量状态连续查询失败，已停止自动监听: ${error.message}`
+                );
+            }
+            const now = Date.now();
+            if (remaining > 0 && now - lastReconnectAt >= BATCH_POLL_RECONNECT_INTERVAL_MS) {
+                lastReconnectAt = now;
+                connectBatchWebSocket(batchId);
+            }
+            if (remaining <= 0) {
+                stopBatchPolling();
+                resetButtons();
+                toast.warning('批量状态连接中断，请稍后刷新账号列表确认结果');
+            }
         }
     }, 2000);
-
-    batchPollingInterval.lastLogIndex = 0;
 }
 
 // ============== 页面可见性重连机制 ==============

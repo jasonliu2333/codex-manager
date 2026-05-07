@@ -31,6 +31,73 @@ running_tasks: dict = {}
 batch_tasks: Dict[str, dict] = {}
 
 
+def _lost_batch_status(batch_id: str, include_logs: bool = False) -> dict:
+    message = "批量任务状态已丢失，后端可能在任务执行中重启；请刷新账号列表确认实际结果"
+    response = {
+        "batch_id": batch_id,
+        "status": "unknown",
+        "total": 0,
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "skipped": 0,
+        "current_index": 0,
+        "cancelled": False,
+        "finished": True,
+        "lost": True,
+        "error": message,
+        "progress": "0/0",
+    }
+    if include_logs:
+        response["logs"] = [f"[系统] {message}"]
+    return response
+
+
+def _batch_status_response(batch_id: str, include_logs: bool = False) -> dict:
+    batch = batch_tasks.get(batch_id)
+    if batch:
+        response = {
+            "batch_id": batch_id,
+            "total": batch["total"],
+            "completed": batch["completed"],
+            "success": batch["success"],
+            "failed": batch["failed"],
+            "skipped": batch.get("skipped", 0),
+            "current_index": batch["current_index"],
+            "cancelled": batch["cancelled"],
+            "finished": batch.get("finished", False),
+            "progress": f"{batch['completed']}/{batch['total']}",
+        }
+        if include_logs:
+            response["logs"] = batch.get("logs", [])
+        return response
+
+    status = task_manager.get_batch_status(batch_id)
+    logs = task_manager.get_batch_logs(batch_id)
+    if status or logs:
+        response = {
+            "batch_id": batch_id,
+            "status": "running",
+            "total": 0,
+            "completed": 0,
+            "success": 0,
+            "failed": 0,
+            "skipped": 0,
+            "current_index": 0,
+            "cancelled": False,
+            "finished": False,
+        }
+        response.update(status or {})
+        total = int(response.get("total") or 0)
+        completed = int(response.get("completed") or 0)
+        response["progress"] = f"{completed}/{total}"
+        if include_logs:
+            response["logs"] = logs
+        return response
+
+    return _lost_batch_status(batch_id, include_logs=include_logs)
+
+
 # ============== Proxy Helper Functions ==============
 
 def _mask_proxy_url(proxy_url: Optional[str]) -> str:
@@ -1097,21 +1164,7 @@ async def start_batch_registration(
 @router.get("/batch/{batch_id}")
 async def get_batch_status(batch_id: str):
     """获取批量任务状态"""
-    if batch_id not in batch_tasks:
-        raise HTTPException(status_code=404, detail="批量任务不存在")
-
-    batch = batch_tasks[batch_id]
-    return {
-        "batch_id": batch_id,
-        "total": batch["total"],
-        "completed": batch["completed"],
-        "success": batch["success"],
-        "failed": batch["failed"],
-        "current_index": batch["current_index"],
-        "cancelled": batch["cancelled"],
-        "finished": batch.get("finished", False),
-        "progress": f"{batch['completed']}/{batch['total']}"
-    }
+    return _batch_status_response(batch_id)
 
 
 @router.post("/batch/{batch_id}/cancel")
@@ -1693,23 +1746,7 @@ async def start_outlook_batch_registration(
 @router.get("/outlook-batch/{batch_id}")
 async def get_outlook_batch_status(batch_id: str):
     """获取 Outlook 批量任务状态"""
-    if batch_id not in batch_tasks:
-        raise HTTPException(status_code=404, detail="批量任务不存在")
-
-    batch = batch_tasks[batch_id]
-    return {
-        "batch_id": batch_id,
-        "total": batch["total"],
-        "completed": batch["completed"],
-        "success": batch["success"],
-        "failed": batch["failed"],
-        "skipped": batch.get("skipped", 0),
-        "current_index": batch["current_index"],
-        "cancelled": batch["cancelled"],
-        "finished": batch.get("finished", False),
-        "logs": batch.get("logs", []),
-        "progress": f"{batch['completed']}/{batch['total']}"
-    }
+    return _batch_status_response(batch_id, include_logs=True)
 
 
 @router.post("/outlook-batch/{batch_id}/cancel")

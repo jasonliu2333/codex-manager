@@ -21,6 +21,8 @@ let recentTaskCache = [];
 let phoneStatsPage = 1;
 const phoneStatsPageSize = 20;
 let phoneStatsTotal = 0;
+const BATCH_STATUS_MAX_FAILURES = 5;
+const BATCH_STATUS_RECONNECT_INTERVAL_MS = 10000;
 
 // DOM 元素
 const elements = {
@@ -782,6 +784,97 @@ function openRecoveryLogModal(title = '任务日志') {
     elements.recoveryLogModal.classList.add('active');
 }
 
+function isRecoverySocketActive() {
+    return recoverySocket && (
+        recoverySocket.readyState === WebSocket.OPEN ||
+        recoverySocket.readyState === WebSocket.CONNECTING
+    );
+}
+
+function ensureRecoverySocket(path) {
+    if (!path || isRecoverySocketActive()) return;
+    try {
+        connectRecoverySocket(path);
+    } catch (error) {
+        console.warn('重连日志 WebSocket 失败:', error);
+    }
+}
+
+function createBatchStatusFailureHandler(label, wsPath) {
+    let failures = 0;
+    let lastReconnectAt = 0;
+    return {
+        reset() {
+            if (failures > 0) {
+                appendRecoveryLog(`[系统] ${label}状态连接已恢复`);
+            }
+            failures = 0;
+        },
+        handle(error) {
+            failures += 1;
+            const message = error?.message || String(error || '未知错误');
+            const remaining = BATCH_STATUS_MAX_FAILURES - failures;
+            if (failures === 1 || failures === 3 || remaining <= 0) {
+                appendRecoveryLog(
+                    remaining > 0
+                        ? `[系统] ${label}状态连接中断，任务可能仍在执行，将继续重试 (${failures}/${BATCH_STATUS_MAX_FAILURES}): ${message}`
+                        : `[系统] ${label}状态连续查询失败，已停止自动监听: ${message}`
+                );
+            }
+            elements.recoveryLogStatus.textContent =
+                remaining > 0
+                    ? `状态连接中断，正在重试 ${failures}/${BATCH_STATUS_MAX_FAILURES}，任务可能仍在执行`
+                    : '状态连接中断，请稍后刷新账号列表确认结果';
+
+            const now = Date.now();
+            if (remaining > 0 && now - lastReconnectAt >= BATCH_STATUS_RECONNECT_INTERVAL_MS) {
+                lastReconnectAt = now;
+                ensureRecoverySocket(wsPath);
+            }
+            return remaining <= 0;
+        },
+    };
+}
+
+function isLostBatchStatus(batch) {
+    const status = String(batch?.status || '').toLowerCase();
+    return !!batch?.lost || status === 'lost' || status === 'unknown';
+}
+
+function finishBatchWatcher(batch, options = {}) {
+    const status = String(batch?.status || '').toLowerCase();
+    const lost = isLostBatchStatus(batch);
+    const failed = status === 'failed' || status === 'error';
+    const cancelled = status === 'cancelled';
+
+    if (cancelled) {
+        appendRecoveryLog(options.cancelledMessage || '[系统] 批量任务已取消');
+    } else if (lost) {
+        appendRecoveryLog(`[系统] ${options.label || '批量任务'}状态已丢失：${batch.error || batch.message || '后端可能已重启，请刷新账号列表确认实际结果'}`);
+    } else {
+        appendRecoveryLog(options.doneMessage || '[系统] 批量任务已结束');
+    }
+
+    cleanupRecoveryWatchers();
+    if (typeof options.onFinished === 'function') {
+        options.onFinished(batch);
+    }
+    loadAccounts();
+    updateBatchButtons();
+
+    if (lost) {
+        toast.warning(`${options.label || '批量任务'}状态已丢失，请刷新账号列表确认结果`);
+    } else if (failed) {
+        toast.error(options.failedToast || `${options.label || '批量任务'}失败`);
+    } else if (cancelled) {
+        toast.warning(options.cancelledToast || `${options.label || '批量任务'}已取消`);
+    } else if (typeof options.successToast === 'function') {
+        toast.success(options.successToast(batch));
+    } else {
+        toast.success(options.successToast || `${options.label || '批量任务'}完成`);
+    }
+}
+
 function persistTaskContext(context) {
     if (!context || !context.id) return;
     const key = 'accounts_recent_tasks';
@@ -940,6 +1033,7 @@ function closeRecoveryLogModal() {
 
 function connectRecoverySocket(path) {
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    if (isRecoverySocketActive()) return;
     recoverySocket = new WebSocket(`${scheme}://${window.location.host}${path}`);
     recoverySocket.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -1069,90 +1163,115 @@ function watchRecoveryTask(taskUuid) {
 }
 
 function watchRecoveryBatch(batchId) {
-    connectRecoverySocket(`/api/ws/batch/${batchId}`);
+    const wsPath = `/api/ws/batch/${batchId}`;
+    const failureHandler = createBatchStatusFailureHandler('批量补录', wsPath);
+    connectRecoverySocket(wsPath);
     recoveryStatusTimer = setInterval(async () => {
         try {
             const batch = await api.get(`/accounts/recover-oauth/batch/${batchId}`);
+            failureHandler.reset();
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             updateStoredTaskContext({ id: batchId, status: batch.status, finished: !!batch.finished });
             if (batch.finished) {
-                appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量补录任务已取消' : '[系统] 批量补录任务已结束');
-                cleanupRecoveryWatchers();
-                loadAccounts();
-                updateBatchButtons();
-                toast.success(`批量补录完成，成功 ${batch.success}，失败 ${batch.failed}`);
+                finishBatchWatcher(batch, {
+                    label: '批量补录',
+                    cancelledMessage: '[系统] 批量补录任务已取消',
+                    doneMessage: '[系统] 批量补录任务已结束',
+                    failedToast: '批量补录失败',
+                    successToast: (data) => `批量补录完成，成功 ${data.success}，失败 ${data.failed}`,
+                });
             }
         } catch (error) {
-            appendRecoveryLog(`[系统] 批量状态查询失败: ${error.message}`);
-            cleanupRecoveryWatchers();
-            updateBatchButtons();
+            if (failureHandler.handle(error)) {
+                cleanupRecoveryWatchers();
+                updateBatchButtons();
+            }
         }
     }, 2000);
 }
 
 function watchValidateBatch(batchId) {
-    connectRecoverySocket(`/api/ws/batch/${batchId}`);
+    const wsPath = `/api/ws/batch/${batchId}`;
+    const failureHandler = createBatchStatusFailureHandler('批量验证', wsPath);
+    connectRecoverySocket(wsPath);
     recoveryStatusTimer = setInterval(async () => {
         try {
             const batch = await api.get(`/accounts/batch-validate/${batchId}`);
+            failureHandler.reset();
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             updateStoredTaskContext({ id: batchId, status: batch.status, finished: !!batch.finished });
             if (batch.finished) {
-                appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量验证任务已取消' : '[系统] 批量验证任务已结束');
-                cleanupRecoveryWatchers();
-                isBatchValidating = false;
-                loadAccounts();
-                updateBatchButtons();
-                toast.success(`批量验证完成，成功 ${batch.success}，失败 ${batch.failed}`);
+                finishBatchWatcher(batch, {
+                    label: '批量验证',
+                    cancelledMessage: '[系统] 批量验证任务已取消',
+                    doneMessage: '[系统] 批量验证任务已结束',
+                    failedToast: '批量验证失败',
+                    successToast: (data) => `批量验证完成，成功 ${data.success}，失败 ${data.failed}`,
+                    onFinished: () => { isBatchValidating = false; },
+                });
             }
         } catch (error) {
-            appendRecoveryLog(`[系统] 批量验证状态查询失败: ${error.message}`);
-            cleanupRecoveryWatchers();
-            updateBatchButtons();
+            if (failureHandler.handle(error)) {
+                cleanupRecoveryWatchers();
+                isBatchValidating = false;
+                updateBatchButtons();
+            }
         }
     }, 2000);
 }
 
 function watchSubscriptionBatch(batchId) {
-    connectRecoverySocket(`/api/ws/batch/${batchId}`);
+    const wsPath = `/api/ws/batch/${batchId}`;
+    const failureHandler = createBatchStatusFailureHandler('批量订阅检测', wsPath);
+    connectRecoverySocket(wsPath);
     recoveryStatusTimer = setInterval(async () => {
         try {
             const batch = await api.get(`/payment/accounts/batch-check-subscription/${batchId}`);
+            failureHandler.reset();
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             updateStoredTaskContext({ id: batchId, status: batch.status, finished: !!batch.finished });
             if (batch.finished) {
-                appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量订阅检测任务已取消' : '[系统] 批量订阅检测任务已结束');
-                cleanupRecoveryWatchers();
-                loadAccounts();
-                updateBatchButtons();
-                toast.success(`批量订阅检测完成，成功 ${batch.success}，失败 ${batch.failed}`);
+                finishBatchWatcher(batch, {
+                    label: '批量订阅检测',
+                    cancelledMessage: '[系统] 批量订阅检测任务已取消',
+                    doneMessage: '[系统] 批量订阅检测任务已结束',
+                    failedToast: '批量订阅检测失败',
+                    successToast: (data) => `批量订阅检测完成，成功 ${data.success}，失败 ${data.failed}`,
+                });
             }
         } catch (error) {
-            appendRecoveryLog(`[系统] 批量订阅检测状态查询失败: ${error.message}`);
-            cleanupRecoveryWatchers();
-            updateBatchButtons();
+            if (failureHandler.handle(error)) {
+                cleanupRecoveryWatchers();
+                updateBatchButtons();
+            }
         }
     }, 2000);
 }
 
 function watchRefreshBatch(batchId) {
-    connectRecoverySocket(`/api/ws/batch/${batchId}`);
+    const wsPath = `/api/ws/batch/${batchId}`;
+    const failureHandler = createBatchStatusFailureHandler('批量刷新', wsPath);
+    connectRecoverySocket(wsPath);
     recoveryStatusTimer = setInterval(async () => {
         try {
             const batch = await api.get(`/accounts/batch-refresh/${batchId}`);
+            failureHandler.reset();
             elements.recoveryLogStatus.textContent = `当前状态: ${batch.status} | 完成 ${batch.completed}/${batch.total} | 成功 ${batch.success} | 失败 ${batch.failed}`;
             updateStoredTaskContext({ id: batchId, status: batch.status, finished: !!batch.finished });
             if (batch.finished) {
-                appendRecoveryLog(batch.status === 'cancelled' ? '[系统] 批量刷新任务已取消' : '[系统] 批量刷新任务已结束');
-                cleanupRecoveryWatchers();
-                loadAccounts();
-                updateBatchButtons();
-                toast.success(`批量刷新完成，成功 ${batch.success}，失败 ${batch.failed}`);
+                finishBatchWatcher(batch, {
+                    label: '批量刷新',
+                    cancelledMessage: '[系统] 批量刷新任务已取消',
+                    doneMessage: '[系统] 批量刷新任务已结束',
+                    failedToast: '批量刷新失败',
+                    successToast: (data) => `批量刷新完成，成功 ${data.success}，失败 ${data.failed}`,
+                });
             }
         } catch (error) {
-            appendRecoveryLog(`[系统] 批量刷新状态查询失败: ${error.message}`);
-            cleanupRecoveryWatchers();
-            updateBatchButtons();
+            if (failureHandler.handle(error)) {
+                cleanupRecoveryWatchers();
+                updateBatchButtons();
+            }
         }
     }, 2000);
 }

@@ -18,6 +18,7 @@ from .accounts import (
     _mask_proxy_url,
     _probe_proxy_or_raise,
     _get_proxy_connect_retry_count,
+    _batch_status_response,
 )
 from ..task_manager import task_manager
 from ...core.openai.payment import (
@@ -246,10 +247,7 @@ def cancel_batch_check_subscription(batch_id: str):
 
 @router.get("/accounts/batch-check-subscription/{batch_id}")
 def get_batch_check_subscription(batch_id: str):
-    batch = subscription_batches.get(batch_id)
-    if not batch:
-        raise HTTPException(status_code=404, detail="批量任务不存在")
-    return batch
+    return _batch_status_response(batch_id, subscription_batches.get(batch_id))
 
 
 @router.get("/accounts/check-subscription/task/{task_uuid}")

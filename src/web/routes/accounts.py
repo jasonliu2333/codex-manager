@@ -42,6 +42,57 @@ refresh_batches: Dict[str, dict] = {}
 validate_batches: Dict[str, dict] = {}
 
 
+def _lost_batch_status(batch_id: str) -> dict:
+    """返回后端重启/内存状态丢失时的可读批量状态。"""
+    message = "批量任务状态已丢失，后端可能在任务执行中重启；请刷新账号列表确认实际结果"
+    return {
+        "batch_id": batch_id,
+        "status": "unknown",
+        "total": 0,
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "skipped": 0,
+        "current_index": 0,
+        "cancelled": False,
+        "finished": True,
+        "lost": True,
+        "error": message,
+        "logs": [f"[系统] {message}"],
+        "progress": "0/0",
+    }
+
+
+def _batch_status_response(batch_id: str, local_batch: Optional[dict]) -> dict:
+    """兼容本地批量 dict 与 task_manager 快照的批量状态响应。"""
+    if local_batch:
+        return local_batch
+
+    status = task_manager.get_batch_status(batch_id)
+    logs = task_manager.get_batch_logs(batch_id)
+    if status or logs:
+        response = {
+            "batch_id": batch_id,
+            "status": "running",
+            "total": 0,
+            "completed": 0,
+            "success": 0,
+            "failed": 0,
+            "skipped": 0,
+            "current_index": 0,
+            "cancelled": False,
+            "finished": False,
+            "logs": logs,
+        }
+        response.update(status or {})
+        total = int(response.get("total") or 0)
+        completed = int(response.get("completed") or 0)
+        response["progress"] = f"{completed}/{total}"
+        return response
+
+    return _lost_batch_status(batch_id)
+
+
 SMS_COUNTRY_CODE_EN = {
     0: "Russia",
     1: "Ukraine",
@@ -2103,18 +2154,12 @@ async def cancel_batch_recover(batch_id: str):
 
 @router.get("/batch-refresh/{batch_id}")
 async def get_batch_refresh_status(batch_id: str):
-    batch = refresh_batches.get(batch_id)
-    if not batch:
-        raise HTTPException(status_code=404, detail="批量任务不存在")
-    return batch
+    return _batch_status_response(batch_id, refresh_batches.get(batch_id))
 
 
 @router.get("/batch-validate/{batch_id}")
 async def get_batch_validate_status(batch_id: str):
-    batch = validate_batches.get(batch_id)
-    if not batch:
-        raise HTTPException(status_code=404, detail="批量任务不存在")
-    return batch
+    return _batch_status_response(batch_id, validate_batches.get(batch_id))
 
 
 @router.get("/validate/task/{task_uuid}")
@@ -2435,10 +2480,7 @@ async def get_recover_oauth_task(task_uuid: str):
 @router.get("/recover-oauth/batch/{batch_id}")
 async def get_recover_oauth_batch(batch_id: str):
     """获取批量补录任务状态。"""
-    batch = recovery_batches.get(batch_id)
-    if not batch:
-        raise HTTPException(status_code=404, detail="批量任务不存在")
-    return batch
+    return _batch_status_response(batch_id, recovery_batches.get(batch_id))
 
 
 @router.post("/batch-validate")
