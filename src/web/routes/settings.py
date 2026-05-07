@@ -32,6 +32,8 @@ router = APIRouter()
 
 SEEKPROXY_GEO_CACHE_TTL = 86400
 SEEKPROXY_GEO_CACHE_PATH = Path("data/cache/seekproxy_geo_cache.json")
+SMS_PROVIDER_CACHE_TTL = 7 * 86400
+SMS_PROVIDER_CACHE_PATH = Path("data/cache/sms_provider_cache.json")
 
 
 SMS_COUNTRY_ZH = {
@@ -545,6 +547,80 @@ def _seekproxy_cache_set(section: str, cache_key: str, rows: list[dict]) -> None
         "data": rows,
     }
     _save_seekproxy_geo_cache(cache)
+
+
+def _ensure_sms_provider_cache_dir() -> None:
+    try:
+        SMS_PROVIDER_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _load_sms_provider_cache() -> dict:
+    try:
+        if SMS_PROVIDER_CACHE_PATH.exists():
+            return json.loads(SMS_PROVIDER_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("读取短信平台缓存失败: %s", exc)
+    return {}
+
+
+def _save_sms_provider_cache(data: dict) -> None:
+    try:
+        _ensure_sms_provider_cache_dir()
+        SMS_PROVIDER_CACHE_PATH.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("保存短信平台缓存失败: %s", exc)
+
+
+def _format_cache_updated_at(ts: float) -> Optional[str]:
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(ts)))
+    except Exception:
+        return None
+
+
+def _sms_provider_cache_get(section: str, cache_key: str, *, allow_stale: bool = False) -> Optional[dict]:
+    cache = _load_sms_provider_cache()
+    node = ((cache.get(section) or {}) if isinstance(cache, dict) else {})
+    entry = node.get(cache_key) if isinstance(node, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    data = entry.get("data")
+    if not isinstance(data, list):
+        return None
+    ts = float(entry.get("ts") or 0)
+    stale = time.time() - ts > SMS_PROVIDER_CACHE_TTL
+    if stale and not allow_stale:
+        return None
+    return {
+        "data": data,
+        "ts": ts,
+        "stale": stale,
+        "cache_updated_at": _format_cache_updated_at(ts),
+    }
+
+
+def _sms_provider_cache_set(section: str, cache_key: str, rows: list[dict]) -> dict:
+    ts = time.time()
+    cache = _load_sms_provider_cache()
+    if not isinstance(cache, dict):
+        cache = {}
+    section_node = cache.get(section)
+    if not isinstance(section_node, dict):
+        section_node = {}
+        cache[section] = section_node
+    section_node[cache_key] = {
+        "ts": ts,
+        "data": rows,
+    }
+    _save_sms_provider_cache(cache)
+    return {
+        "data": rows,
+        "ts": ts,
+        "stale": False,
+        "cache_updated_at": _format_cache_updated_at(ts),
+    }
 
 
 def _fetch_seekproxy_json(path: str, params: Optional[dict] = None) -> list[dict]:
@@ -1734,30 +1810,30 @@ async def test_sms_settings(request: SMSTestRequest):
 
 
 @router.get("/herosms/countries")
-async def get_sms_countries_legacy(provider: Optional[str] = Query(None)):
+async def get_sms_countries_legacy(provider: Optional[str] = Query(None), refresh: bool = Query(False)):
     """获取短信平台国家列表，用于前端可搜索选择。"""
     try:
         settings = get_settings()
         provider_name = normalize_sms_provider_name(provider or getattr(settings, "sms_provider", "herosms") or "herosms")
-        client = _build_sms_provider_from_settings(provider_name=provider_name)
-        normalized = _normalize_sms_country_rows(client.get_countries())
-        return {"countries": normalized}
+        return _load_sms_countries_with_cache(provider_name, refresh=refresh)
     except Exception as e:
         logger.warning("获取短信平台国家列表失败: %s", e)
+        if isinstance(e, HTTPException):
+            raise
         raise HTTPException(status_code=502, detail=f"获取短信平台国家列表失败: {e}")
 
 
 @router.get("/sms/countries")
-async def get_sms_countries(provider: Optional[str] = Query(None)):
+async def get_sms_countries(provider: Optional[str] = Query(None), refresh: bool = Query(False)):
     """获取短信平台国家列表（通用入口）。"""
     try:
         settings = get_settings()
         provider_name = normalize_sms_provider_name(provider or getattr(settings, "sms_provider", "herosms") or "herosms")
-        client = _build_sms_provider_from_settings(provider_name=provider_name)
-        normalized = _normalize_sms_country_rows(client.get_countries())
-        return {"countries": normalized}
+        return _load_sms_countries_with_cache(provider_name, refresh=refresh)
     except Exception as e:
         logger.warning("获取短信平台国家列表失败: %s", e)
+        if isinstance(e, HTTPException):
+            raise
         raise HTTPException(status_code=502, detail=f"获取短信平台国家列表失败: {e}")
 
 
@@ -1877,12 +1953,56 @@ def _normalize_sms_country_rows(countries: list[dict]) -> list[dict]:
     return normalized
 
 
+def _load_sms_countries_with_cache(provider_name: str, *, refresh: bool = False) -> dict:
+    provider_name = normalize_sms_provider_name(provider_name or "herosms")
+    cache_key = provider_name
+    if not refresh:
+        cached = _sms_provider_cache_get("countries", cache_key)
+        if cached is not None:
+            return {
+                "countries": cached["data"],
+                "provider": provider_name,
+                "cached": True,
+                "stale": False,
+                "cache_updated_at": cached.get("cache_updated_at"),
+            }
+
+    try:
+        client = _build_sms_provider_from_settings(provider_name=provider_name)
+        normalized = _normalize_sms_country_rows(client.get_countries())
+        cached = _sms_provider_cache_set("countries", cache_key, normalized)
+        return {
+            "countries": normalized,
+            "provider": provider_name,
+            "cached": False,
+            "stale": False,
+            "cache_updated_at": cached.get("cache_updated_at"),
+        }
+    except Exception as exc:
+        stale = _sms_provider_cache_get("countries", cache_key, allow_stale=True)
+        if stale is not None:
+            logger.warning("获取短信平台国家列表失败，使用缓存 provider=%s: %s", provider_name, exc)
+            return {
+                "countries": stale["data"],
+                "provider": provider_name,
+                "cached": True,
+                "stale": True,
+                "cache_updated_at": stale.get("cache_updated_at"),
+                "warning": f"获取短信平台国家列表失败，已使用缓存: {exc}",
+            }
+        raise
+
+
 def _beautify_top_country_rows(provider_name: str, rows: list[dict]) -> list[dict]:
     provider_name = normalize_sms_provider_name(provider_name)
     if provider_name == "5sim":
         rows = [row for row in rows if int(row.get("count") or 0) > 0]
     if provider_name == "herosms":
-        countries = _normalize_sms_country_rows(_build_sms_provider_from_settings(provider_name=provider_name).get_countries())
+        try:
+            countries = _load_sms_countries_with_cache(provider_name, refresh=False).get("countries") or []
+        except Exception as exc:
+            logger.warning("HeroSMS 推荐国家补充元数据失败，跳过国家列表 enrichment: %s", exc)
+            countries = []
         by_code = {int(item["code"]): item for item in countries if item.get("code") is not None}
         enriched = []
         for row in rows:
