@@ -237,7 +237,13 @@ class SMSBowerProvider(HeroSMSProvider):
         except_provider_ids: Optional[str] = None,
         phone_exception: Optional[str] = None,
         min_price: Optional[float] = None,
+        country_key: Optional[str] = None,
+        reuse: Optional[bool] = None,
+        voice: Optional[bool] = None,
+        forwarding: Optional[bool] = None,
+        forwarding_number: Optional[str] = None,
     ) -> SMSActivation:
+        del country_key, reuse, voice, forwarding, forwarding_number
         try:
             activation = self.client.request_number(
                 service=service or self.config.service,

@@ -1252,22 +1252,19 @@ def _request_number_with_provider_options(
     cfg: SMSProviderConfig,
     provider_ids: Optional[str],
 ):
-    try:
-        return client.request_number(
-            max_price=candidate_price,
-            operator=selected_operator or None,
-            provider_ids=provider_ids or cfg.provider_ids or None,
-            except_provider_ids=cfg.except_provider_ids or None,
-            phone_exception=cfg.phone_exception or None,
-            min_price=cfg.min_price,
-            country_key=cfg.country_key or None,
-            reuse=cfg.reuse,
-            voice=cfg.voice,
-            forwarding=cfg.forwarding,
-            forwarding_number=cfg.forwarding_number or None,
-        )
-    except TypeError:
-        return client.request_number(max_price=candidate_price, operator=selected_operator or None)
+    return client.request_number(
+        max_price=candidate_price,
+        operator=selected_operator or None,
+        provider_ids=provider_ids or cfg.provider_ids or None,
+        except_provider_ids=cfg.except_provider_ids or None,
+        phone_exception=cfg.phone_exception or None,
+        min_price=cfg.min_price,
+        country_key=cfg.country_key or None,
+        reuse=cfg.reuse,
+        voice=cfg.voice,
+        forwarding=cfg.forwarding,
+        forwarding_number=cfg.forwarding_number or None,
+    )
 
 
 def _get_saved_sms_api_key() -> str:
