@@ -604,44 +604,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                     if activation is not None:
                         break
                 if activation is None and last_request_error:
-                    err_text = str(last_request_error or "")
-                    # 所有 provider + 价格档均无号时，兜底不限 providerIds + 不限 maxPrice
-                    if "NO_NUMBERS" in err_text.upper() and provider_candidates:
-                        engine._log(
-                            "add-phone: 所有价格档/provider 候选均无号，使用不限 providerIds + 不限价兜底取号",
-                            "warning",
-                        )
-                        try:
-                            activation = _request_number_with_provider_options(
-                                client,
-                                candidate_price=None,
-                                selected_operator=selected_operator,
-                                cfg=cfg,
-                                provider_ids=None,
-                            )
-                            provider_slot_used = None
-                            balance_after = _safe_get_balance(client)
-                            engine._log(
-                                f"add-phone: 兜底取号成功 {activation.phone_number} "
-                                f"(activation={activation.activation_id}, cost={activation.activation_cost})"
-                            )
-                            charged_cost = _log_activation_cost(engine, activation, balance_before, balance_after)
-                            verification_attempt_id = _create_phone_verification_record(
-                                engine,
-                                cfg=cfg,
-                                activation=activation,
-                                provider_slot=None,
-                                provider_quote=None,
-                                provider_count=None,
-                                reused=False,
-                                charged_cost=charged_cost,
-                            )
-                            _persist_phone_stage(verification_attempt_id, "acquired_number", task_uuid=_task_uuid)
-                        except Exception as fallback_exc:
-                            engine._log(f"add-phone: 兜底取号也失败: {fallback_exc}", "warning")
-                            raise last_request_error
-                    if activation is None:
-                        raise last_request_error
+                    raise last_request_error
                 engine._log(f"add-phone: 取号成功 {activation.phone_number} (activation={activation.activation_id})")
 
                 if number_attempt < target_number_index:
