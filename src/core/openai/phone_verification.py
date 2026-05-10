@@ -689,15 +689,21 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
             )
             if send_resp is None or send_resp.status_code not in (200, 201, 204):
                 body = (getattr(send_resp, "text", "") or "")[:300] if send_resp is not None else ""
-                if _is_phone_max_usage_error(send_resp, body):
+                rejection_code = _extract_openai_phone_rejection_code(send_resp, body)
+                if rejection_code:
+                    # OpenAI 号码级拒绝 — 换号即可解决
+                    engine._log(
+                        f"add-phone: OpenAI 拒绝此号码 ({rejection_code})，自动换号重试",
+                        "warning",
+                    )
                     _update_phone_verification_record(
                         verification_attempt_id,
                         invalid=True,
                         failure_stage="submit_phone",
-                        error_code="phone_max_usage_exceeded",
-                        error_message=body or "手机号已达最大绑定次数",
+                        error_code=rejection_code,
+                        error_message=body or f"OpenAI 拒绝号码: {rejection_code}",
                     )
-                    raise RuntimeError(f"手机号已达最大绑定次数，需更换号码: {body}")
+                    raise RuntimeError(f"OpenAI 拒绝号码 ({rejection_code}): {body}")
                 _update_phone_verification_record(
                     verification_attempt_id,
                     invalid=True,
@@ -1703,20 +1709,54 @@ def _log_activation_cost(
     return charged
 
 
-def _is_phone_max_usage_error(response: Any, body: str) -> bool:
+# OpenAI 提交手机号阶段返回的"号码级拒绝"错误码 — 换号即可解决，不应终止任务
+_OPENAI_PHONE_REJECTION_CODES = frozenset({
+    "invalid_phone_number",
+    "phone_number_invalid",
+    "phone_number_not_supported",
+    "phone_number_in_use",
+    "phone_number_blocked",
+    "phone_number_banned",
+    "phone_number_unavailable",
+    "phone_max_usage_exceeded",
+})
+
+
+def _extract_openai_phone_rejection_code(response: Any, body: str) -> Optional[str]:
+    """从 OpenAI 提交手机号 400 响应中提取号码级拒绝错误码。非号码级错误返回 None。"""
     text = (body or "").lower()
-    if "phone_max_usage_exceeded" in text:
-        return True
-    if "maximum number of accounts" in text:
-        return True
+    # 尝试从 JSON body 提取 error.code
     try:
         data = response.json() if response is not None else {}
         error = data.get("error") if isinstance(data, dict) else {}
-        code = str((error or {}).get("code") or "").lower()
+        code = str((error or {}).get("code") or "").strip()
+        if code and (code in _OPENAI_PHONE_REJECTION_CODES or code.lower() in _OPENAI_PHONE_REJECTION_CODES):
+            return code
         message = str((error or {}).get("message") or "").lower()
-        return code == "phone_max_usage_exceeded" or "maximum number of accounts" in message
+        # message 中的关键词兜底
+        for candidate in _OPENAI_PHONE_REJECTION_CODES:
+            if candidate.replace("_", " ") in message or candidate in message:
+                return candidate
     except Exception:
-        return False
+        pass
+    # 文本兜底
+    for candidate in _OPENAI_PHONE_REJECTION_CODES:
+        if candidate in text:
+            return candidate
+    if "phone number cannot be used" in text or "phone number is unavailable" in text:
+        return "phone_number_unavailable"
+    if "maximum number of accounts" in text or "phone number is already linked" in text:
+        return "phone_max_usage_exceeded"
+    if "not valid" in text or "please try again" in text:
+        if "phone" in text or "number" in text:
+            return "invalid_phone_number"
+    return None
+
+
+def _is_phone_max_usage_error(response: Any, body: str) -> bool:
+    """保留旧函数名以兼容，内部委托到新函数。"""
+    code = _extract_openai_phone_rejection_code(response, body)
+    return code == "phone_max_usage_exceeded"
 
 
 def _should_retry_with_new_number(error_text: str) -> bool:
