@@ -953,6 +953,14 @@
                                 </div>
                             </div>
 
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="sms-retry-per-provider">同组合取号重试次数</label>
+                                    <input type="number" id="sms-retry-per-provider" name="retry_per_provider" value="1" min="1" max="50">
+                                    <span class="hint">同一 provider+price 组合返回 NO_NUMBERS 后连续快速重试次数。数据表明热门 provider 需多次重试才有概率抢到。</span>
+                                </div>
+                            </div>
+
                             <div class="form-row provider-group provider-smsbower">
                                 <div class="form-group">
                                     <label style="display:flex;align-items:center;gap:8px;">

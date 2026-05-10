@@ -153,6 +153,7 @@ def _load_sms_settings_from_db() -> dict:
         "target_number_index": int(getattr(settings, "herosms_target_number_index", 1) or 1),
         "price_relax_enabled": bool(getattr(settings, "herosms_price_relax_enabled", True)),
         "price_relax_max_multiplier": int(getattr(settings, "herosms_price_relax_max_multiplier", 5) or 5),
+        "retry_per_provider": int(getattr(settings, "sms_retry_per_provider", 1) or 1),
         "reuse_enabled": bool(getattr(settings, "herosms_reuse_enabled", False)),
         "reuse_max_uses": int(getattr(settings, "herosms_reuse_max_uses", 2) or 2),
     }
@@ -183,6 +184,7 @@ def _load_sms_settings_from_db() -> dict:
         "target_number_index": ("herosms.target_number_index", lambda v: _parse_int(v, defaults["target_number_index"])),
         "price_relax_enabled": ("herosms.price_relax_enabled", lambda v: _parse_bool(v, defaults["price_relax_enabled"])),
         "price_relax_max_multiplier": ("herosms.price_relax_max_multiplier", lambda v: _parse_int(v, defaults["price_relax_max_multiplier"])),
+        "retry_per_provider": ("sms.retry_per_provider", lambda v: _parse_int(v, defaults["retry_per_provider"])),
         "reuse_enabled": ("herosms.reuse_enabled", lambda v: _parse_bool(v, defaults["reuse_enabled"])),
         "reuse_max_uses": ("herosms.reuse_max_uses", lambda v: _parse_int(v, defaults["reuse_max_uses"])),
     }
@@ -1571,6 +1573,7 @@ class SMSSettings(BaseModel):
     target_number_index: int = 1
     price_relax_enabled: bool = True
     price_relax_max_multiplier: int = 5
+    retry_per_provider: int = 1
     reuse_enabled: bool = False
     reuse_max_uses: int = 2
 
@@ -1672,6 +1675,8 @@ def _validate_sms_settings_request(request: SMSSettings) -> str:
         raise HTTPException(status_code=400, detail="使用第 N 个号码必须在 1 到最大换号次数之间")
     if request.price_relax_max_multiplier < 1 or request.price_relax_max_multiplier > 20:
         raise HTTPException(status_code=400, detail="价格放宽最大倍数必须在 1-20 之间")
+    if request.retry_per_provider < 1 or request.retry_per_provider > 50:
+        raise HTTPException(status_code=400, detail="同组合取号重试次数必须在 1-50 之间")
     if request.provider_fail_threshold < 1 or request.provider_fail_threshold > 10:
         raise HTTPException(status_code=400, detail="同 provider 连续失败阈值必须在 1-10 之间")
     if request.reuse_max_uses < 1 or request.reuse_max_uses > 5:
@@ -1717,6 +1722,7 @@ def _build_sms_settings_update_dict(request: SMSSettings, provider_name: str) ->
         "herosms_target_number_index": request.target_number_index,
         "herosms_price_relax_enabled": request.price_relax_enabled,
         "herosms_price_relax_max_multiplier": request.price_relax_max_multiplier,
+        "sms_retry_per_provider": request.retry_per_provider,
         "herosms_reuse_enabled": request.reuse_enabled,
         "herosms_reuse_max_uses": request.reuse_max_uses,
     }
@@ -1816,10 +1822,10 @@ async def get_sms_countries_legacy(provider: Optional[str] = Query(None), refres
         settings = get_settings()
         provider_name = normalize_sms_provider_name(provider or getattr(settings, "sms_provider", "herosms") or "herosms")
         return _load_sms_countries_with_cache(provider_name, refresh=refresh)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning("获取短信平台国家列表失败: %s", e)
-        if isinstance(e, HTTPException):
-            raise
         raise HTTPException(status_code=502, detail=f"获取短信平台国家列表失败: {e}")
 
 
@@ -1830,10 +1836,10 @@ async def get_sms_countries(provider: Optional[str] = Query(None), refresh: bool
         settings = get_settings()
         provider_name = normalize_sms_provider_name(provider or getattr(settings, "sms_provider", "herosms") or "herosms")
         return _load_sms_countries_with_cache(provider_name, refresh=refresh)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning("获取短信平台国家列表失败: %s", e)
-        if isinstance(e, HTTPException):
-            raise
         raise HTTPException(status_code=502, detail=f"获取短信平台国家列表失败: {e}")
 
 

@@ -598,6 +598,7 @@ async function loadSettings() {
             document.getElementById('sms-target-number-index').value = data.herosms.target_number_index || 1;
             document.getElementById('sms-price-relax-enabled').checked = data.herosms.price_relax_enabled !== false;
             document.getElementById('sms-price-relax-max-multiplier').value = data.herosms.price_relax_max_multiplier || 5;
+            document.getElementById('sms-retry-per-provider').value = data.herosms.retry_per_provider || 1;
             document.getElementById('sms-reuse-enabled').checked = !!data.herosms.reuse_enabled;
             document.getElementById('sms-reuse-max-uses').value = data.herosms.reuse_max_uses || 2;
             const keyInput = document.getElementById('sms-api-key');
@@ -824,6 +825,7 @@ async function handleSaveSmsSettings(e) {
         target_number_index: parseInt(document.getElementById('sms-target-number-index').value) || 1,
         price_relax_enabled: document.getElementById('sms-price-relax-enabled').checked,
         price_relax_max_multiplier: parseInt(document.getElementById('sms-price-relax-max-multiplier').value) || 5,
+        retry_per_provider: parseInt(document.getElementById('sms-retry-per-provider').value) || 1,
         reuse_enabled: document.getElementById('sms-reuse-enabled').checked,
         reuse_max_uses: parseInt(document.getElementById('sms-reuse-max-uses').value) || 2,
     };
@@ -850,6 +852,10 @@ async function handleSaveSmsSettings(e) {
     }
     if (data.price_relax_max_multiplier < 1 || data.price_relax_max_multiplier > 20) {
         toast.error('价格放宽最大倍数必须在 1-20 之间');
+        return;
+    }
+    if (data.retry_per_provider < 1 || data.retry_per_provider > 50) {
+        toast.error('同组合取号重试次数必须在 1-50 之间');
         return;
     }
     if (data.provider_fail_threshold < 1 || data.provider_fail_threshold > 10) {
