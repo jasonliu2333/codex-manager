@@ -401,6 +401,7 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
     provider_candidates = _build_provider_candidates(engine, client, cfg)
     provider_failover_enabled = bool(runtime.get("provider_failover_enabled", True)) and provider_name == "smsbower" and not str(cfg.provider_ids or "").strip()
     provider_fail_threshold = max(1, int(runtime.get("provider_fail_threshold", 3) or 3))
+    retry_per_provider = max(1, int(runtime.get("retry_per_provider", 1) or 1))
     provider_rotation_index = 0
     provider_forced_price_floor: Optional[float] = None
     provider_failure_counts: dict[str, int] = {}
@@ -514,45 +515,79 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                             )
                         )
                     for provider_try_index, provider_choice in enumerate(provider_try_plan, start=1):
-                        try:
-                            price_label = "不限价" if candidate_price is None else str(candidate_price)
-                            provider_choice_label = provider_choice.get("provider_ids") or "自动"
-                            provider_meta = ""
-                            if provider_choice.get("price") is not None or provider_choice.get("count") is not None:
-                                provider_meta = f", provider_quote={provider_choice.get('price')}, provider_count={provider_choice.get('count')}"
-                            balance_before = _safe_get_balance(client)
-                            engine._log(
-                                f"add-phone: 正在向短信平台取号 service={cfg.service}, country={cfg.country}, "
-                                f"attempt={number_attempt}/{max_number_attempts}, price_try={idx}/{len(price_candidates)}, "
-                                f"provider_try={provider_try_index}/{len(provider_try_plan)}, maxPrice={price_label}, providerIds={provider_choice_label}{provider_meta}"
-                            )
-                            activation = _request_number_with_provider_options(
-                                client,
-                                candidate_price=candidate_price,
-                                selected_operator=selected_operator,
-                                cfg=cfg,
-                                provider_ids=provider_choice.get("provider_ids"),
-                            )
-                            balance_after = _safe_get_balance(client)
-                            provider_slot_used = provider_choice.get("provider_ids") or None
-                            engine._log(
-                                "add-phone: 当前价格档命中结果: "
-                                f"maxPrice={price_label}, "
-                                f"provider={provider_choice_label}, "
-                                f"actual_price={activation.activation_cost if activation.activation_cost is not None else '未知'}"
-                            )
-                            charged_cost = _log_activation_cost(engine, activation, balance_before, balance_after)
-                            verification_attempt_id = _create_phone_verification_record(
-                                engine,
-                                cfg=cfg,
-                                activation=activation,
-                                provider_slot=provider_slot_used,
-                                provider_quote=provider_choice.get("price"),
-                                provider_count=provider_choice.get("count"),
-                                reused=False,
-                                charged_cost=charged_cost,
-                            )
-                            _persist_phone_stage(verification_attempt_id, "acquired_number", task_uuid=_task_uuid)
+                        price_label = "不限价" if candidate_price is None else str(candidate_price)
+                        provider_choice_label = provider_choice.get("provider_ids") or "自动"
+                        provider_meta = ""
+                        if provider_choice.get("price") is not None or provider_choice.get("count") is not None:
+                            provider_meta = f", provider_quote={provider_choice.get('price')}, provider_count={provider_choice.get('count')}"
+
+                        # 同一 provider+price 组合快速重试
+                        for retry_i in range(1, retry_per_provider + 1):
+                            try:
+                                balance_before = _safe_get_balance(client)
+                                engine._log(
+                                    f"add-phone: 正在向短信平台取号 service={cfg.service}, country={cfg.country}, "
+                                    f"attempt={number_attempt}/{max_number_attempts}, price_try={idx}/{len(price_candidates)}, "
+                                    f"provider_try={provider_try_index}/{len(provider_try_plan)}, "
+                                    f"retry={retry_i}/{retry_per_provider}, maxPrice={price_label}, providerIds={provider_choice_label}{provider_meta}"
+                                )
+                                activation = _request_number_with_provider_options(
+                                    client,
+                                    candidate_price=candidate_price,
+                                    selected_operator=selected_operator,
+                                    cfg=cfg,
+                                    provider_ids=provider_choice.get("provider_ids"),
+                                )
+                                balance_after = _safe_get_balance(client)
+                                provider_slot_used = provider_choice.get("provider_ids") or None
+                                engine._log(
+                                    "add-phone: 当前价格档命中结果: "
+                                    f"maxPrice={price_label}, "
+                                    f"provider={provider_choice_label}, "
+                                    f"actual_price={activation.activation_cost if activation.activation_cost is not None else '未知'}"
+                                )
+                                charged_cost = _log_activation_cost(engine, activation, balance_before, balance_after)
+                                verification_attempt_id = _create_phone_verification_record(
+                                    engine,
+                                    cfg=cfg,
+                                    activation=activation,
+                                    provider_slot=provider_slot_used,
+                                    provider_quote=provider_choice.get("price"),
+                                    provider_count=provider_choice.get("count"),
+                                    reused=False,
+                                    charged_cost=charged_cost,
+                                )
+                                _persist_phone_stage(verification_attempt_id, "acquired_number", task_uuid=_task_uuid)
+                                break  # 取号成功，跳出 retry 循环
+                            except Exception as exc:
+                                last_request_error = exc
+                                err_text = str(exc)
+                                provider_slot_on_fail = provider_choice.get("provider_ids") or None
+                                request_attempt_id = _create_phone_verification_record(
+                                    engine,
+                                    cfg=cfg,
+                                    activation=None,
+                                    provider_slot=provider_slot_on_fail,
+                                    provider_quote=provider_choice.get("price"),
+                                    provider_count=provider_choice.get("count"),
+                                    reused=False,
+                                    charged_cost=None,
+                                )
+                                _update_phone_verification_record(
+                                    request_attempt_id,
+                                    invalid=True,
+                                    result_status="provider_failed",
+                                    failure_stage="request_number",
+                                    error_code=_extract_error_code_from_text(err_text) or "request_number_failed",
+                                    error_message=err_text[:1000],
+                                )
+                                if "NO_NUMBERS" in err_text and retry_i < retry_per_provider:
+                                    engine._log(f"add-phone: 当前组合无号，快速重试 {retry_i}/{retry_per_provider}: {err_text}", "debug")
+                                    continue
+                                break  # 非 NO_NUMBERS 或最后一次重试，跳出 retry 循环
+
+                        if activation is not None:
+                            # 取号成功，记录扩展信息
                             if activation.activation_operator or activation.activation_time or activation.can_get_another_sms is not None:
                                 engine._log(
                                     "add-phone: activation 扩展信息: "
@@ -560,47 +595,29 @@ def handle_openai_add_phone_challenge(engine: Any, continue_url: str = "") -> Op
                                     f"time={activation.activation_time or '-'}, "
                                     f"can_get_another_sms={activation.can_get_another_sms if activation.can_get_another_sms is not None else '-'}"
                                 )
+                            break  # 跳出 provider 循环
+
+                        # 取号失败 (retry 循环耗尽), last_request_error 已设置
+                        err_text = str(last_request_error or "")
+                        provider_slot_on_fail = provider_choice.get("provider_ids") or None
+                        provider_rotation_index, provider_forced_price_floor = _register_provider_failure_and_maybe_rotate(
+                            engine,
+                            provider_failover_enabled=provider_failover_enabled,
+                            provider_slot_used=provider_slot_on_fail,
+                            provider_failure_counts=provider_failure_counts,
+                            provider_fail_threshold=provider_fail_threshold,
+                            provider_candidates=provider_candidates,
+                            provider_rotation_index=provider_rotation_index,
+                            provider_forced_price_floor=provider_forced_price_floor,
+                            max_price_cap=max_price_cap,
+                        )
+                        if "NO_NUMBERS" in err_text and provider_try_index < len(provider_try_plan):
+                            engine._log(f"add-phone: 当前 provider 无号 (已重试{retry_per_provider}次)，自动切换下一个 provider: {err_text}", "warning")
+                            continue
+                        if "NO_NUMBERS" in err_text and idx < len(price_candidates) and provider_try_index == len(provider_try_plan):
+                            engine._log(f"add-phone: 当前价格档无号 (已重试{retry_per_provider}次)，自动放宽价格继续尝试: {err_text}", "warning")
                             break
-                        except Exception as exc:
-                            last_request_error = exc
-                            err_text = str(exc)
-                            provider_slot_on_fail = provider_choice.get("provider_ids") or None
-                            request_attempt_id = _create_phone_verification_record(
-                                engine,
-                                cfg=cfg,
-                                activation=None,
-                                provider_slot=provider_slot_on_fail,
-                                provider_quote=provider_choice.get("price"),
-                                provider_count=provider_choice.get("count"),
-                                reused=False,
-                                charged_cost=None,
-                            )
-                            _update_phone_verification_record(
-                                request_attempt_id,
-                                invalid=True,
-                                result_status="provider_failed",
-                                failure_stage="request_number",
-                                error_code=_extract_error_code_from_text(err_text) or "request_number_failed",
-                                error_message=err_text[:1000],
-                            )
-                            provider_rotation_index, provider_forced_price_floor = _register_provider_failure_and_maybe_rotate(
-                                engine,
-                                provider_failover_enabled=provider_failover_enabled,
-                                provider_slot_used=provider_slot_on_fail,
-                                provider_failure_counts=provider_failure_counts,
-                                provider_fail_threshold=provider_fail_threshold,
-                                provider_candidates=provider_candidates,
-                                provider_rotation_index=provider_rotation_index,
-                                provider_forced_price_floor=provider_forced_price_floor,
-                                max_price_cap=max_price_cap,
-                            )
-                            if "NO_NUMBERS" in err_text and provider_try_index < len(provider_try_plan):
-                                engine._log(f"add-phone: 当前 provider 无号，自动切换下一个 provider 重试: {err_text}", "warning")
-                                continue
-                            if "NO_NUMBERS" in err_text and idx < len(price_candidates) and provider_try_index == len(provider_try_plan):
-                                engine._log(f"add-phone: 当前价格档无号，自动放宽价格继续尝试: {err_text}", "warning")
-                                break
-                            raise
+                        raise last_request_error
                     if activation is not None:
                         break
                 if activation is None and last_request_error:
@@ -1017,6 +1034,7 @@ def _load_sms_runtime_settings() -> dict:
         "price_relax_max_multiplier": int(getattr(settings, "herosms_price_relax_max_multiplier", 5) or 5),
         "reuse_enabled": bool(getattr(settings, "herosms_reuse_enabled", False)),
         "reuse_max_uses": int(getattr(settings, "herosms_reuse_max_uses", 1) or 1),
+        "retry_per_provider": int(getattr(settings, "sms_retry_per_provider", 1) or 1),
     }
     key_map = {
         "sms.provider": ("provider", lambda v, d=data["provider"]: str(v or d)),
@@ -1047,6 +1065,7 @@ def _load_sms_runtime_settings() -> dict:
         "herosms.price_relax_max_multiplier": ("price_relax_max_multiplier", lambda v, d=data["price_relax_max_multiplier"]: int(v or d)),
         "herosms.reuse_enabled": ("reuse_enabled", lambda v, d=data["reuse_enabled"]: _parse_bool(v, d)),
         "herosms.reuse_max_uses": ("reuse_max_uses", lambda v, d=data["reuse_max_uses"]: int(v or d)),
+        "sms.retry_per_provider": ("retry_per_provider", lambda v, d=data["retry_per_provider"]: int(v or d)),
     }
     try:
         with get_db() as db:

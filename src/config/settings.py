@@ -406,6 +406,12 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.SMS,
         description="同一个 HeroSMS 号码最多用于几个账号"
     ),
+    "sms_retry_per_provider": SettingDefinition(
+        db_key="sms.retry_per_provider",
+        default_value=1,
+        category=SettingCategory.SMS,
+        description="同一 provider+price 组合取号 NO_NUMBERS 后连续重试次数"
+    ),
 
     # 代理配置
     "proxy_enabled": SettingDefinition(
@@ -869,6 +875,7 @@ SETTING_TYPES: Dict[str, Type] = {
     "herosms_price_relax_max_multiplier": int,
     "herosms_reuse_enabled": bool,
     "herosms_reuse_max_uses": int,
+    "sms_retry_per_provider": int,
     "registration_max_retries": int,
     "registration_timeout": int,
     "registration_default_password_length": int,
@@ -1268,6 +1275,7 @@ class Settings(BaseModel):
     herosms_price_relax_max_multiplier: int = 5
     herosms_reuse_enabled: bool = False
     herosms_reuse_max_uses: int = 2
+    sms_retry_per_provider: int = 1
 
     # 代理配置
     proxy_enabled: bool = False
